@@ -2,6 +2,7 @@ use crate::camera::Camera;
 use crate::gpu::GpuContext;
 use crate::mesh::{MeshMarker, MeshStore};
 use crate::pipeline::{GeometryPipeline, InstanceRaw, Uniforms};
+use crate::sky::{MilkyWayCubemap, SkyRenderer, SkyUniforms};
 use crate::star_field::{StarField, StarUniforms};
 use glam::{Mat4, Vec3};
 use sa_core::Handle;
@@ -14,6 +15,8 @@ pub struct DrawCommand {
 
 pub struct Renderer {
     pub geometry_pipeline: GeometryPipeline,
+    pub sky_renderer: SkyRenderer,
+    pub milky_way_cubemap: MilkyWayCubemap,
     pub star_field: StarField,
     pub mesh_store: MeshStore,
 }
@@ -26,13 +29,24 @@ impl Renderer {
             gpu.config.width,
             gpu.config.height,
         );
+        let milky_way_cubemap = MilkyWayCubemap::placeholder(&gpu.device, &gpu.queue);
+        let sky_renderer = SkyRenderer::new(&gpu.device, gpu.config.format, &milky_way_cubemap);
         let stars = crate::star_field::generate_stars(4000, 42);
         let star_field = StarField::new(&gpu.device, gpu.config.format, &stars);
         Self {
             geometry_pipeline,
+            sky_renderer,
+            milky_way_cubemap,
             star_field,
             mesh_store: MeshStore::new(),
         }
+    }
+
+    /// Upload a new Milky Way cubemap and rebuild the sky bind group.
+    pub fn update_milky_way_cubemap(&mut self, gpu: &GpuContext, faces: &[Vec<u8>]) {
+        self.milky_way_cubemap = MilkyWayCubemap::new(&gpu.device, &gpu.queue, faces);
+        self.sky_renderer
+            .rebuild_bind_group(&gpu.device, &self.milky_way_cubemap);
     }
 
     pub fn resize(&mut self, gpu: &GpuContext) {
@@ -66,6 +80,34 @@ impl Renderer {
             &self.geometry_pipeline.uniform_buffer,
             0,
             bytemuck::bytes_of(&uniforms),
+        );
+
+        // Sky uniforms: inverse view-projection for reconstructing view direction
+        let inv_view_proj = view_proj.inverse();
+        // Galactic center direction from camera: center is at origin, so direction is -cam_pos
+        let gc_dir = Vec3::new(
+            -(cam_pos.x as f32),
+            -(cam_pos.y as f32),
+            -(cam_pos.z as f32),
+        );
+        let gc_dir = if gc_dir.length_squared() > 0.0 {
+            gc_dir.normalize()
+        } else {
+            Vec3::new(1.0, 0.0, 0.0)
+        };
+        let sky_uniforms = SkyUniforms {
+            inv_view_proj: inv_view_proj.to_cols_array_2d(),
+            galactic_center_dir: gc_dir.to_array(),
+            core_brightness: 0.8,
+            cubemap_enabled: 1,
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
+        };
+        gpu.queue.write_buffer(
+            &self.sky_renderer.uniform_buffer,
+            0,
+            bytemuck::bytes_of(&sky_uniforms),
         );
 
         let star_view = camera.view_matrix();
@@ -130,6 +172,11 @@ impl Renderer {
                 }),
                 ..Default::default()
             });
+
+            // Draw sky (before geometry, no depth)
+            pass.set_pipeline(&self.sky_renderer.pipeline);
+            pass.set_bind_group(0, &self.sky_renderer.bind_group, &[]);
+            pass.draw(0..6, 0..1);
 
             // Draw geometry
             if !draw_commands.is_empty() {
