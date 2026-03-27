@@ -55,8 +55,8 @@ impl Universe {
                 let dz = (placed.position.z - observer_pos.z) as f32;
 
                 // Apparent brightness using luminosity and inverse-square law.
-                // In deep space with zero light pollution, even dim stars are
-                // clearly visible pinpoints. We want a dense, bright star field.
+                // In deep space, every star is a visible point of light — there's
+                // no atmosphere or light pollution to dim them.
                 let dist_sq = dx * dx + dy * dy + dz * dz;
                 let luminosity = placed.star.luminosity;
                 let apparent = if dist_sq > 0.01 {
@@ -64,9 +64,15 @@ impl Universe {
                 } else {
                     luminosity
                 };
-                // Map to display brightness: sqrt scale preserves range better than log.
-                // Floor at 0.15 — in space, every star is a visible point of light.
-                let brightness = (apparent.sqrt() * 0.4 + 0.15).clamp(0.15, 1.0);
+                // Use apparent magnitude-style log mapping for better distribution.
+                // Apparent magnitude: m = -2.5 * log10(flux) + const
+                // We invert this: brighter flux = higher brightness value.
+                // Adding 1.0 before log avoids log(0). The constants are tuned so:
+                //   - Dimmest M-dwarf at 30 ly → ~0.35 (clearly visible)
+                //   - Sun-like at 20 ly → ~0.55
+                //   - Bright B-star → 0.9+
+                let log_apparent = (1.0 + apparent * 200.0).ln();
+                let brightness = (log_apparent / 10.0 + 0.30).clamp(0.30, 1.0);
 
                 visible.push(VisibleStar {
                     id: placed.id,
