@@ -51,12 +51,32 @@ pub fn create_ship_and_interactables(
     let mut helm_seat = 0;
 
     for placement in &layout.interactables {
-        // Create a sensor collider for raycast detection.
-        // Sensors don't generate contact forces --- they only detect raycasts.
-        // Uses INTERACTABLE collision group so the interaction raycast can
-        // filter exclusively to this group, avoiding hits on hull/interior.
-        let half = placement.collider_half_extents;
-        let collider = ColliderBuilder::cuboid(half.x, half.y, half.z)
+        // Generate the interactable mesh and create a CONVEX HULL sensor
+        // from its actual geometry. This is much more precise than box
+        // approximations — the collision shape matches the visual exactly.
+        let mesh = match &placement.kind {
+            PlacementKind::Lever => interactables::lever_mesh(0.0),
+            PlacementKind::ToggleButton | PlacementKind::MomentaryButton => {
+                interactables::button_mesh(false)
+            }
+            PlacementKind::Switch { num_positions } => interactables::switch_mesh(0, *num_positions),
+            PlacementKind::Screen { width, height } => {
+                interactables::screen_mesh(*width, *height)
+            }
+            PlacementKind::HelmSeat => interactables::helm_seat_mesh(),
+        };
+
+        // Convert mesh vertices to points and build convex hull collider
+        let points = sa_meshgen::auto_collider::mesh_to_points(&mesh);
+        let collider = if let Some(builder) = ColliderBuilder::convex_hull(&points) {
+            builder
+        } else {
+            // Fallback to bounding box if convex hull fails
+            let (_center, half) = sa_meshgen::auto_collider::mesh_to_aabb(&mesh);
+            ColliderBuilder::cuboid(half[0].max(0.05), half[1].max(0.05), half[2].max(0.05))
+        };
+
+        let collider = collider
             .translation(nalgebra::Vector3::new(
                 placement.position.x,
                 placement.position.y,
@@ -64,8 +84,8 @@ pub fn create_ship_and_interactables(
             ))
             .sensor(true)
             .collision_groups(InteractionGroups::new(
-                INTERACTABLE,    // membership: this is an interactable sensor
-                INTERACTABLE,    // filter: accept queries from INTERACTABLE group (the interaction ray)
+                INTERACTABLE,
+                INTERACTABLE,
             ))
             .build();
         let collider_handle = physics.add_collider(collider, ship.body_handle);

@@ -784,11 +784,12 @@ impl ApplicationHandler for App {
                         self.camera.yaw = player.yaw;
                         self.camera.pitch = player.pitch;
 
-                        // Write live debug state to file every 30 frames (~0.5s)
-                        if self.time.frame_count().is_multiple_of(30) {
-                            self.write_debug_state();
-                        }
                     }
+                }
+
+                // Write live debug state in ALL modes (walk, helm, fly)
+                if self.time.frame_count().is_multiple_of(30) {
+                    self.write_debug_state();
                 }
 
                 // Always update query pipeline after physics step (needed for raycasting)
