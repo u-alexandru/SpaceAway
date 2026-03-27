@@ -140,11 +140,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         total_weight += contribution;
     }
 
-    // Gentle brightness curve: no hard threshold, just a soft pow.
-    // Low density directions fade to near-zero naturally.
-    // The pow(0.5) = sqrt gives a smooth ramp: faint glow at low densities,
-    // bright at high densities, no hard edge.
-    let brightness = min(pow(accumulated * 2.5, 0.5), 0.85);
+    // S-curve brightness: smoothstep gives a soft ramp that is near-zero for
+    // low accumulated values and rises smoothly for high values.
+    // This keeps the sky BLACK outside the dense band while the band itself
+    // glows softly. The range [0.05, 0.6] controls the transition:
+    //   - Below 0.05 accumulated: black (empty space)
+    //   - 0.05-0.6: smooth transition
+    //   - Above 0.6: maxes out at 0.7 brightness
+    let brightness = smoothstep(0.05, 0.6, accumulated) * 0.7;
 
     // Warmth ratio
     var warmth: f32 = 0.0;
