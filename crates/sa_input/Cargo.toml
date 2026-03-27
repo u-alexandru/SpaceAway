@@ -1,0 +1,8 @@
+[package]
+name = "sa_input"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+winit.workspace = true
+log.workspace = true
