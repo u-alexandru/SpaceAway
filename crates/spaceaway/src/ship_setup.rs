@@ -35,59 +35,10 @@ pub fn create_ship_and_interactables(
     // Create ship body at world origin
     let ship = Ship::new(physics, 0.0, 0.0, 0.0);
 
-    // Add a SEPARATE STATIC floor body for the player to walk on.
-    // Using a fixed body (like Phase 3's ground plane) guarantees collision
-    // works — child colliders on dynamic bodies can have interaction issues.
-    // For Phase 5a the ship doesn't move while walking, so static is fine.
-    let floor_body = RigidBodyBuilder::fixed()
-        .translation(nalgebra::Vector3::new(0.0, -1.1, 14.5))
-        .build();
-    let floor_body_handle = physics.add_rigid_body(floor_body);
-    let floor_collider = ColliderBuilder::cuboid(2.5, 0.1, 15.0)
-        .friction(1.0)
-        .restitution(0.0)
-        .build();
-    physics.add_collider(floor_collider, floor_body_handle);
-
-    // Ceiling collider
-    let ceiling = ColliderBuilder::cuboid(2.5, 0.1, 15.0).build();
-    let ceiling_body = RigidBodyBuilder::fixed()
-        .translation(nalgebra::Vector3::new(0.0, 1.3, 14.5))
-        .build();
-    let ceiling_handle = physics.add_rigid_body(ceiling_body);
-    physics.add_collider(ceiling, ceiling_handle);
-
-    // Left wall collider (runs full length of ship)
-    let left_wall = ColliderBuilder::cuboid(0.1, 1.5, 15.0).build();
-    let left_body = RigidBodyBuilder::fixed()
-        .translation(nalgebra::Vector3::new(-2.0, 0.0, 14.5))
-        .build();
-    let left_handle = physics.add_rigid_body(left_body);
-    physics.add_collider(left_wall, left_handle);
-
-    // Right wall collider
-    let right_wall = ColliderBuilder::cuboid(0.1, 1.5, 15.0).build();
-    let right_body = RigidBodyBuilder::fixed()
-        .translation(nalgebra::Vector3::new(2.0, 0.0, 14.5))
-        .build();
-    let right_handle = physics.add_rigid_body(right_body);
-    physics.add_collider(right_wall, right_handle);
-
-    // Front wall (cockpit nose)
-    let front_wall = ColliderBuilder::cuboid(2.5, 1.5, 0.1).build();
-    let front_body = RigidBodyBuilder::fixed()
-        .translation(nalgebra::Vector3::new(0.0, 0.0, 0.0))
-        .build();
-    let front_handle = physics.add_rigid_body(front_body);
-    physics.add_collider(front_wall, front_handle);
-
-    // Back wall (engine section end)
-    let back_wall = ColliderBuilder::cuboid(2.5, 1.5, 0.1).build();
-    let back_body = RigidBodyBuilder::fixed()
-        .translation(nalgebra::Vector3::new(0.0, 0.0, 29.0))
-        .build();
-    let back_handle = physics.add_rigid_body(back_body);
-    physics.add_collider(back_wall, back_handle);
+    // Build precise hex-hull interior colliders (walls, bulkheads, endcaps).
+    // These match the actual hexagonal cross-section of each ship section,
+    // replacing the old simple box colliders that left gaps at angled hull faces.
+    crate::ship_colliders::build_ship_colliders(physics);
 
     let mut interaction = InteractionSystem::new();
     let layout = cockpit_layout();
