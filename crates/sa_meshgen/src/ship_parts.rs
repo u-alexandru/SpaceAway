@@ -8,7 +8,7 @@ use crate::assembly::{ConnectPoint, Part};
 use crate::colors;
 use crate::hull;
 use crate::mesh::Mesh;
-use crate::primitives::{cone_mesh, cylinder_mesh};
+use crate::primitives::{box_mesh, cone_mesh, cylinder_mesh};
 use glam::{Mat4, Vec3};
 
 // ---------------------------------------------------------------------------
@@ -64,6 +64,23 @@ pub fn hull_cockpit() -> Part {
     let frame = frame.transform(Mat4::from_translation(Vec3::new(0.0, FLOOR_Y, length)));
     meshes.push(frame);
 
+    // --- Structural features ---
+
+    // Antenna array: thin cylinder extending forward from top of cockpit
+    let antenna = cylinder_mesh(0.03, 2.5, 6, colors::ANTENNA);
+    // Cylinder is along Y by default; rotate to point along -Z (forward)
+    let antenna = antenna.transform(
+        Mat4::from_translation(Vec3::new(0.0, STD_HEIGHT * 0.45, -1.0))
+            * Mat4::from_rotation_x(std::f32::consts::FRAC_PI_2),
+    );
+    meshes.push(antenna);
+
+    // Structural rib at aft connection
+    meshes.push(structural_rib(back_w, STD_HEIGHT, length, colors::STRUCTURAL_RIB));
+
+    // Running lights: white at bow (nose)
+    meshes.push(running_light(Vec3::new(0.0, STD_HEIGHT * 0.4, -0.1), colors::LIGHT_WHITE));
+
     let mesh = Mesh::merge(&meshes);
 
     Part {
@@ -105,6 +122,10 @@ pub fn hull_corridor(length: f32) -> Part {
     let frame_aft = hull::door_frame_mesh(DOOR_W, DOOR_H, FRAME_THICKNESS, colors::INTERIOR_WALL);
     let frame_aft = frame_aft.transform(Mat4::from_translation(Vec3::new(0.0, FLOOR_Y, length)));
     meshes.push(frame_aft);
+
+    // Structural ribs at both ends
+    meshes.push(structural_rib(STD_WIDTH, STD_HEIGHT, 0.0, colors::STRUCTURAL_RIB));
+    meshes.push(structural_rib(STD_WIDTH, STD_HEIGHT, length, colors::STRUCTURAL_RIB));
 
     let mesh = Mesh::merge(&meshes);
 
@@ -170,7 +191,7 @@ pub fn hull_transition(from_width: f32, to_width: f32, length: f32) -> Part {
 /// Connections: "fore" at z=0, "aft" at z=length.
 /// Optionally "port" and/or "starboard" if `side_doors` contains those names.
 pub fn hull_room(
-    _name: &str,
+    name: &str,
     accent_color: [f32; 3],
     side_doors: &[&str],
 ) -> Part {
@@ -221,6 +242,65 @@ pub fn hull_room(
     let frame_aft = hull::door_frame_mesh(DOOR_W, DOOR_H, FRAME_THICKNESS, colors::INTERIOR_WALL);
     let frame_aft = frame_aft.transform(Mat4::from_translation(Vec3::new(0.0, FLOOR_Y, total_len)));
     meshes.push(frame_aft);
+
+    // --- Structural features ---
+
+    // Structural ribs at fore and aft boundaries
+    meshes.push(structural_rib(STD_WIDTH, STD_HEIGHT, 0.0, colors::STRUCTURAL_RIB));
+    meshes.push(structural_rib(ROOM_WIDTH, STD_HEIGHT, trans_len, colors::STRUCTURAL_RIB));
+    meshes.push(structural_rib(ROOM_WIDTH, STD_HEIGHT, trans_len + room_len, colors::STRUCTURAL_RIB));
+    meshes.push(structural_rib(STD_WIDTH, STD_HEIGHT, total_len, colors::STRUCTURAL_RIB));
+
+    // Feature: radiator fins on engineering rooms
+    if name == "eng" {
+        let fin_length = 3.0;
+        let fin_height = 2.0;
+        let fin_thick = 0.05;
+        let mid_z = trans_len + room_len * 0.5;
+        let fin_offset_x = ROOM_WIDTH * 0.5 + fin_length * 0.5;
+        // Angle the fins slightly (15 degrees outward from vertical)
+        let fin_angle = 0.26; // ~15 degrees
+
+        // Port (left) radiator fin
+        let fin = box_mesh(fin_length, fin_height, fin_thick, colors::RADIATOR_FIN);
+        let port_fin = fin.transform(
+            Mat4::from_translation(Vec3::new(-fin_offset_x, 0.2, mid_z))
+                * Mat4::from_rotation_z(-fin_angle),
+        );
+        meshes.push(port_fin);
+
+        // Starboard (right) radiator fin
+        let fin = box_mesh(fin_length, fin_height, fin_thick, colors::RADIATOR_FIN);
+        let starboard_fin = fin.transform(
+            Mat4::from_translation(Vec3::new(fin_offset_x, 0.2, mid_z))
+                * Mat4::from_rotation_z(fin_angle),
+        );
+        meshes.push(starboard_fin);
+
+        // Running lights at fin tips
+        let tip_port = Vec3::new(-fin_offset_x - fin_length * 0.5, 0.2, mid_z);
+        let tip_starboard = Vec3::new(fin_offset_x + fin_length * 0.5, 0.2, mid_z);
+        meshes.push(running_light(tip_port, colors::LIGHT_RED));       // port = red
+        meshes.push(running_light(tip_starboard, colors::LIGHT_GREEN)); // starboard = green
+    }
+
+    // Feature: sensor dish on nav/sensors room
+    if name == "nav" || name == "sensors" {
+        let dish_z = trans_len + room_len * 0.5;
+        let dorsal_y = STD_HEIGHT * 0.5;
+        // Small cylinder as the dish base
+        let dish_base = cylinder_mesh(0.15, 0.4, 8, colors::ANTENNA);
+        let dish_base = dish_base.transform(
+            Mat4::from_translation(Vec3::new(0.0, dorsal_y + 0.2, dish_z)),
+        );
+        meshes.push(dish_base);
+        // Cone on top as the dish
+        let dish = cone_mesh(0.5, 0.1, 0.3, 8, colors::HULL_ACCENT);
+        let dish = dish.transform(
+            Mat4::from_translation(Vec3::new(0.0, dorsal_y + 0.55, dish_z)),
+        );
+        meshes.push(dish);
+    }
 
     let mesh = Mesh::merge(&meshes);
 
@@ -325,6 +405,14 @@ pub fn hull_engine_section() -> Part {
     );
     meshes.push(cone_right);
 
+    // --- Structural features ---
+
+    // Structural rib at fore connection
+    meshes.push(structural_rib(front_w, STD_HEIGHT, 0.0, colors::STRUCTURAL_RIB));
+
+    // Running light at stern (white)
+    meshes.push(running_light(Vec3::new(0.0, 0.0, length + nacelle_len + 1.5), colors::LIGHT_WHITE));
+
     let mesh = Mesh::merge(&meshes);
 
     Part {
@@ -382,6 +470,52 @@ pub fn hull_airlock() -> Part {
             normal: Vec3::NEG_Z,
         }],
     }
+}
+
+// ---------------------------------------------------------------------------
+// Helper: structural rib ring around hull at a Z position
+// ---------------------------------------------------------------------------
+
+/// Build a structural rib: a ring of thin box panels encircling the hex hull
+/// at a given Z position. The rib is slightly wider than the hull to stand out.
+fn structural_rib(width: f32, height: f32, z: f32, color: [f32; 3]) -> Mesh {
+    let rib_thickness = 0.06;
+    let rib_depth = 0.12;
+    let ring = hex_ring_at(width, height, 0.0);
+    let mut meshes = Vec::new();
+
+    for i in 0..6 {
+        let next = (i + 1) % 6;
+        let a = Vec3::from(ring[i]);
+        let b = Vec3::from(ring[next]);
+        let mid = (a + b) * 0.5;
+        let seg_len = (b - a).length();
+        // Outward direction from center
+        let outward = mid.normalize_or_zero();
+        let rib_box = box_mesh(seg_len, rib_thickness, rib_depth, color);
+        // Rotate the box to align with the hex edge and push it outward
+        let edge_dir = (b - a).normalize();
+        let up = Vec3::Y;
+        let forward = edge_dir.cross(up).normalize_or_zero();
+        let _ = forward; // not needed for simple approach
+
+        // Compute rotation: align box X axis with edge direction
+        let angle = edge_dir.x.atan2(edge_dir.z);
+        // Place the box at the midpoint, offset slightly outward, at z
+        let offset = outward * (rib_thickness * 0.5);
+        let transform = Mat4::from_translation(Vec3::new(mid.x + offset.x, mid.y + offset.y, z))
+            * Mat4::from_rotation_y(-angle + std::f32::consts::FRAC_PI_2);
+        meshes.push(rib_box.transform(transform));
+    }
+
+    Mesh::merge(&meshes)
+}
+
+/// Build a tiny colored quad (running light) at a given position, facing outward.
+fn running_light(position: Vec3, color: [f32; 3]) -> Mesh {
+    let size = 0.08;
+    box_mesh(size, size, size, color)
+        .transform(Mat4::from_translation(position))
 }
 
 // ---------------------------------------------------------------------------

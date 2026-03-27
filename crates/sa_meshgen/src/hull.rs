@@ -48,6 +48,8 @@ pub fn hex_hull(
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
 
+    let interior_color: [f32; 3] = [0.52, 0.54, 0.56];
+
     // Connect front ring to back ring with 6 quad strips (one per hex side).
     // Each quad connects front[i], front[next], back[next], back[i].
     for i in 0..6 {
@@ -57,6 +59,15 @@ pub fn hex_hull(
         let corners = [front[i], back[i], back[next], front[next]];
         let normal = face_normal(corners[0], corners[1], corners[2]);
         push_quad(&mut vertices, &mut indices, corners, normal, color);
+
+        // Interior-facing quad: reversed winding, inward normal, interior color
+        let inner_corners = [front[next], back[next], back[i], front[i]];
+        let inner_normal = [
+            -normal[0],
+            -normal[1],
+            -normal[2],
+        ];
+        push_quad(&mut vertices, &mut indices, inner_corners, inner_normal, interior_color);
     }
 
     Mesh { vertices, indices }
@@ -358,8 +369,8 @@ mod tests {
         let m = hex_hull(4.0, 4.0, 3.0, 5.0, [0.5; 3]);
         assert!(!m.vertices.is_empty());
         assert!(!m.indices.is_empty());
-        // 6 quads = 12 triangles
-        assert_eq!(m.triangle_count(), 12);
+        // 6 exterior quads + 6 interior quads = 24 triangles
+        assert_eq!(m.triangle_count(), 24);
     }
 
     #[test]

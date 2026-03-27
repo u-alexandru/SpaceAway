@@ -2345,6 +2345,7 @@ dependencies = [
  "sa_ecs",
  "sa_input",
  "sa_math",
+ "sa_meshgen",
  "sa_physics",
  "sa_player",
  "sa_render",

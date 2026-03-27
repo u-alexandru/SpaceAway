@@ -108,7 +108,7 @@ impl GeometryPipeline {
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: Some(wgpu::Face::Back),
+                cull_mode: None,
                 front_face: wgpu::FrontFace::Ccw,
                 ..Default::default()
             },
