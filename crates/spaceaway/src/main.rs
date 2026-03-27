@@ -481,13 +481,13 @@ impl ApplicationHandler for App {
                                     0
                                 };
                                 self.view_mode = 6;
-                                let (name, part) = &parts[self.ship_part_index];
+                                let (name, mesh) = &parts[self.ship_part_index];
                                 if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
-                                    let mesh_data = meshgen_to_render(&part.mesh);
+                                    let mesh_data = meshgen_to_render(mesh);
                                     let handle = renderer.mesh_store.upload(&gpu.device, &mesh_data);
                                     self.ship_part_mesh = Some(handle);
                                     log::info!("Showing ship part: {} ({} verts, {} tris)",
-                                        name, part.mesh.vertices.len(), part.mesh.triangle_count());
+                                        name, mesh.vertices.len(), mesh.triangle_count());
                                 }
                             }
                             KeyCode::Digit7 => {
@@ -717,60 +717,17 @@ fn meshgen_to_render(mesh: &sa_meshgen::Mesh) -> MeshData {
 }
 
 /// All ship parts for visual cycling.
-fn all_ship_parts() -> Vec<(&'static str, sa_meshgen::assembly::Part)> {
-    use sa_meshgen::colors;
+fn all_ship_parts() -> Vec<(&'static str, sa_meshgen::Mesh)> {
     vec![
-        ("cockpit", sa_meshgen::ship_parts::hull_cockpit()),
-        ("corridor", sa_meshgen::ship_parts::hull_corridor(3.0)),
-        ("transition_4_5", sa_meshgen::ship_parts::hull_transition(4.0, 5.0, 1.0)),
-        ("nav_room", sa_meshgen::ship_parts::hull_room("nav", colors::ACCENT_NAVIGATION, &["port"])),
-        ("eng_room", sa_meshgen::ship_parts::hull_room("eng", colors::ACCENT_ENGINEERING, &["starboard"])),
-        ("engine_section", sa_meshgen::ship_parts::hull_engine_section()),
-        ("airlock", sa_meshgen::ship_parts::hull_airlock()),
+        ("cockpit", sa_meshgen::full_ship::build_cockpit()),
+        ("nav_room", sa_meshgen::full_ship::build_nav_room()),
+        ("engine_section", sa_meshgen::full_ship::build_engine_section()),
     ]
 }
 
-/// Assemble the full ship with hex-hull parts:
-/// cockpit -> corridor -> transition -> nav_room -> transition -> corridor
-///   -> transition -> eng_room -> transition -> engine_section
-///                        \-> airlock (starboard)
+/// Build the full ship as a single continuous mesh — no assembly, no gaps.
 fn assemble_ship() -> sa_meshgen::Mesh {
-    use sa_meshgen::assembly::attach;
-    use sa_meshgen::colors;
-    use sa_meshgen::ship_parts::*;
-
-    let cockpit = hull_cockpit();
-    let corr1 = hull_corridor(3.0);
-    let trans1 = hull_transition(4.0, 5.0, 1.0);
-    let nav_room = hull_room("nav", colors::ACCENT_NAVIGATION, &["port"]);
-    let trans2 = hull_transition(5.0, 4.0, 1.0);
-    let corr2 = hull_corridor(3.0);
-    let trans3 = hull_transition(4.0, 5.0, 1.0);
-    let eng_room = hull_room("eng", colors::ACCENT_ENGINEERING, &["starboard"]);
-    let trans4 = hull_transition(5.0, 4.0, 1.0);
-    let engine = hull_engine_section();
-    let airlock = hull_airlock();
-
-    // cockpit(z=0..4) -> corridor1(3m) -> trans1(1m) -> nav_room(7m) -> trans2(1m)
-    //   -> corridor2(3m) -> trans3(1m) -> eng_room(7m) -> trans4(1m) -> engine(5m)
-    let ship = attach(&cockpit, "aft", &corr1, "fore");
-    let ship = attach(&ship, "aft", &trans1, "fore");
-    let ship = attach(&ship, "aft", &nav_room, "fore");
-    let ship = attach(&ship, "aft", &trans2, "fore");
-    let ship = attach(&ship, "aft", &corr2, "fore");
-    let ship = attach(&ship, "aft", &trans3, "fore");
-    let ship = attach(&ship, "aft", &eng_room, "fore");
-    let ship = attach(&ship, "aft", &trans4, "fore");
-    let ship = attach(&ship, "aft", &engine, "fore");
-
-    // Attach airlock to eng_room's starboard connection (if still available)
-    let ship = if ship.try_connection("starboard").is_some() {
-        attach(&ship, "starboard", &airlock, "inner")
-    } else {
-        ship
-    };
-
-    ship.mesh
+    sa_meshgen::full_ship::build_ship()
 }
 
 fn make_cube() -> MeshData {
