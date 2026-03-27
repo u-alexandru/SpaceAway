@@ -267,7 +267,9 @@ impl App {
         let observer = self.camera.position;
         let dist = observer.distance_to(self.last_star_gen_pos);
 
-        let needs_regen = !self.stars_initialised || dist > STAR_REGEN_THRESHOLD;
+        // In fly mode use a lower threshold so stars update as you fly
+        let threshold = if self.fly_mode { 100.0 } else { STAR_REGEN_THRESHOLD };
+        let needs_regen = !self.stars_initialised || dist > threshold;
         if !needs_regen {
             return;
         }
@@ -283,6 +285,12 @@ impl App {
         );
         let vertices = visible_stars_to_vertices(&visible);
         renderer.star_field.update_star_buffer(&gpu.device, &vertices);
+
+        // Also refresh nebulae in fly mode (positions change at galaxy scale)
+        if self.fly_mode {
+            let nebula_instances = nebulae_to_instances(&self.nebulae, observer);
+            renderer.nebula_renderer.update_instances(&gpu.device, &nebula_instances);
+        }
 
         self.last_star_gen_pos = observer;
         self.stars_initialised = true;
