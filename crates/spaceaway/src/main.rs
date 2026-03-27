@@ -160,6 +160,7 @@ struct App {
     distant_galaxies: Vec<sa_universe::DistantGalaxy>,
     perf: PerfTimings,
     perf_update_timer: f64,
+    teleport_counter: u64,
 }
 
 impl App {
@@ -209,6 +210,7 @@ impl App {
             distant_galaxies: Vec::new(),
             perf: PerfTimings::default(),
             perf_update_timer: 0.0,
+            teleport_counter: 0,
         }
     }
 
@@ -334,6 +336,63 @@ impl App {
         );
     }
 
+    /// Teleport to a random position in the galaxy. Forces regen of stars + cubemap.
+    fn teleport_random(&mut self) {
+        self.teleport_counter += 1;
+        let mut rng = sa_universe::Rng64::new(self.teleport_counter.wrapping_mul(0xDEAD_BEEF));
+
+        // Random position within the galactic disc
+        let r = rng.range_f64(3000.0, 40000.0); // 3k-40k ly from center
+        let theta = rng.range_f64(0.0, std::f64::consts::TAU);
+        let y = rng.range_f64(-500.0, 500.0); // near disc plane
+        let x = r * theta.cos();
+        let z = r * theta.sin();
+
+        self.camera.position = WorldPos::new(x, y, z);
+        log::info!(
+            "Teleported to ({:.0}, {:.0}, {:.0}) — {:.0} ly from center",
+            x, y, z, r,
+        );
+
+        // Force full regeneration
+        self.stars_initialised = false;
+        self.cubemap_initialised = false;
+
+        // Regenerate cubemap immediately
+        if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
+            let start = Instant::now();
+            let cubemap_data = sa_render::generate_cubemap_data(
+                &sa_universe::galaxy_density,
+                &sa_universe::dust_density,
+                [x, y, z],
+            );
+            renderer.update_milky_way_cubemap(gpu, &cubemap_data);
+            self.last_cubemap_gen_pos = self.camera.position;
+            self.cubemap_initialised = true;
+
+            // Regen stars
+            let visible = self.universe.visible_stars_filtered(
+                self.camera.position,
+                STAR_QUERY_RADIUS,
+                STAR_MIN_BRIGHTNESS,
+            );
+            let vertices = visible_stars_to_vertices(&visible);
+            renderer.star_field.update_star_buffer(&gpu.device, &vertices);
+
+            let nebula_instances = nebulae_to_instances(&self.nebulae, self.camera.position);
+            renderer.nebula_renderer.update_instances(&gpu.device, &nebula_instances);
+
+            self.last_star_gen_pos = self.camera.position;
+            self.stars_initialised = true;
+
+            log::info!(
+                "Regen complete in {:.0}ms ({} stars)",
+                start.elapsed().as_secs_f64() * 1000.0,
+                visible.len(),
+            );
+        }
+    }
+
     fn grab_cursor(&mut self) {
         if let Some(window) = &self.window {
             let _ = window
@@ -382,6 +441,11 @@ impl ApplicationHandler for App {
                         let _ = window.set_cursor_grab(CursorGrabMode::None);
                         window.set_cursor_visible(true);
                         self.cursor_grabbed = false;
+                    }
+
+                    // Press 2 to teleport to a random position in the galaxy
+                    if code == KeyCode::Digit2 && event.state.is_pressed() {
+                        self.teleport_random();
                     }
                 }
             }
