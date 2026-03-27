@@ -135,7 +135,7 @@ pub fn generate_nebulae(master: MasterSeed) -> Vec<Nebula> {
         let radius = rng.range_f64(50.0, 500.0);
         let color_idx = (rng.next_u64() % nebula_colors.len() as u64) as usize;
         let color = nebula_colors[color_idx];
-        let opacity = rng.range_f32(0.1, 0.4);
+        let opacity = rng.range_f32(0.4, 0.9);
         let seed = rng.next_u64().wrapping_add(i as u64);
 
         nebulae.push(Nebula {

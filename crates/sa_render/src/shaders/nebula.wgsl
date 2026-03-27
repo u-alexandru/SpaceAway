@@ -105,5 +105,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let n = fbm(in.uv * 3.0 + seed_offset);
 
     let alpha = radial * n * in.neb_opacity;
-    return vec4<f32>(in.neb_color * alpha, alpha);
+    // Non-premultiplied output — blend mode is SrcAlpha/OneMinusSrcAlpha
+    return vec4<f32>(in.neb_color, alpha);
 }

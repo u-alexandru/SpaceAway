@@ -61,7 +61,7 @@ fn nebulae_to_instances(
             let dy = (n.y - observer.y) as f32;
             let dz = (n.z - observer.z) as f32;
             let dist = (dx * dx + dy * dy + dz * dz).sqrt();
-            if !(1.0..=30_000.0).contains(&dist) {
+            if !(1.0..=80_000.0).contains(&dist) {
                 return None;
             }
 
@@ -79,7 +79,7 @@ fn nebulae_to_instances(
             let dome_radius = angular_radius * SKY_DOME_DIST;
 
             // Opacity falls off with distance
-            let dist_opacity = (1.0 - dist / 30_000.0).clamp(0.1, 1.0);
+            let dist_opacity = (1.0 - dist / 80_000.0).clamp(0.1, 1.0);
 
             Some(NebulaInstance {
                 center: [nx * SKY_DOME_DIST, ny * SKY_DOME_DIST, nz * SKY_DOME_DIST],
