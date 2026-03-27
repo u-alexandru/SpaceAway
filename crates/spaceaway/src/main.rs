@@ -515,7 +515,10 @@ impl ApplicationHandler for App {
                     }
                 }
             }
-            WindowEvent::MouseInput { state, .. } => {
+            WindowEvent::MouseInput { state, button, .. } => {
+                if button == winit::event::MouseButton::Left {
+                    self.input.mouse.set_left_pressed(state.is_pressed());
+                }
                 if state.is_pressed() && !self.cursor_grabbed {
                     self.grab_cursor();
                 }

@@ -13,6 +13,7 @@ pub struct PhysicsWorld {
     impulse_joint_set: ImpulseJointSet,
     multibody_joint_set: MultibodyJointSet,
     ccd_solver: CCDSolver,
+    query_pipeline: QueryPipeline,
 }
 
 impl PhysicsWorld {
@@ -36,6 +37,7 @@ impl PhysicsWorld {
             impulse_joint_set: ImpulseJointSet::new(),
             multibody_joint_set: MultibodyJointSet::new(),
             ccd_solver: CCDSolver::new(),
+            query_pipeline: QueryPipeline::new(),
         }
     }
 
@@ -97,6 +99,33 @@ impl PhysicsWorld {
     /// Sets the gravity vector.
     pub fn set_gravity(&mut self, x: f32, y: f32, z: f32) {
         self.gravity = nalgebra::Vector3::new(x, y, z);
+    }
+
+    /// Updates the query pipeline for raycasting. Call after `step()`.
+    pub fn update_query_pipeline(&mut self) {
+        self.query_pipeline.update(&self.collider_set);
+    }
+
+    /// Cast a ray and return the first hit collider handle and distance.
+    /// `filter` controls which colliders are considered (e.g., sensors only).
+    /// Returns None if no hit within `max_toi`.
+    pub fn cast_ray(
+        &self,
+        origin: nalgebra::Point3<f32>,
+        direction: nalgebra::Vector3<f32>,
+        max_toi: f32,
+        solid: bool,
+        filter: QueryFilter,
+    ) -> Option<(ColliderHandle, f32)> {
+        let ray = Ray::new(origin, direction);
+        self.query_pipeline.cast_ray(
+            &self.rigid_body_set,
+            &self.collider_set,
+            &ray,
+            max_toi,
+            solid,
+            filter,
+        )
     }
 }
 

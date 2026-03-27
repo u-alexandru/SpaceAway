@@ -10,4 +10,5 @@ pub use forces::{apply_force, apply_impulse, apply_torque, linear_velocity};
 pub use rapier3d::prelude::{
     RigidBody, RigidBodyBuilder, RigidBodyHandle,
     Collider, ColliderBuilder, ColliderHandle,
+    QueryFilter, Ray,
 };

@@ -1,10 +1,21 @@
 pub struct MouseState {
     delta_x: f32,
     delta_y: f32,
+    left_pressed: bool,
+    left_just_pressed: bool,
+    left_just_released: bool,
 }
 
 impl MouseState {
-    pub fn new() -> Self { Self { delta_x: 0.0, delta_y: 0.0 } }
+    pub fn new() -> Self {
+        Self {
+            delta_x: 0.0,
+            delta_y: 0.0,
+            left_pressed: false,
+            left_just_pressed: false,
+            left_just_released: false,
+        }
+    }
 
     pub fn accumulate_delta(&mut self, dx: f32, dy: f32) {
         self.delta_x += dx;
@@ -13,7 +24,27 @@ impl MouseState {
 
     pub fn delta(&self) -> (f32, f32) { (self.delta_x, self.delta_y) }
 
-    pub fn clear_delta(&mut self) { self.delta_x = 0.0; self.delta_y = 0.0; }
+    pub fn clear_delta(&mut self) {
+        self.delta_x = 0.0;
+        self.delta_y = 0.0;
+        self.left_just_pressed = false;
+        self.left_just_released = false;
+    }
+
+    /// Call when left mouse button state changes.
+    pub fn set_left_pressed(&mut self, pressed: bool) {
+        if pressed && !self.left_pressed {
+            self.left_just_pressed = true;
+        }
+        if !pressed && self.left_pressed {
+            self.left_just_released = true;
+        }
+        self.left_pressed = pressed;
+    }
+
+    pub fn left_pressed(&self) -> bool { self.left_pressed }
+    pub fn left_just_pressed(&self) -> bool { self.left_just_pressed }
+    pub fn left_just_released(&self) -> bool { self.left_just_released }
 }
 
 impl Default for MouseState { fn default() -> Self { Self::new() } }
@@ -36,5 +67,28 @@ mod tests {
         assert_eq!(mouse.delta(), (13.0, -3.0));
         mouse.clear_delta();
         assert_eq!(mouse.delta(), (0.0, 0.0));
+    }
+
+    #[test]
+    fn left_button_just_pressed() {
+        let mut mouse = MouseState::new();
+        assert!(!mouse.left_pressed());
+        assert!(!mouse.left_just_pressed());
+        mouse.set_left_pressed(true);
+        assert!(mouse.left_pressed());
+        assert!(mouse.left_just_pressed());
+        mouse.clear_delta();
+        assert!(!mouse.left_just_pressed()); // cleared
+        assert!(mouse.left_pressed()); // still held
+    }
+
+    #[test]
+    fn left_button_just_released() {
+        let mut mouse = MouseState::new();
+        mouse.set_left_pressed(true);
+        mouse.clear_delta();
+        mouse.set_left_pressed(false);
+        assert!(!mouse.left_pressed());
+        assert!(mouse.left_just_released());
     }
 }
