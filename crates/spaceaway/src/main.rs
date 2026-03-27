@@ -178,6 +178,12 @@ struct App {
     teleport_counter: u64,
     fly_mode: bool,
     fly_speed: f64, // light-years per second
+    /// Current ship part mesh handle (for key 6/7 viewing).
+    ship_part_mesh: Option<sa_core::Handle<sa_render::MeshMarker>>,
+    /// Index into all_ship_parts() for cycling (key 6).
+    ship_part_index: usize,
+    /// View mode: 0=normal scene, 6=single ship part, 7=full ship.
+    view_mode: u8,
 }
 
 impl App {
@@ -228,6 +234,9 @@ impl App {
             teleport_counter: 0,
             fly_mode: false,
             fly_speed: 500.0, // 500 ly/s default
+            ship_part_mesh: None,
+            ship_part_index: 0,
+            view_mode: 0,
         }
     }
 
@@ -463,6 +472,42 @@ impl ApplicationHandler for App {
                                 self.fly_mode = !self.fly_mode;
                                 log::info!("Fly mode: {}", if self.fly_mode { "ON (WASD to fly, scroll to change speed)" } else { "OFF" });
                             }
+                            KeyCode::Digit6 => {
+                                // Cycle through individual ship parts
+                                let parts = all_ship_parts();
+                                self.ship_part_index = if self.view_mode == 6 {
+                                    (self.ship_part_index + 1) % parts.len()
+                                } else {
+                                    0
+                                };
+                                self.view_mode = 6;
+                                let (name, part) = &parts[self.ship_part_index];
+                                if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
+                                    let mesh_data = meshgen_to_render(&part.mesh);
+                                    let handle = renderer.mesh_store.upload(&gpu.device, &mesh_data);
+                                    self.ship_part_mesh = Some(handle);
+                                    log::info!("Showing ship part: {} ({} verts, {} tris)",
+                                        name, part.mesh.vertices.len(), part.mesh.triangle_count());
+                                }
+                            }
+                            KeyCode::Digit7 => {
+                                // Assemble and render full ship
+                                self.view_mode = 7;
+                                let ship_mesh = assemble_ship();
+                                if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
+                                    let mesh_data = meshgen_to_render(&ship_mesh);
+                                    let handle = renderer.mesh_store.upload(&gpu.device, &mesh_data);
+                                    self.ship_part_mesh = Some(handle);
+                                    log::info!("Assembled full ship: {} verts, {} tris",
+                                        ship_mesh.vertices.len(), ship_mesh.triangle_count());
+                                }
+                            }
+                            KeyCode::Digit0 => {
+                                // Return to normal scene view
+                                self.view_mode = 0;
+                                self.ship_part_mesh = None;
+                                log::info!("Returned to normal scene view");
+                            }
                             KeyCode::Equal => { self.fly_speed *= 2.0; log::info!("Fly speed: {:.0} ly/s", self.fly_speed); }
                             KeyCode::Minus => { self.fly_speed = (self.fly_speed / 2.0).max(1.0); log::info!("Fly speed: {:.0} ly/s", self.fly_speed); }
                             _ => {}
@@ -556,28 +601,41 @@ impl ApplicationHandler for App {
 
                 // --- Render ---
                 let t3 = Instant::now();
-                if let (Some(gpu), Some(renderer), Some(cube)) =
-                    (&self.gpu, &self.renderer, self.cube_mesh)
-                {
-                    let commands = vec![
-                        DrawCommand {
-                            mesh: cube,
-                            model_matrix: Mat4::from_translation(Vec3::new(0.0, 0.0, 0.0))
-                                * Mat4::from_scale(Vec3::new(50.0, 0.1, 50.0)),
-                        },
-                        DrawCommand {
-                            mesh: cube,
-                            model_matrix: Mat4::from_translation(Vec3::new(5.0, 1.0, -3.0)),
-                        },
-                        DrawCommand {
-                            mesh: cube,
-                            model_matrix: Mat4::from_translation(Vec3::new(-4.0, 1.0, -6.0)),
-                        },
-                        DrawCommand {
-                            mesh: cube,
-                            model_matrix: Mat4::from_translation(Vec3::new(2.0, 1.0, -10.0)),
-                        },
-                    ];
+                if let (Some(gpu), Some(renderer)) = (&self.gpu, &self.renderer) {
+                    let commands = if self.view_mode == 6 || self.view_mode == 7 {
+                        // Ship part viewing: show just the part/ship at origin, no ground or cubes
+                        if let Some(ship_mesh) = self.ship_part_mesh {
+                            vec![DrawCommand {
+                                mesh: ship_mesh,
+                                model_matrix: Mat4::IDENTITY,
+                            }]
+                        } else {
+                            vec![]
+                        }
+                    } else if let Some(cube) = self.cube_mesh {
+                        // Normal scene with ground plane and test cubes
+                        vec![
+                            DrawCommand {
+                                mesh: cube,
+                                model_matrix: Mat4::from_translation(Vec3::new(0.0, 0.0, 0.0))
+                                    * Mat4::from_scale(Vec3::new(50.0, 0.1, 50.0)),
+                            },
+                            DrawCommand {
+                                mesh: cube,
+                                model_matrix: Mat4::from_translation(Vec3::new(5.0, 1.0, -3.0)),
+                            },
+                            DrawCommand {
+                                mesh: cube,
+                                model_matrix: Mat4::from_translation(Vec3::new(-4.0, 1.0, -6.0)),
+                            },
+                            DrawCommand {
+                                mesh: cube,
+                                model_matrix: Mat4::from_translation(Vec3::new(2.0, 1.0, -10.0)),
+                            },
+                        ]
+                    } else {
+                        vec![]
+                    };
                     self.perf.draw_calls = commands.len() as u32;
                     self.perf.star_count = renderer.star_field.star_count;
                     renderer.render_frame(
@@ -638,6 +696,75 @@ impl ApplicationHandler for App {
                 .accumulate_delta(delta.0 as f32, delta.1 as f32);
         }
     }
+}
+
+/// Convert sa_meshgen::Mesh -> sa_render::MeshData.
+/// Simple field-by-field copy; no GPU dependencies in sa_meshgen.
+fn meshgen_to_render(mesh: &sa_meshgen::Mesh) -> MeshData {
+    let vertices = mesh
+        .vertices
+        .iter()
+        .map(|v| Vertex {
+            position: v.position,
+            color: v.color,
+            normal: v.normal,
+        })
+        .collect();
+    MeshData {
+        vertices,
+        indices: mesh.indices.clone(),
+    }
+}
+
+/// All ship parts for visual cycling.
+fn all_ship_parts() -> Vec<(&'static str, sa_meshgen::assembly::Part)> {
+    vec![
+        ("corridor", sa_meshgen::ship_parts::hull_corridor()),
+        ("room", sa_meshgen::ship_parts::hull_room()),
+        ("cockpit", sa_meshgen::ship_parts::hull_cockpit()),
+        ("engine", sa_meshgen::ship_parts::hull_engine()),
+        ("airlock", sa_meshgen::ship_parts::hull_airlock()),
+        ("console", sa_meshgen::ship_parts::console()),
+        ("door_frame", sa_meshgen::ship_parts::door_frame()),
+    ]
+}
+
+/// Assemble the full ship: cockpit -> corridor -> room -> corridor -> room -> corridor -> engine
+///                                                                         \-> airlock
+fn assemble_ship() -> sa_meshgen::Mesh {
+    use sa_meshgen::assembly::attach;
+    use sa_meshgen::ship_parts::*;
+
+    let cockpit = hull_cockpit();
+    let corr1 = hull_corridor();
+    let nav_room = hull_room();
+    let corr2 = hull_corridor();
+    let eng_room = hull_room();
+    let corr3 = hull_corridor();
+    let engine = hull_engine();
+    let airlock = hull_airlock();
+
+    // cockpit.aft -> corridor1.fore
+    let ship = attach(&cockpit, "aft", &corr1, "fore");
+    // -> nav_room.fore
+    let ship = attach(&ship, "aft", &nav_room, "fore");
+    // -> corridor2.fore
+    let ship = attach(&ship, "aft", &corr2, "fore");
+    // -> eng_room.fore
+    let ship = attach(&ship, "aft", &eng_room, "fore");
+    // -> corridor3.fore
+    let ship = attach(&ship, "aft", &corr3, "fore");
+    // -> engine.fore
+    let ship = attach(&ship, "aft", &engine, "fore");
+
+    // Attach airlock to eng_room's port connection (if still available)
+    let ship = if ship.try_connection("port").is_some() {
+        attach(&ship, "port", &airlock, "inner")
+    } else {
+        ship
+    };
+
+    ship.mesh
 }
 
 fn make_cube() -> MeshData {
