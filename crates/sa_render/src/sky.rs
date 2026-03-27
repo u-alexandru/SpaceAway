@@ -67,10 +67,13 @@ pub fn generate_cubemap_data(
                 let (dx, dy, dz) = (dx / len, dy / len, dz / len);
 
                 // Integrate density along ray using Beer-Lambert absorption.
-                // Dust absorbs light from stars behind it, creating dark lanes.
+                // Track peak density to find the "brightest" direction — only
+                // rays that pass through genuinely dense regions should glow.
                 let mut accumulated = 0.0_f64;
-                let mut warm_accumulated = 0.0_f64;
-                let mut transmittance = 1.0_f64; // Beer-Lambert: starts at 1 (no absorption)
+                let mut peak_density = 0.0_f64;
+                let mut warm_weight = 0.0_f64;
+                let mut total_weight = 0.0_f64;
+                let mut transmittance = 1.0_f64;
 
                 for s in 0..num_samples {
                     let t = (s as f64 + 0.5) * step;
@@ -78,39 +81,44 @@ pub fn generate_cubemap_data(
                     let sy = observer[1] + dy as f64 * t;
                     let sz = observer[2] + dz as f64 * t;
 
-                    // Star emission at this point
                     let emission = density_fn(sx, sy, sz);
-                    // Dust absorption at this point (Beer-Lambert)
                     let dust = dust_density_fn(sx, sy, sz);
-                    transmittance *= (-dust * step * 0.00005).exp();
+                    transmittance *= (-dust * step * 0.00008).exp();
 
-                    // Light reaching us = emission * transmittance
                     let contribution = emission * transmittance * step / max_dist;
                     accumulated += contribution;
-
-                    // Track warmth: closer to center = warmer color
-                    let r_center = (sx * sx + sy * sy + sz * sz).sqrt();
-                    if r_center < 15000.0 {
-                        warm_accumulated += contribution;
+                    if emission > peak_density {
+                        peak_density = emission;
                     }
+
+                    // Warmth: weight by how close to the bulge (< 5000 ly)
+                    let r_center = (sx * sx + sy * sy + sz * sz).sqrt();
+                    let bulge_weight = (-r_center / 5000.0).exp();
+                    warm_weight += contribution * bulge_weight;
+                    total_weight += contribution;
                 }
 
-                // Use sqrt for brightness to give a wider dynamic range.
-                // The band should be clearly visible but space outside should be dark.
-                let brightness = (accumulated * 2.0).sqrt().min(1.0);
+                // Threshold-based brightness: subtract a floor so that
+                // diffuse low-density directions become BLACK (space is dark!).
+                // Only rays through dense disc/arms produce visible light.
+                let threshold = 0.15;
+                let excess = (accumulated - threshold).max(0.0);
+                let brightness = (excess * 5.0).powf(0.6).min(1.0);
 
-                // Warmth: only warm when the ray passes very close to the bulge.
-                // Use distance of the brightest sample to center, not accumulated ratio.
-                let warmth = (warm_accumulated / accumulated.max(0.001)).clamp(0.0, 1.0);
+                // Warmth only where ray actually passes through bulge
+                let warmth = if total_weight > 0.001 {
+                    (warm_weight / total_weight).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
 
-                // Color: silvery blue-white everywhere, warm gold ONLY in the bulge.
-                let cool = [0.75_f32, 0.80, 0.95]; // silvery blue-white
-                let warm = [1.0_f32, 0.88, 0.65]; // golden (bulge)
-                // Cube warmth to really restrict it to the center
+                // Color: silvery blue-white, warm gold ONLY near bulge
+                let cool = [0.72_f32, 0.78, 0.95]; // cool silvery
+                let warm_col = [1.0_f32, 0.90, 0.65]; // warm gold
                 let w = (warmth as f32).powf(3.0);
-                let r = (cool[0] * (1.0 - w) + warm[0] * w) * brightness as f32;
-                let g = (cool[1] * (1.0 - w) + warm[1] * w) * brightness as f32;
-                let b = (cool[2] * (1.0 - w) + warm[2] * w) * brightness as f32;
+                let r = (cool[0] * (1.0 - w) + warm_col[0] * w) * brightness as f32;
+                let g = (cool[1] * (1.0 - w) + warm_col[1] * w) * brightness as f32;
+                let b = (cool[2] * (1.0 - w) + warm_col[2] * w) * brightness as f32;
 
                 let idx = (py * size + px) * 4;
                 pixels[idx] = (r * 255.0).min(255.0) as u8;

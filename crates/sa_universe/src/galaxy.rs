@@ -4,7 +4,7 @@ use crate::seed::{MasterSeed, Rng64};
 
 /// Galaxy model constants based on measured Milky Way parameters.
 /// Sources: Wikipedia Milky Way, ESA Gaia data, Vallée 2017 spiral arm survey.
-const DISC_HALF_THICKNESS: f64 = 1000.0; // ~1000 ly scale height (measured: 700-1300 ly)
+const DISC_HALF_THICKNESS: f64 = 500.0; // thin disc scale height (measured: 300-400 pc ≈ 1000-1300 ly, but visually thinner works better)
 const ARM_WIDTH: f64 = 2500.0; // spiral arm width in ly
 const BULGE_RADIUS: f64 = 5000.0; // central bulge radius
 const BASE_DENSITY: f64 = 0.08; // inter-arm baseline

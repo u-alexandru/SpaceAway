@@ -341,17 +341,54 @@ impl App {
         self.teleport_counter += 1;
         let mut rng = sa_universe::Rng64::new(self.teleport_counter.wrapping_mul(0xDEAD_BEEF));
 
-        // Random position within the galactic disc
-        let r = rng.range_f64(3000.0, 40000.0); // 3k-40k ly from center
-        let theta = rng.range_f64(0.0, std::f64::consts::TAU);
-        let y = rng.range_f64(-500.0, 500.0); // near disc plane
-        let x = r * theta.cos();
-        let z = r * theta.sin();
+        // Pick a viewpoint type for variety
+        let viewpoint = self.teleport_counter % 5;
+        let (x, y, z, label) = match viewpoint {
+            0 => {
+                // Inside the disc, mid-galaxy (like our Sun)
+                let r = rng.range_f64(20000.0, 35000.0);
+                let theta = rng.range_f64(0.0, std::f64::consts::TAU);
+                (r * theta.cos(), rng.range_f64(-100.0, 100.0), r * theta.sin(), "mid-disc")
+            }
+            1 => {
+                // Above the galaxy — looking down at the disc
+                let r = rng.range_f64(0.0, 15000.0);
+                let theta = rng.range_f64(0.0, std::f64::consts::TAU);
+                (r * theta.cos(), rng.range_f64(15000.0, 40000.0), r * theta.sin(), "above-galaxy")
+            }
+            2 => {
+                // Edge of galaxy — sparse, looking back at the disc
+                let r = rng.range_f64(45000.0, 70000.0);
+                let theta = rng.range_f64(0.0, std::f64::consts::TAU);
+                (r * theta.cos(), rng.range_f64(-1000.0, 1000.0), r * theta.sin(), "galaxy-edge")
+            }
+            3 => {
+                // Near galactic center — dense, warm
+                let r = rng.range_f64(1000.0, 5000.0);
+                let theta = rng.range_f64(0.0, std::f64::consts::TAU);
+                (r * theta.cos(), rng.range_f64(-200.0, 200.0), r * theta.sin(), "near-center")
+            }
+            _ => {
+                // Near a nebula — pick a random nebula and teleport close
+                if !self.nebulae.is_empty() {
+                    let idx = (rng.next_u64() % self.nebulae.len() as u64) as usize;
+                    let neb = &self.nebulae[idx];
+                    let offset = neb.radius * 0.5;
+                    (neb.x + rng.range_f64(-offset, offset),
+                     neb.y + rng.range_f64(-offset, offset),
+                     neb.z + rng.range_f64(-offset, offset),
+                     "near-nebula")
+                } else {
+                    (27000.0, 0.0, 0.0, "fallback")
+                }
+            }
+        };
 
         self.camera.position = WorldPos::new(x, y, z);
+        let r = (x * x + y * y + z * z).sqrt();
         log::info!(
-            "Teleported to ({:.0}, {:.0}, {:.0}) — {:.0} ly from center",
-            x, y, z, r,
+            "Teleported to ({:.0}, {:.0}, {:.0}) — {:.0} ly from center [{}]",
+            x, y, z, r, label,
         );
 
         // Force full regeneration
