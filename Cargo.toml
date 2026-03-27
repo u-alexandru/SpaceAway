@@ -4,6 +4,8 @@ members = [
     "crates/sa_core",
     "crates/sa_math",
     "crates/sa_ecs",
+    "crates/sa_input",
+    "crates/sa_render",
     "crates/spaceaway",
 ]
 
@@ -29,7 +31,11 @@ log = "0.4"
 env_logger = "0.11"
 pollster = "0.4"
 
+bytemuck = { version = "1", features = ["derive"] }
+
 # Internal crates
 sa_core = { path = "crates/sa_core" }
 sa_math = { path = "crates/sa_math" }
 sa_ecs = { path = "crates/sa_ecs" }
+sa_input = { path = "crates/sa_input" }
+sa_render = { path = "crates/sa_render" }
