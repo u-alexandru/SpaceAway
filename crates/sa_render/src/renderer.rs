@@ -3,7 +3,7 @@ use crate::gpu::GpuContext;
 use crate::mesh::{MeshMarker, MeshStore};
 use crate::nebula::{NebulaRenderer, NebulaUniforms};
 use crate::pipeline::{GeometryPipeline, InstanceRaw, Uniforms};
-use crate::sky::{MilkyWayCubemap, SkyRenderer, SkyUniforms};
+use crate::sky::{SkyRenderer, SkyUniforms};
 use crate::star_field::{StarField, StarUniforms};
 use glam::{Mat4, Vec3};
 use sa_core::Handle;
@@ -17,7 +17,6 @@ pub struct DrawCommand {
 pub struct Renderer {
     pub geometry_pipeline: GeometryPipeline,
     pub sky_renderer: SkyRenderer,
-    pub milky_way_cubemap: MilkyWayCubemap,
     pub star_field: StarField,
     pub nebula_renderer: NebulaRenderer,
     pub galaxy_renderer: NebulaRenderer,
@@ -32,8 +31,7 @@ impl Renderer {
             gpu.config.width,
             gpu.config.height,
         );
-        let milky_way_cubemap = MilkyWayCubemap::placeholder(&gpu.device, &gpu.queue);
-        let sky_renderer = SkyRenderer::new(&gpu.device, gpu.config.format, &milky_way_cubemap);
+        let sky_renderer = SkyRenderer::new(&gpu.device, gpu.config.format);
         let stars = crate::star_field::generate_stars(4000, 42);
         let star_field = StarField::new(&gpu.device, gpu.config.format, &stars);
         let nebula_renderer = NebulaRenderer::new(&gpu.device, gpu.config.format);
@@ -41,19 +39,11 @@ impl Renderer {
         Self {
             geometry_pipeline,
             sky_renderer,
-            milky_way_cubemap,
             star_field,
             nebula_renderer,
             galaxy_renderer,
             mesh_store: MeshStore::new(),
         }
-    }
-
-    /// Upload a new Milky Way cubemap and rebuild the sky bind group.
-    pub fn update_milky_way_cubemap(&mut self, gpu: &GpuContext, faces: &[Vec<u8>]) {
-        self.milky_way_cubemap = MilkyWayCubemap::new(&gpu.device, &gpu.queue, faces);
-        self.sky_renderer
-            .rebuild_bind_group(&gpu.device, &self.milky_way_cubemap);
     }
 
     pub fn resize(&mut self, gpu: &GpuContext) {
@@ -106,10 +96,8 @@ impl Renderer {
             inv_view_proj: inv_view_proj.to_cols_array_2d(),
             galactic_center_dir: gc_dir.to_array(),
             core_brightness: 0.35,
-            cubemap_enabled: 1,
-            _pad0: 0.0,
-            _pad1: 0.0,
-            _pad2: 0.0,
+            observer_pos: [cam_pos.x as f32, cam_pos.y as f32, cam_pos.z as f32],
+            _pad: 0.0,
         };
         gpu.queue.write_buffer(
             &self.sky_renderer.uniform_buffer,

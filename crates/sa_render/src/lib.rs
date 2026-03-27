@@ -14,6 +14,6 @@ pub use mesh::{MeshData, MeshMarker, MeshStore};
 pub use nebula::{NebulaInstance, NebulaRenderer, NebulaUniforms};
 pub use pipeline::{GeometryPipeline, InstanceRaw, Uniforms};
 pub use renderer::{DrawCommand, Renderer};
-pub use sky::{generate_cubemap_data, MilkyWayCubemap, SkyRenderer, SkyUniforms};
+pub use sky::{SkyRenderer, SkyUniforms};
 pub use star_field::{generate_stars, StarField, StarVertex};
 pub use vertex::Vertex;

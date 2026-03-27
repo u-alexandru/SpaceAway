@@ -134,10 +134,6 @@ fn distant_galaxies_to_instances(
 // universe space. Set high enough that walking doesn't trigger regen.
 const STAR_REGEN_THRESHOLD: f64 = 500.0;
 
-/// Distance threshold (in light-years) before we regenerate the Milky Way
-/// cubemap. Much higher than star regen since the cubemap changes slowly.
-const CUBEMAP_REGEN_THRESHOLD: f64 = 5000.0;
-
 /// Number of sectors to query in each direction around the observer.
 const STAR_QUERY_RADIUS: i32 = 4;
 /// Minimum star brightness to render. Culls dim stars that are visually
@@ -175,8 +171,6 @@ struct App {
     universe: Universe,
     last_star_gen_pos: WorldPos,
     stars_initialised: bool,
-    last_cubemap_gen_pos: WorldPos,
-    cubemap_initialised: bool,
     nebulae: Vec<sa_universe::Nebula>,
     distant_galaxies: Vec<sa_universe::DistantGalaxy>,
     perf: PerfTimings,
@@ -225,8 +219,6 @@ impl App {
             universe,
             last_star_gen_pos: WorldPos::ORIGIN,
             stars_initialised: false,
-            last_cubemap_gen_pos: WorldPos::ORIGIN,
-            cubemap_initialised: false,
             nebulae: Vec::new(),
             distant_galaxies: Vec::new(),
             perf: PerfTimings::default(),
@@ -240,23 +232,6 @@ impl App {
         let gpu = self.gpu.as_ref().unwrap();
         let handle = renderer.mesh_store.upload(&gpu.device, &make_cube());
         self.cube_mesh = Some(handle);
-
-        // Generate Milky Way cubemap from the galaxy density model.
-        // Observer at ~27,000 ly from center (Sun's actual position in the Milky Way).
-        let cubemap_start = Instant::now();
-        let observer = [27000.0_f64, 0.0, 0.0];
-        let cubemap_data = sa_render::generate_cubemap_data(
-            &sa_universe::galaxy_density,
-            &sa_universe::dust_density,
-            observer,
-        );
-        renderer.update_milky_way_cubemap(gpu, &cubemap_data);
-        self.last_cubemap_gen_pos = WorldPos::ORIGIN;
-        self.cubemap_initialised = true;
-        log::info!(
-            "Generated Milky Way cubemap in {:.1}ms",
-            cubemap_start.elapsed().as_secs_f64() * 1000.0,
-        );
 
         // Generate nebulae and distant galaxies from the master seed.
         let seed = MasterSeed(42);
@@ -282,7 +257,7 @@ impl App {
     }
 
     /// Rebuild the GPU star buffer from the procedural universe if the observer
-    /// has moved more than `STAR_REGEN_THRESHOLD_LY` since the last generation,
+    /// has moved more than `STAR_REGEN_THRESHOLD` since the last generation,
     /// or if stars have never been generated yet.
     fn maybe_regenerate_stars(&mut self) {
         let observer = self.camera.position;
@@ -305,52 +280,12 @@ impl App {
         let vertices = visible_stars_to_vertices(&visible);
         renderer.star_field.update_star_buffer(&gpu.device, &vertices);
 
-        // Also refresh nebula instances (camera-relative positions change).
-        let nebula_instances = nebulae_to_instances(&self.nebulae, observer);
-        renderer
-            .nebula_renderer
-            .update_instances(&gpu.device, &nebula_instances);
-
         self.last_star_gen_pos = observer;
         self.stars_initialised = true;
 
         log::debug!(
             "Regenerated star field: {} stars at ({:.1}, {:.1}, {:.1})",
             visible.len(),
-            observer.x,
-            observer.y,
-            observer.z,
-        );
-    }
-
-    /// Regenerate the Milky Way cubemap if the observer has moved far enough.
-    /// This is expensive (~50-100ms) so the threshold is high (5000 ly).
-    fn maybe_regenerate_cubemap(&mut self) {
-        if !self.cubemap_initialised {
-            return;
-        }
-        let observer = self.camera.position;
-        let dist = observer.distance_to(self.last_cubemap_gen_pos);
-        if dist < CUBEMAP_REGEN_THRESHOLD {
-            return;
-        }
-
-        let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) else {
-            return;
-        };
-
-        let start = Instant::now();
-        let cubemap_data = sa_render::generate_cubemap_data(
-            &sa_universe::galaxy_density,
-            &sa_universe::dust_density,
-            [observer.x, observer.y, observer.z],
-        );
-        renderer.update_milky_way_cubemap(gpu, &cubemap_data);
-        self.last_cubemap_gen_pos = observer;
-
-        log::debug!(
-            "Regenerated Milky Way cubemap in {:.1}ms at ({:.0}, {:.0}, {:.0})",
-            start.elapsed().as_secs_f64() * 1000.0,
             observer.x,
             observer.y,
             observer.z,
@@ -423,21 +358,12 @@ impl App {
             x, y, z, r, label,
         );
 
-        // Force full regeneration
+        // Force star regeneration
         self.stars_initialised = false;
-        self.cubemap_initialised = false;
 
-        // Regenerate cubemap immediately
+        // Regenerate stars and nebulae immediately for the new position
         if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
             let start = Instant::now();
-            let cubemap_data = sa_render::generate_cubemap_data(
-                &sa_universe::galaxy_density,
-                &sa_universe::dust_density,
-                [x, y, z],
-            );
-            renderer.update_milky_way_cubemap(gpu, &cubemap_data);
-            self.last_cubemap_gen_pos = self.camera.position;
-            self.cubemap_initialised = true;
 
             // Regen stars
             let visible = self.universe.visible_stars_filtered(
@@ -448,6 +374,7 @@ impl App {
             let vertices = visible_stars_to_vertices(&visible);
             renderer.star_field.update_star_buffer(&gpu.device, &vertices);
 
+            // Refresh nebula instances (only on teleport, not on star regen)
             let nebula_instances = nebulae_to_instances(&self.nebulae, self.camera.position);
             renderer.nebula_renderer.update_instances(&gpu.device, &nebula_instances);
 
@@ -567,10 +494,9 @@ impl ApplicationHandler for App {
                     self.camera.pitch = player.pitch;
                 }
 
-                // --- Star regen + cubemap regen ---
+                // --- Star regen ---
                 let t2 = Instant::now();
                 self.maybe_regenerate_stars();
-                self.maybe_regenerate_cubemap();
                 self.perf.stars_us = t2.elapsed().as_micros() as u64;
 
                 // --- Render ---
