@@ -76,7 +76,7 @@ impl App {
         }
 
         let (dx, dy) = self.input.mouse.delta();
-        self.camera.rotate(-dx * 0.003, -dy * 0.003);
+        self.camera.rotate(dx * 0.003, -dy * 0.003);
     }
 
     fn grab_cursor(&mut self) {
