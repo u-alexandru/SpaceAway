@@ -1,3 +1,4 @@
+pub mod galaxy;
 pub mod object_id;
 pub mod query;
 pub mod sector;
@@ -5,6 +6,7 @@ pub mod seed;
 pub mod star;
 pub mod system;
 
+pub use galaxy::{galaxy_density, generate_distant_galaxies, generate_nebulae, DistantGalaxy, Nebula};
 pub use object_id::ObjectId;
 pub use query::{Universe, VisibleStar};
 pub use sector::{Sector, SectorCoord, SECTOR_SIZE_LY};
