@@ -15,6 +15,7 @@ winit.workspace = true
 wgpu.workspace = true
 sa_physics.workspace = true
 sa_player.workspace = true
+sa_universe.workspace = true
 rapier3d.workspace = true
 log.workspace = true
 env_logger.workspace = true

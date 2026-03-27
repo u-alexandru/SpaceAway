@@ -118,6 +118,17 @@ impl StarField {
 
         Self { pipeline, vertex_buffer, uniform_buffer, bind_group, star_count: stars.len() as u32 }
     }
+
+    /// Replace the star vertex buffer with new data (e.g. when the player moves
+    /// to a new sector and the visible star set changes).
+    pub fn update_star_buffer(&mut self, device: &wgpu::Device, stars: &[StarVertex]) {
+        self.vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Star Vertices"),
+            contents: bytemuck::cast_slice(stars),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        self.star_count = stars.len() as u32;
+    }
 }
 
 pub fn generate_stars(count: u32, seed: u64) -> Vec<StarVertex> {

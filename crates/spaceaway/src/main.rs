@@ -2,9 +2,11 @@ use glam::{Mat4, Vec3};
 use sa_core::{EventBus, FrameTime};
 use sa_ecs::{GameWorld, Schedule};
 use sa_input::InputState;
+use sa_math::WorldPos;
 use sa_physics::PhysicsWorld;
 use sa_player::PlayerController;
-use sa_render::{Camera, DrawCommand, GpuContext, MeshData, Renderer, Vertex};
+use sa_render::{Camera, DrawCommand, GpuContext, MeshData, Renderer, StarVertex, Vertex};
+use sa_universe::{MasterSeed, Universe, VisibleStar};
 use std::sync::Arc;
 use std::time::Instant;
 use winit::application::ApplicationHandler;
@@ -12,6 +14,39 @@ use winit::event::{DeviceEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::KeyCode;
 use winit::window::{CursorGrabMode, Window, WindowId};
+
+/// Convert visible stars from the universe query into GPU-ready vertices.
+///
+/// `VisibleStar::relative_pos` is in light-years relative to the observer.
+/// We normalise each direction onto the unit sphere so that stars render as a
+/// sky-dome, and use `brightness` / `color` directly from the universe data.
+fn visible_stars_to_vertices(stars: &[VisibleStar]) -> Vec<StarVertex> {
+    stars
+        .iter()
+        .map(|vs| {
+            let [dx, dy, dz] = vs.relative_pos;
+            let len = (dx * dx + dy * dy + dz * dz).sqrt();
+            let (nx, ny, nz) = if len > 1e-6 {
+                (dx / len, dy / len, dz / len)
+            } else {
+                (0.0, 1.0, 0.0)
+            };
+            StarVertex {
+                position: [nx, ny, nz],
+                brightness: vs.brightness,
+                color: vs.color,
+                _pad: 0.0,
+            }
+        })
+        .collect()
+}
+
+/// Distance threshold (in light-years) before we regenerate the star field.
+/// Roughly one sector width.
+const STAR_REGEN_THRESHOLD_LY: f64 = 5.0;
+
+/// Number of sectors to query in each direction around the observer.
+const STAR_QUERY_RADIUS: i32 = 2;
 
 struct App {
     window: Option<Arc<Window>>,
@@ -28,6 +63,12 @@ struct App {
     cursor_grabbed: bool,
     physics: PhysicsWorld,
     player: Option<PlayerController>,
+    universe: Universe,
+    /// The observer position at which the star field was last generated,
+    /// used to decide when the buffer needs rebuilding.
+    last_star_gen_pos: WorldPos,
+    /// Whether the initial star field has been pushed to the GPU yet.
+    stars_initialised: bool,
 }
 
 impl App {
@@ -51,6 +92,7 @@ impl App {
         let player = PlayerController::spawn(&mut physics, 0.0, 2.0, 10.0);
 
         let camera = Camera::new();
+        let universe = Universe::new(MasterSeed(42));
 
         Self {
             window: None,
@@ -67,6 +109,9 @@ impl App {
             cursor_grabbed: false,
             physics,
             player: Some(player),
+            universe,
+            last_star_gen_pos: WorldPos::ORIGIN,
+            stars_initialised: false,
         }
     }
 
@@ -97,6 +142,41 @@ impl App {
             self.camera.yaw = player.yaw;
             self.camera.pitch = player.pitch;
         }
+
+        // Regenerate star field from the procedural universe when the player
+        // has moved far enough or on first frame after the GPU is ready.
+        self.maybe_regenerate_stars();
+    }
+
+    /// Rebuild the GPU star buffer from the procedural universe if the observer
+    /// has moved more than `STAR_REGEN_THRESHOLD_LY` since the last generation,
+    /// or if stars have never been generated yet.
+    fn maybe_regenerate_stars(&mut self) {
+        let observer = self.camera.position;
+        let dist = observer.distance_to(self.last_star_gen_pos);
+
+        let needs_regen = !self.stars_initialised || dist > STAR_REGEN_THRESHOLD_LY;
+        if !needs_regen {
+            return;
+        }
+
+        let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) else {
+            return;
+        };
+
+        let visible = self.universe.visible_stars(observer, STAR_QUERY_RADIUS);
+        let vertices = visible_stars_to_vertices(&visible);
+        renderer.star_field.update_star_buffer(&gpu.device, &vertices);
+        self.last_star_gen_pos = observer;
+        self.stars_initialised = true;
+
+        log::debug!(
+            "Regenerated star field: {} stars at ({:.1}, {:.1}, {:.1})",
+            visible.len(),
+            observer.x,
+            observer.y,
+            observer.z,
+        );
     }
 
     fn grab_cursor(&mut self) {

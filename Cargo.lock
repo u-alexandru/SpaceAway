@@ -2109,6 +2109,7 @@ dependencies = [
  "sa_physics",
  "sa_player",
  "sa_render",
+ "sa_universe",
  "wgpu",
  "winit",
 ]
