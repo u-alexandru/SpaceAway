@@ -63,8 +63,9 @@ fn sector_density(coord: SectorCoord) -> u32 {
     let dz = coord.z as f64;
     let dist = (dx * dx + dy * dy + dz * dz).sqrt();
 
-    // Base density near center ~20 stars per sector, decaying with scale radius ~200 sectors.
-    let base = 20.0;
+    // Base density near center ~80 stars per sector, decaying with scale radius ~200 sectors.
+    // Real stellar density is much higher — this is already sparse for gameplay.
+    let base = 80.0;
     let scale_radius = 200.0;
     let density = base * (-dist / scale_radius).exp();
 

@@ -54,14 +54,19 @@ impl Universe {
                 let dy = (placed.position.y - observer_pos.y) as f32;
                 let dz = (placed.position.z - observer_pos.z) as f32;
 
-                // Distance-based brightness attenuation
+                // Apparent brightness using luminosity and inverse-square law.
+                // In real space, bright stars (high luminosity) are visible across
+                // hundreds of light-years. We use luminosity as a multiplier so
+                // O/B stars shine far and M-dwarfs are only visible nearby.
                 let dist_sq = dx * dx + dy * dy + dz * dz;
-                let attenuation = if dist_sq > 0.01 {
-                    1.0 / (1.0 + dist_sq * 0.001)
+                let luminosity = placed.star.luminosity;
+                let apparent = if dist_sq > 0.01 {
+                    luminosity / (1.0 + dist_sq * 0.01)
                 } else {
-                    1.0
+                    luminosity
                 };
-                let brightness = (placed.star.brightness * attenuation).clamp(0.01, 1.0);
+                // Map to display brightness: log scale so dim stars are still visible
+                let brightness = (apparent.ln().max(0.0) * 0.15 + 0.05).clamp(0.03, 1.0);
 
                 visible.push(VisibleStar {
                     id: placed.id,

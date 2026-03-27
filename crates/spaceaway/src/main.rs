@@ -46,7 +46,7 @@ fn visible_stars_to_vertices(stars: &[VisibleStar]) -> Vec<StarVertex> {
 const STAR_REGEN_THRESHOLD_LY: f64 = 5.0;
 
 /// Number of sectors to query in each direction around the observer.
-const STAR_QUERY_RADIUS: i32 = 2;
+const STAR_QUERY_RADIUS: i32 = 5;
 
 struct App {
     window: Option<Arc<Window>>,
