@@ -6,6 +6,7 @@ members = [
     "crates/sa_ecs",
     "crates/sa_input",
     "crates/sa_render",
+    "crates/sa_physics",
     "crates/spaceaway",
 ]
 
@@ -33,9 +34,13 @@ pollster = "0.4"
 
 bytemuck = { version = "1", features = ["derive"] }
 
+# Physics
+rapier3d = { version = "0.22", features = ["simd-stable"] }
+
 # Internal crates
 sa_core = { path = "crates/sa_core" }
 sa_math = { path = "crates/sa_math" }
 sa_ecs = { path = "crates/sa_ecs" }
 sa_input = { path = "crates/sa_input" }
 sa_render = { path = "crates/sa_render" }
+sa_physics = { path = "crates/sa_physics" }
