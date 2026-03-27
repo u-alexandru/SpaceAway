@@ -54,23 +54,23 @@ pub struct Sector {
     pub stars: Vec<PlacedStar>,
 }
 
-/// Compute star density for a sector based on distance from galactic center.
-/// The galaxy layer: exponential falloff from center.
+/// Compute star density for a sector based on the spiral galaxy model.
 /// Returns approximate number of stars per sector.
 fn sector_density(coord: SectorCoord) -> u32 {
-    let dx = coord.x as f64;
-    let dy = coord.y as f64;
-    let dz = coord.z as f64;
-    let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+    // Convert sector coordinates to galactic light-year coordinates.
+    // Each sector is SECTOR_SIZE_LY on a side; use the sector center.
+    let x = (coord.x as f64 + 0.5) * SECTOR_SIZE_LY;
+    let y = (coord.y as f64 + 0.5) * SECTOR_SIZE_LY;
+    let z = (coord.z as f64 + 0.5) * SECTOR_SIZE_LY;
 
-    // Base density near center ~80 stars per sector, decaying with scale radius ~200 sectors.
-    // Real stellar density is much higher — this is already sparse for gameplay.
-    let base = 80.0;
-    let scale_radius = 200.0;
-    let density = base * (-dist / scale_radius).exp();
+    let gd = crate::galaxy::galaxy_density(x, y, z);
 
-    // Minimum 1 star per sector to avoid empty voids everywhere
-    (density as u32).max(1)
+    // Scale density to star count: peak ~80 stars/sector in densest regions.
+    // galaxy_density returns roughly [0, 2+], so multiply by 40 to get ~80 at peak.
+    let star_count = (gd * 40.0) as u32;
+
+    // Minimum 1 star per sector to avoid empty voids
+    star_count.max(1)
 }
 
 /// 3D Poisson disk sampling (Bridson's algorithm) within the sector cube.
