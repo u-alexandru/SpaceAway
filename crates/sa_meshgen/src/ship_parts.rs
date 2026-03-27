@@ -54,11 +54,6 @@ pub fn hull_cockpit() -> Part {
     meshes.push(hull::interior_floor(interior_w, length, FLOOR_Y, colors::FLOOR));
     meshes.push(hull::interior_ceiling(interior_w, length, CEILING_Y, colors::CEILING));
 
-    // Helm console near the front
-    let console = hull::console_mesh(1.2, colors::ACCENT_HELM);
-    let console = console.transform(Mat4::from_translation(Vec3::new(0.0, FLOOR_Y, 0.8)));
-    meshes.push(console);
-
     // Bulkhead with door at aft
     let bulkhead = hull::bulkhead_with_door(interior_w, FLOOR_Y, CEILING_Y, DOOR_W, DOOR_H, colors::BULKHEAD);
     let bulkhead = bulkhead.transform(Mat4::from_translation(Vec3::new(0.0, 0.0, length)));
@@ -184,7 +179,7 @@ pub fn hull_transition(from_width: f32, to_width: f32, length: f32) -> Part {
 /// Connections: "fore" at z=0 width=5.0, "aft" at z=5.0 width=5.0.
 pub fn hull_room(
     name: &str,
-    accent_color: [f32; 3],
+    _accent_color: [f32; 3],
     side_doors: &[&str],
 ) -> Part {
     let room_len = 5.0;
@@ -201,13 +196,7 @@ pub fn hull_room(
     meshes.push(hull::interior_floor(interior_w, room_len, FLOOR_Y, colors::FLOOR));
     meshes.push(hull::interior_ceiling(interior_w, room_len, CEILING_Y, colors::CEILING));
 
-    // Console on one wall with accent color (placed mid-room)
-    let console = hull::console_mesh(1.5, accent_color);
-    let console = console.transform(
-        Mat4::from_translation(Vec3::new(-1.5, FLOOR_Y, room_len * 0.5))
-            * Mat4::from_rotation_y(std::f32::consts::FRAC_PI_2),
-    );
-    meshes.push(console);
+    // Furniture (consoles, chairs) will be added as separate objects later
 
     // Bulkheads with doors at fore and aft
     let bulkhead_fore = hull::bulkhead_with_door(interior_w, FLOOR_Y, CEILING_Y, DOOR_W, DOOR_H, colors::BULKHEAD);
@@ -328,10 +317,7 @@ pub fn hull_engine_section() -> Part {
     meshes.push(hull::interior_floor(interior_w, length, FLOOR_Y, colors::FLOOR));
     meshes.push(hull::interior_ceiling(interior_w, length, CEILING_Y, colors::CEILING));
 
-    // Engine console
-    let console = hull::console_mesh(1.2, colors::ACCENT_ENGINE);
-    let console = console.transform(Mat4::from_translation(Vec3::new(0.0, FLOOR_Y, 1.5)));
-    meshes.push(console);
+    // Furniture (engine console) will be added as separate objects later
 
     // Bulkhead with door at fore
     let bulkhead = hull::bulkhead_with_door(interior_w, FLOOR_Y, CEILING_Y, DOOR_W, DOOR_H, colors::BULKHEAD);
