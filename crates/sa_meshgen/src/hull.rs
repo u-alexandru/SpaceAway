@@ -60,13 +60,16 @@ pub fn hex_hull(
         let normal = face_normal(corners[0], corners[1], corners[2]);
         push_quad(&mut vertices, &mut indices, corners, normal, color);
 
-        // Interior-facing quad: reversed winding, inward normal, interior color
-        let inner_corners = [front[next], back[next], back[i], front[i]];
-        let inner_normal = [
-            -normal[0],
-            -normal[1],
-            -normal[2],
+        // Interior-facing quad: offset inward by 0.05m to avoid Z-fighting,
+        // reversed winding, inward normal, interior color.
+        let inset = 0.05;
+        let inner_corners = [
+            [front[next][0] - normal[0] * inset, front[next][1] - normal[1] * inset, front[next][2] - normal[2] * inset],
+            [back[next][0] - normal[0] * inset, back[next][1] - normal[1] * inset, back[next][2] - normal[2] * inset],
+            [back[i][0] - normal[0] * inset, back[i][1] - normal[1] * inset, back[i][2] - normal[2] * inset],
+            [front[i][0] - normal[0] * inset, front[i][1] - normal[1] * inset, front[i][2] - normal[2] * inset],
         ];
+        let inner_normal = [-normal[0], -normal[1], -normal[2]];
         push_quad(&mut vertices, &mut indices, inner_corners, inner_normal, interior_color);
     }
 
