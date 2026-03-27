@@ -55,18 +55,18 @@ impl Universe {
                 let dz = (placed.position.z - observer_pos.z) as f32;
 
                 // Apparent brightness using luminosity and inverse-square law.
-                // In real space, bright stars (high luminosity) are visible across
-                // hundreds of light-years. We use luminosity as a multiplier so
-                // O/B stars shine far and M-dwarfs are only visible nearby.
+                // In deep space with zero light pollution, even dim stars are
+                // clearly visible pinpoints. We want a dense, bright star field.
                 let dist_sq = dx * dx + dy * dy + dz * dz;
                 let luminosity = placed.star.luminosity;
                 let apparent = if dist_sq > 0.01 {
-                    luminosity / (1.0 + dist_sq * 0.01)
+                    luminosity / (1.0 + dist_sq * 0.005)
                 } else {
                     luminosity
                 };
-                // Map to display brightness: log scale so dim stars are still visible
-                let brightness = (apparent.ln().max(0.0) * 0.15 + 0.05).clamp(0.03, 1.0);
+                // Map to display brightness: sqrt scale preserves range better than log.
+                // Floor at 0.15 — in space, every star is a visible point of light.
+                let brightness = (apparent.sqrt() * 0.4 + 0.15).clamp(0.15, 1.0);
 
                 visible.push(VisibleStar {
                     id: placed.id,
