@@ -373,6 +373,7 @@ list of violation descriptions.
 | V-P10 | If an "aft" connection exists with width W at z=L, then hex_ring(W, H, L) vertices all appear in the mesh (within epsilon) |
 | V-P11 | Connection point positions lie on the mesh bounding box boundary (within epsilon) |
 | V-P12 | Every connection point normal is a unit vector |
+| V-TS1 | No co-planar duplicate faces with same color and opposing normals (per R-TS6). Detects unnecessary double-sided geometry that should be single-sided. |
 
 ### 5.2 validate_connection(part_a, conn_a, part_b, conn_b) -> Result<(), Vec<String>>
 
@@ -560,6 +561,47 @@ Future implementation:
 - Generate a collar mesh bridging the cutout edge to the attached part's hex ring
 - The collar handles the topology mismatch between the hex surface and the attached
   hex face
+
+---
+
+## 8. Two-Sided Rendering Standard
+
+Backface culling is disabled (`cull_mode: None` in `pipeline.rs`), meaning every
+triangle is visible from both sides. The geometry shader compensates for this with
+a `@builtin(front_facing)` normal flip so that lighting is correct regardless of
+viewing direction.
+
+### 8.1 Rules
+
+| Rule  | Requirement |
+|-------|-------------|
+| R-TS1 | Backface culling is DISABLED. All triangles are visible from both sides. |
+| R-TS2 | The geometry shader uses `@builtin(front_facing)` to flip normals for back-faces, ensuring correct lighting from both sides. |
+| R-TS3 | Mesh generators should produce faces with normals pointing toward the PRIMARY viewing direction (exterior = outward, interior = inward from the room). |
+| R-TS4 | Single-sided panels (floors, ceilings, bulkheads) are acceptable -- they render correctly from both sides due to R-TS2. |
+| R-TS5 | The `hex_hull()` double-sided generation (exterior + 0.05m inset interior) is REQUIRED for hull panels because exterior and interior have different COLORS. A single face can only have one color, so two faces with different colors are needed. |
+| R-TS6 | For same-color surfaces viewed from both sides (floors, bulkheads), a SINGLE face is sufficient. Do NOT duplicate geometry with flipped normals for same-color surfaces. |
+| R-TS7 | When two faces MUST overlap at the same position (unavoidable), add a 0.02-0.05m offset between them to prevent Z-fighting. |
+| R-TS8 | The `ambient` lighting term in the shader prevents back-faces from being completely black even before the front_facing fix -- but the fix makes them properly lit. |
+
+### 8.2 Rationale
+
+Without R-TS2, back-faces receive zero diffuse lighting because `dot(normal,
+light_dir)` is negative when the normal points away from the camera. The
+`select(-n, n, front_facing)` flip in the fragment shader ensures the normal
+always faces the camera, producing correct diffuse lighting on both sides.
+
+This eliminates the need for duplicate geometry on same-color surfaces (R-TS6),
+halving the triangle count for bulkheads, floors, ceilings, and interior walls.
+Hull panels (`hex_hull()`) still require two faces because exterior and interior
+have different colors (R-TS5).
+
+### 8.3 Performance
+
+Every triangle with backface culling disabled is rasterized from both sides,
+doubling fragment workload for overlapping geometry. Removing unnecessary
+duplicate faces (R-TS6) partially compensates by halving the triangle count for
+those surfaces.
 
 ---
 

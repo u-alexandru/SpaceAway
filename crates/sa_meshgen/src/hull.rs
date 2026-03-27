@@ -368,7 +368,6 @@ pub fn bulkhead_with_door(
     let hw = interior_width / 2.0;
     let hdw = door_w / 2.0;
     let door_top = floor_y + door_h;
-    let depth = 0.05; // half-thickness (total 0.1m panel)
 
     // Extend wall to full hex hull extents to avoid triangular gaps
     // where the rectangular bulkhead meets the angled hex hull.
@@ -378,77 +377,50 @@ pub fn bulkhead_with_door(
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
 
-    // Front face normal (faces -Z = toward the viewer / fore)
+    // R-TS6: Bulkhead panels are the same color on both sides, so a single
+    // face is sufficient. The shader uses @builtin(front_facing) to flip the
+    // normal for back-face lighting (R-TS2), making the panel correctly lit
+    // from both sides without duplicate geometry.
     let normal_front: [f32; 3] = [0.0, 0.0, -1.0];
-    // Back face normal (faces +Z = toward aft)
-    let normal_back: [f32; 3] = [0.0, 0.0, 1.0];
 
     // --- Left panel (full height) ---
     let left_front = [
-        [-hw, wall_bottom, -depth],
-        [-hdw, wall_bottom, -depth],
-        [-hdw, wall_top, -depth],
-        [-hw, wall_top, -depth],
+        [-hw, wall_bottom, 0.0],
+        [-hdw, wall_bottom, 0.0],
+        [-hdw, wall_top, 0.0],
+        [-hw, wall_top, 0.0],
     ];
     push_quad(&mut vertices, &mut indices, left_front, normal_front, color);
-    let left_back = [
-        [-hdw, wall_bottom, depth],
-        [-hw, wall_bottom, depth],
-        [-hw, wall_top, depth],
-        [-hdw, wall_top, depth],
-    ];
-    push_quad(&mut vertices, &mut indices, left_back, normal_back, color);
 
     // --- Right panel (full height) ---
     let right_front = [
-        [hdw, wall_bottom, -depth],
-        [hw, wall_bottom, -depth],
-        [hw, wall_top, -depth],
-        [hdw, wall_top, -depth],
+        [hdw, wall_bottom, 0.0],
+        [hw, wall_bottom, 0.0],
+        [hw, wall_top, 0.0],
+        [hdw, wall_top, 0.0],
     ];
     push_quad(&mut vertices, &mut indices, right_front, normal_front, color);
-    let right_back = [
-        [hw, wall_bottom, depth],
-        [hdw, wall_bottom, depth],
-        [hdw, wall_top, depth],
-        [hw, wall_top, depth],
-    ];
-    push_quad(&mut vertices, &mut indices, right_back, normal_back, color);
 
     // --- Lintel above door (x from -hdw to +hdw, y from door_top to wall_top) ---
     if door_top < wall_top {
         let lintel_front = [
-            [-hdw, door_top, -depth],
-            [hdw, door_top, -depth],
-            [hdw, wall_top, -depth],
-            [-hdw, wall_top, -depth],
+            [-hdw, door_top, 0.0],
+            [hdw, door_top, 0.0],
+            [hdw, wall_top, 0.0],
+            [-hdw, wall_top, 0.0],
         ];
         push_quad(&mut vertices, &mut indices, lintel_front, normal_front, color);
-        let lintel_back = [
-            [hdw, door_top, depth],
-            [-hdw, door_top, depth],
-            [-hdw, wall_top, depth],
-            [hdw, wall_top, depth],
-        ];
-        push_quad(&mut vertices, &mut indices, lintel_back, normal_back, color);
     }
 
     // --- Sub-floor panel below door (x from -hdw to +hdw, y from wall_bottom to floor_y) ---
     if wall_bottom < floor_y {
         let sub_front = [
-            [-hdw, wall_bottom, -depth],
-            [hdw, wall_bottom, -depth],
-            [hdw, floor_y, -depth],
-            [-hdw, floor_y, -depth],
+            [-hdw, wall_bottom, 0.0],
+            [hdw, wall_bottom, 0.0],
+            [hdw, floor_y, 0.0],
+            [-hdw, floor_y, 0.0],
         ];
         push_quad(&mut vertices, &mut indices, sub_front, normal_front, color);
-        let sub_back = [
-            [hdw, wall_bottom, depth],
-            [-hdw, wall_bottom, depth],
-            [-hdw, floor_y, depth],
-            [hdw, floor_y, depth],
-        ];
-        push_quad(&mut vertices, &mut indices, sub_back, normal_back, color);
     }
 
     Mesh { vertices, indices }
@@ -558,8 +530,9 @@ mod tests {
     fn bulkhead_with_door_not_empty() {
         let m = bulkhead_with_door(3.7, -1.0, 1.2, 1.2, 2.0, [0.5; 3]);
         assert!(!m.vertices.is_empty());
-        // 3 panels (left, right, lintel) + 1 sub-floor, each x2 faces = 8 quads = 16 triangles
-        assert_eq!(m.triangle_count(), 16);
+        // 4 single-sided panels (left, right, lintel, sub-floor) = 4 quads = 8 triangles
+        // R-TS6: same-color surfaces only need one face; shader handles back-face lighting
+        assert_eq!(m.triangle_count(), 8);
     }
 
     #[test]
@@ -595,10 +568,9 @@ mod tests {
     fn bulkhead_no_lintel_when_door_fills_height() {
         // Door height = ceiling - floor = 2.2m, so no lintel needed
         let m = bulkhead_with_door(4.0, -1.0, 1.2, 1.2, 2.2, [0.5; 3]);
-        // 2 panels (left, right) + 1 sub-floor, each x2 faces, + no lintel = 6 quads = 12 tri
-        // But door_top (floor_y + 2.2 = 1.2) == ceiling_y => no lintel.
-        // wall_top = ceiling_y + 0.4 = 1.6, door_top = 1.2 < 1.6 => lintel IS added.
-        // So: left, right, lintel, sub-floor = 4 panels x 2 faces = 8 quads = 16 tri
-        assert_eq!(m.triangle_count(), 16);
+        // door_top (floor_y + 2.2 = 1.2) < wall_top (ceiling_y + 0.4 = 1.6) => lintel IS added.
+        // 4 single-sided panels (left, right, lintel, sub-floor) = 4 quads = 8 triangles
+        // R-TS6: same-color surfaces only need one face; shader handles back-face lighting
+        assert_eq!(m.triangle_count(), 8);
     }
 }

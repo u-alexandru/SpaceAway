@@ -156,6 +156,47 @@ section boundaries visually distinct when walking through the ship.
 | V-I3  | Floor width must be <= hull_width - 0.3 (doesn't poke through hull) |
 | V-I4  | Every fore/aft connection must have a bulkhead_with_door at its z position |
 | V-I5  | Door dimensions must be 1.2m wide x 2.0m tall |
+| V-TS1 | No co-planar duplicate faces with same color and opposing normals (R-TS6) |
+
+---
+
+## 8. Two-Sided Rendering Standard
+
+Backface culling is disabled for the entire render pipeline. This means every
+triangle is visible from both the front and back side. The geometry shader uses
+`@builtin(front_facing)` to flip normals for back-faces, ensuring correct
+lighting from both viewing directions.
+
+### 8.1 Rules
+
+| Rule  | Requirement |
+|-------|-------------|
+| R-TS1 | Backface culling is DISABLED. All triangles are visible from both sides. |
+| R-TS2 | The geometry shader uses `@builtin(front_facing)` to flip normals for back-faces, ensuring correct lighting from both sides. |
+| R-TS3 | Mesh generators should produce faces with normals pointing toward the PRIMARY viewing direction (exterior = outward, interior = inward from the room). |
+| R-TS4 | Single-sided panels (floors, ceilings, bulkheads) are acceptable -- they render correctly from both sides due to R-TS2. |
+| R-TS5 | The `hex_hull()` double-sided generation (exterior + 0.05m inset interior) is REQUIRED for hull panels because exterior and interior have different COLORS. A single face can only have one color, so two faces with different colors are needed. |
+| R-TS6 | For same-color surfaces viewed from both sides (floors, bulkheads), a SINGLE face is sufficient. Do NOT duplicate geometry with flipped normals for same-color surfaces. |
+| R-TS7 | When two faces MUST overlap at the same position (unavoidable), add a 0.02-0.05m offset between them to prevent Z-fighting. |
+| R-TS8 | The `ambient` lighting term in the shader prevents back-faces from being completely black even before the front_facing fix -- but the fix makes them properly lit. |
+
+### 8.2 Impact on Interior Geometry
+
+The following interior surfaces are single-sided and rely on R-TS2 for correct
+back-face rendering:
+
+| Surface               | Normal direction | Single-sided? | Notes |
+|-----------------------|------------------|---------------|-------|
+| Floor                 | +Y (upward)      | Yes           | Visible from below through sub-floor gaps |
+| Ceiling               | -Y (downward)    | Yes           | Visible from above through over-ceiling gaps |
+| Interior side walls   | Inward (+/-X)    | Yes           | Visible from hull side |
+| Bulkheads             | -Z (fore-facing) | Yes           | Visible from both sides of the doorway |
+| Hull exterior         | Outward          | No (R-TS5)    | Paired with interior face at different color |
+| Hull interior         | Inward           | No (R-TS5)    | Paired with exterior face at different color |
+
+Bulkheads previously had front and back faces with the same color. Per R-TS6,
+the back faces have been removed -- the shader handles back-face lighting
+automatically.
 
 ---
 

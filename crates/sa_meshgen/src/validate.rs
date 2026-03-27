@@ -148,6 +148,72 @@ pub fn validate_part(part: &Part) -> Result<(), Vec<String>> {
         }
     }
 
+    // V-TS1: Detect co-planar overlapping faces that would cause Z-fighting.
+    // For each pair of triangles that share the same approximate plane (same normal
+    // direction and same distance from origin), they must be offset by at least 0.02m.
+    // Specifically: find triangles with same-color vertices, opposite normals, and
+    // overlapping positions -- these are unnecessary duplicate faces.
+    //
+    // Implementation: for each triangle, compute its center and normal. If two
+    // triangles have the same center (within tolerance) and opposing normals with the
+    // same color, flag as a co-planar duplicate.
+    {
+        let pos_tolerance = 0.01_f32;
+        let tri_count = part.mesh.indices.len() / 3;
+
+        struct TriInfo {
+            center: Vec3,
+            normal: Vec3,
+            color: [f32; 3],
+        }
+
+        let tri_infos: Vec<TriInfo> = (0..tri_count)
+            .map(|t| {
+                let i0 = part.mesh.indices[t * 3] as usize;
+                let i1 = part.mesh.indices[t * 3 + 1] as usize;
+                let i2 = part.mesh.indices[t * 3 + 2] as usize;
+                let v0 = &part.mesh.vertices[i0];
+                let v1 = &part.mesh.vertices[i1];
+                let v2 = &part.mesh.vertices[i2];
+                let p0 = Vec3::from(v0.position);
+                let p1 = Vec3::from(v1.position);
+                let p2 = Vec3::from(v2.position);
+                TriInfo {
+                    center: (p0 + p1 + p2) / 3.0,
+                    normal: Vec3::from(v0.normal),
+                    color: v0.color,
+                }
+            })
+            .collect();
+
+        let mut coplanar_dup_found = false;
+        for i in 0..tri_infos.len() {
+            if coplanar_dup_found {
+                break;
+            }
+            for j in (i + 1)..tri_infos.len() {
+                let ti = &tri_infos[i];
+                let tj = &tri_infos[j];
+                // Same center position (within tolerance)
+                if (ti.center - tj.center).length() < pos_tolerance
+                    // Opposing normals (dot ~ -1)
+                    && ti.normal.dot(tj.normal) < -0.9
+                    // Same color
+                    && ti.color == tj.color
+                {
+                    errors.push(format!(
+                        "V-TS1: Co-planar duplicate faces detected (triangles {i} and {j}) \
+                         at center {:?} with same color {:?}. Per R-TS6, same-color surfaces \
+                         should use a single face since the shader handles back-face lighting.",
+                        ti.center, ti.color
+                    ));
+                    coplanar_dup_found = true;
+                    break;
+                }
+            }
+        }
+    }
+
     // V-P4 (mesh non-empty check)
     if part.mesh.vertices.is_empty() || part.mesh.indices.is_empty() {
         errors.push("Mesh is empty (no vertices or indices)".into());

@@ -58,10 +58,15 @@ fn vs_main(vertex: VertexInput, instance: Instance) -> VertexOutput {
 }
 
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+fn fs_main(in: VertexOutput, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
     let n = normalize(in.world_normal);
+    // Flip normal for back faces so lighting works correctly from both sides.
+    // With backface culling disabled (cull_mode: None), triangles are visible
+    // from behind, but their normal points away from the camera. Flipping it
+    // ensures the diffuse term is computed correctly for the viewing direction.
+    let adjusted_n = select(-n, n, front_facing);
     let l = normalize(-uniforms.light_dir);
-    let ndotl = max(dot(n, l), 0.0);
+    let ndotl = max(dot(adjusted_n, l), 0.0);
     let diffuse = uniforms.light_color * ndotl;
     let color = in.color * (uniforms.ambient + diffuse);
     return vec4<f32>(color, 1.0);
