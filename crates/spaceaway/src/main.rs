@@ -1,3 +1,4 @@
+mod ship_colliders;
 mod ship_setup;
 
 use glam::{Mat4, Vec3};
@@ -448,9 +449,10 @@ impl App {
     }
 
     /// Write live debug state to /tmp/spaceaway_debug.json for external inspection.
+    #[allow(clippy::collapsible_if)]
     fn write_debug_state(&self) {
         let mut lines = Vec::new();
-        lines.push(format!("{{"));
+        lines.push("{".to_string());
         lines.push(format!("  \"frame\": {},", self.time.frame_count()));
         lines.push(format!("  \"view_mode\": \"{}\",", match self.view_mode {
             6 => "PART_PREVIEW",
@@ -464,14 +466,14 @@ impl App {
             if let Some(body) = self.physics.get_body(player.body_handle) {
                 let p = body.translation();
                 let v = body.linvel();
-                lines.push(format!("  \"player\": {{"));
+                lines.push("  \"player\": {".to_string());
                 lines.push(format!("    \"pos\": [{:.3}, {:.3}, {:.3}],", p.x, p.y, p.z));
                 lines.push(format!("    \"vel\": [{:.3}, {:.3}, {:.3}],", v.x, v.y, v.z));
                 lines.push(format!("    \"speed\": {:.3},", v.magnitude()));
                 lines.push(format!("    \"sleeping\": {},", body.is_sleeping()));
                 lines.push(format!("    \"grounded\": {},", player.grounded));
                 lines.push(format!("    \"yaw\": {:.3}, \"pitch\": {:.3}", player.yaw, player.pitch));
-                lines.push(format!("  }},"));
+                lines.push("  },".to_string());
             }
         }
 
@@ -480,21 +482,29 @@ impl App {
             if let Some(body) = self.physics.get_body(ship.body_handle) {
                 let p = body.translation();
                 let v = body.linvel();
-                lines.push(format!("  \"ship\": {{"));
+                lines.push("  \"ship\": {".to_string());
                 lines.push(format!("    \"pos\": [{:.3}, {:.3}, {:.3}],", p.x, p.y, p.z));
                 lines.push(format!("    \"vel\": [{:.3}, {:.3}, {:.3}],", v.x, v.y, v.z));
                 lines.push(format!("    \"throttle\": {:.3},", ship.throttle));
                 lines.push(format!("    \"engine_on\": {},", ship.engine_on));
                 lines.push(format!("    \"mass\": {:.1}", body.mass()));
-                lines.push(format!("  }},"));
+                lines.push("  },".to_string());
             }
         }
 
         // Interaction state
         if let Some(interaction) = &self.interaction {
-            lines.push(format!("  \"interaction\": {{"));
+            lines.push("  \"interaction\": {".to_string());
             lines.push(format!("    \"hovered\": {:?},", interaction.hovered()));
             lines.push(format!("    \"dragging\": {},", interaction.is_dragging()));
+            // Debug ray info
+            let dr = interaction.debug_ray();
+            lines.push(format!(
+                "    \"debug_ray\": {{\"origin\": [{:.3}, {:.3}, {:.3}], \"dir\": [{:.3}, {:.3}, {:.3}], \"hit\": {:?}, \"hit_id\": {:?}}},",
+                dr.ray_origin[0], dr.ray_origin[1], dr.ray_origin[2],
+                dr.ray_dir[0], dr.ray_dir[1], dr.ray_dir[2],
+                dr.hit, dr.hit_id,
+            ));
             // Show each interactable's collider world position
             let mut interactable_lines = Vec::new();
             for i in 0..10 { // max 10
@@ -508,30 +518,30 @@ impl App {
                 } else { break; }
             }
             lines.push(format!("    \"interactables\": [{}]", interactable_lines.join(",")));
-            lines.push(format!("  }},"));
+            lines.push("  },".to_string());
         }
 
         // Camera
-        lines.push(format!("  \"camera\": {{"));
+        lines.push("  \"camera\": {".to_string());
         lines.push(format!("    \"pos\": [{:.3}, {:.3}, {:.3}],", self.camera.position.x, self.camera.position.y, self.camera.position.z));
         lines.push(format!("    \"yaw\": {:.3}, \"pitch\": {:.3}", self.camera.yaw, self.camera.pitch));
-        lines.push(format!("  }},"));
+        lines.push("  },".to_string());
 
         // Input
-        lines.push(format!("  \"input\": {{"));
+        lines.push("  \"input\": {".to_string());
         lines.push(format!("    \"mouse_delta\": [{:.1}, {:.1}],", self.input.mouse.delta().0, self.input.mouse.delta().1));
         lines.push(format!("    \"left_btn\": {}", self.input.mouse.left_pressed()));
-        lines.push(format!("  }},"));
+        lines.push("  },".to_string());
 
         // Physics world stats
-        lines.push(format!("  \"physics\": {{"));
+        lines.push("  \"physics\": {".to_string());
         lines.push(format!("    \"bodies\": {},", self.physics.rigid_body_set.len()));
         lines.push(format!("    \"colliders\": {},", self.physics.collider_set.len()));
         let grav = self.physics.gravity();
         lines.push(format!("    \"gravity\": [{:.1}, {:.1}, {:.1}]", grav.0, grav.1, grav.2));
-        lines.push(format!("  }}"));
+        lines.push("  }".to_string());
 
-        lines.push(format!("}}"));
+        lines.push("}".to_string());
 
         let content = lines.join("\n");
         if let Ok(mut f) = std::fs::File::create("/tmp/spaceaway_debug.json") {
@@ -768,7 +778,7 @@ impl ApplicationHandler for App {
                         self.camera.pitch = player.pitch;
 
                         // Write live debug state to file every 30 frames (~0.5s)
-                        if self.time.frame_count() % 30 == 0 {
+                        if self.time.frame_count().is_multiple_of(30) {
                             self.write_debug_state();
                         }
                     }

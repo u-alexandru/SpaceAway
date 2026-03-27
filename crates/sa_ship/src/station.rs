@@ -70,13 +70,13 @@ pub fn cockpit_layout() -> StationConfig {
                 kind: PlacementKind::Lever,
                 position: Vec3::new(0.6, -0.2, 1.2),
                 label: "Thrust Lever".into(),
-                collider_half_extents: Vec3::new(0.08, 0.2, 0.05),
+                collider_half_extents: Vec3::new(0.15, 0.25, 0.15),
             },
             InteractablePlacement {
                 kind: PlacementKind::ToggleButton,
                 position: Vec3::new(-0.6, -0.2, 1.2),
                 label: "Engine On/Off".into(),
-                collider_half_extents: Vec3::new(0.06, 0.06, 0.04),
+                collider_half_extents: Vec3::new(0.15, 0.15, 0.15),
             },
             InteractablePlacement {
                 kind: PlacementKind::Screen {

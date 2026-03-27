@@ -24,6 +24,19 @@ enum DragState {
     },
 }
 
+/// Debug snapshot of the last raycast result, for external inspection.
+#[derive(Clone, Debug, Default)]
+pub struct DebugRayResult {
+    /// Ray origin used for the last cast.
+    pub ray_origin: [f32; 3],
+    /// Ray direction used for the last cast.
+    pub ray_dir: [f32; 3],
+    /// If the ray hit something: (collider index raw, distance).
+    pub hit: Option<(u32, f32)>,
+    /// The interactable ID resolved from the hit, if any.
+    pub hit_id: Option<InteractableId>,
+}
+
 /// The interaction system manages raycasting and interactable state.
 pub struct InteractionSystem {
     /// All registered interactables, keyed by ID.
@@ -38,6 +51,8 @@ pub struct InteractionSystem {
     max_range: f32,
     /// Mouse Y sensitivity for lever dragging (position change per pixel).
     lever_sensitivity: f32,
+    /// Debug: last raycast result for external inspection.
+    debug_ray: DebugRayResult,
 }
 
 impl InteractionSystem {
@@ -49,6 +64,7 @@ impl InteractionSystem {
             drag: DragState::Idle,
             max_range: 1.5,
             lever_sensitivity: 0.003,
+            debug_ray: DebugRayResult::default(),
         }
     }
 
@@ -81,6 +97,11 @@ impl InteractionSystem {
         matches!(self.drag, DragState::Dragging { .. })
     }
 
+    /// Returns the debug snapshot of the last raycast.
+    pub fn debug_ray(&self) -> &DebugRayResult {
+        &self.debug_ray
+    }
+
     /// Update the interaction system. Call once per frame.
     ///
     /// - `ray_origin`: camera eye position (world space)
@@ -110,16 +131,24 @@ impl InteractionSystem {
         let origin = nalgebra::Point3::new(ray_origin[0], ray_origin[1], ray_origin[2]);
         let direction = nalgebra::Vector3::new(ray_dir[0], ray_dir[1], ray_dir[2]);
 
-        // Only hit sensors (interactable colliders are sensors)
-        let filter = QueryFilter::default().predicate(&|_handle, collider: &Collider| {
-            collider.is_sensor()
-        });
+        // Only hit sensors (interactable colliders are sensors).
+        // exclude_solids() skips non-sensor colliders so we only hit sensor volumes.
+        let filter = QueryFilter::default().exclude_solids();
 
         let hit = physics.cast_ray(origin, direction, self.max_range, true, filter);
 
-        self.hovered = hit.and_then(|(collider_handle, _toi)| {
+        let resolved_id = hit.and_then(|(collider_handle, _toi)| {
             self.collider_to_id.get(&collider_handle).copied()
         });
+        self.hovered = resolved_id;
+
+        // Store debug info for external inspection.
+        self.debug_ray = DebugRayResult {
+            ray_origin,
+            ray_dir,
+            hit: hit.map(|(h, toi)| (h.into_raw_parts().0, toi)),
+            hit_id: resolved_id,
+        };
 
         // --- Handle drag state machine ---
         match &self.drag {
