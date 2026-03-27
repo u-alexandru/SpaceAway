@@ -7,6 +7,7 @@ members = [
     "crates/sa_input",
     "crates/sa_render",
     "crates/sa_physics",
+    "crates/sa_player",
     "crates/spaceaway",
 ]
 
@@ -44,3 +45,4 @@ sa_ecs = { path = "crates/sa_ecs" }
 sa_input = { path = "crates/sa_input" }
 sa_render = { path = "crates/sa_render" }
 sa_physics = { path = "crates/sa_physics" }
+sa_player = { path = "crates/sa_player" }
