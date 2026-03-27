@@ -7,6 +7,8 @@ use sa_physics::PhysicsWorld;
 pub struct Ship {
     /// The rapier3d rigid body handle for the ship.
     pub body_handle: RigidBodyHandle,
+    /// The hull sensor collider (for mass only — must be excluded from interaction raycast).
+    pub hull_collider: ColliderHandle,
     /// Current throttle level (0.0 to 1.0), set by the thrust lever.
     pub throttle: f32,
     /// Whether the engine is on, set by the engine button.
@@ -56,10 +58,10 @@ impl Ship {
             ))
             .build();
         let hull_collider = physics.add_collider(collider, body_handle);
-        let _ = hull_collider;
 
         Self {
             body_handle,
+            hull_collider,
             throttle: 0.0,
             engine_on: false,
             max_thrust: Self::DEFAULT_MAX_THRUST,
