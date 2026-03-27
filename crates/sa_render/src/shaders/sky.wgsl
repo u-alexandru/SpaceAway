@@ -72,7 +72,8 @@ fn galaxy_density(x: f32, y: f32, z: f32) -> f32 {
     let r3d = sqrt(x * x + y * y + z * z);
     let bulge = exp(-r3d / BULGE_SCALE);
 
-    return disc * (arm + bulge + 0.08);
+    // Base density very low — empty space should produce no light
+    return disc * (arm + bulge + 0.01);
 }
 
 fn dust_density(x: f32, y: f32, z: f32) -> f32 {
@@ -139,10 +140,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         total_weight += contribution;
     }
 
-    // Threshold: only rays through dense regions produce visible light
-    let threshold: f32 = 0.15;
-    let excess = max(accumulated - threshold, 0.0);
-    let brightness = min(pow(excess * 5.0, 0.6), 1.0);
+    // Gentle brightness curve: no hard threshold, just a soft pow.
+    // Low density directions fade to near-zero naturally.
+    // The pow(0.5) = sqrt gives a smooth ramp: faint glow at low densities,
+    // bright at high densities, no hard edge.
+    let brightness = min(pow(accumulated * 2.5, 0.5), 0.85);
 
     // Warmth ratio
     var warmth: f32 = 0.0;
