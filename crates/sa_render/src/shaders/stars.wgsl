@@ -27,11 +27,8 @@ fn vs_main(
     vertex: VertexInput,
     @builtin(vertex_index) vid: u32,
 ) -> VertexOutput {
-    // Each star is 6 vertices (2 triangles forming a quad).
-    // The star index is vid / 6, the corner is vid % 6.
     let corner = vid % 6u;
 
-    // Quad corners: 0,1,2 and 3,4,5 (two triangles)
     var offsets: array<vec2<f32>, 6> = array<vec2<f32>, 6>(
         vec2<f32>(-1.0, -1.0),
         vec2<f32>( 1.0, -1.0),
@@ -47,16 +44,24 @@ fn vs_main(
     let world_pos = vec4<f32>(vertex.position * 90000.0, 1.0);
     let clip = uniforms.view_proj * world_pos;
 
-    // Star size in pixels: brighter stars are larger (1.5 to 4px radius)
-    let base_size = mix(1.5, 4.0, vertex.brightness);
-    // Convert pixel size to clip-space offset
-    let pixel_to_clip = vec2<f32>(2.0 / uniforms.screen_height);
+    // Convert to NDC to snap center to pixel grid (reduces flicker)
+    let ndc = clip.xy / clip.w;
+    let pixel = ndc * uniforms.screen_height * 0.5;
+    let snapped_pixel = round(pixel);
+    let snapped_ndc = snapped_pixel / (uniforms.screen_height * 0.5);
+
+    // Star size: bright stars get a slightly larger quad.
+    // Dim stars stay at 1px (crisp point), bright ones up to 2.5px.
+    let size_px = mix(1.0, 2.5, vertex.brightness);
+    let pixel_size = size_px / uniforms.screen_height * 2.0;
 
     var out: VertexOutput;
-    out.clip_position = clip;
-    // Offset in clip space (after perspective divide, so multiply by w)
-    out.clip_position.x += offset.x * base_size * pixel_to_clip.x * clip.w;
-    out.clip_position.y += offset.y * base_size * pixel_to_clip.y * clip.w;
+    out.clip_position = vec4<f32>(
+        (snapped_ndc.x + offset.x * pixel_size) * clip.w,
+        (snapped_ndc.y + offset.y * pixel_size) * clip.w,
+        clip.z,
+        clip.w,
+    );
     out.star_color = vertex.color;
     out.star_brightness = vertex.brightness;
     out.uv = offset;
@@ -65,13 +70,15 @@ fn vs_main(
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // Soft circle falloff — makes stars round with a glow
+    // Hard-edged circle for small stars, slight softness for bright ones.
     let dist = length(in.uv);
     if dist > 1.0 {
         discard;
     }
-    // Smooth falloff: bright center, soft edge
-    let alpha = smoothstep(1.0, 0.3, dist);
-    let glow = alpha * in.star_brightness;
-    return vec4<f32>(in.star_color * glow, glow);
+
+    // Crisp center with minimal falloff — keeps stars sharp
+    let core = 1.0 - smoothstep(0.0, 1.0, dist);
+    let intensity = core * in.star_brightness;
+
+    return vec4<f32>(in.star_color * intensity, intensity);
 }
