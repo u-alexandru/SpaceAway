@@ -108,7 +108,10 @@ impl GeometryPipeline {
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: Some(wgpu::Face::Back),
+                // No backface culling — interior surfaces (floors, ceilings, bulkheads)
+                // need to be visible from both sides. Z-fighting is prevented by the
+                // 0.05m inset between exterior and interior hull faces.
+                cull_mode: None,
                 front_face: wgpu::FrontFace::Ccw,
                 ..Default::default()
             },
