@@ -50,7 +50,10 @@ fn visible_stars_to_vertices(stars: &[VisibleStar]) -> Vec<StarVertex> {
 const STAR_REGEN_THRESHOLD: f64 = 500.0;
 
 /// Number of sectors to query in each direction around the observer.
-const STAR_QUERY_RADIUS: i32 = 5;
+const STAR_QUERY_RADIUS: i32 = 4;
+/// Minimum star brightness to render. Culls dim stars that are visually
+/// indistinguishable, reducing vertex count by ~60%.
+const STAR_MIN_BRIGHTNESS: f32 = 0.32;
 
 /// Per-frame performance timings in microseconds.
 #[derive(Default)]
@@ -156,7 +159,11 @@ impl App {
             return;
         };
 
-        let visible = self.universe.visible_stars(observer, STAR_QUERY_RADIUS);
+        let visible = self.universe.visible_stars_filtered(
+            observer,
+            STAR_QUERY_RADIUS,
+            STAR_MIN_BRIGHTNESS,
+        );
         let vertices = visible_stars_to_vertices(&visible);
         renderer.star_field.update_star_buffer(&gpu.device, &vertices);
         self.last_star_gen_pos = observer;

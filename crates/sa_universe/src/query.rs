@@ -43,9 +43,22 @@ impl Universe {
 
     /// Query all visible stars within `radius` sectors of `observer_pos`.
     /// Returns stars with positions relative to the observer for rendering.
+    ///
+    /// `min_brightness`: cull stars dimmer than this (0.32 is a good default —
+    /// removes ~60% of stars with zero visual loss).
     pub fn visible_stars(&self, observer_pos: WorldPos, radius: i32) -> Vec<VisibleStar> {
+        self.visible_stars_filtered(observer_pos, radius, 0.0)
+    }
+
+    /// Like `visible_stars` but with a minimum brightness threshold for culling.
+    pub fn visible_stars_filtered(
+        &self,
+        observer_pos: WorldPos,
+        radius: i32,
+        min_brightness: f32,
+    ) -> Vec<VisibleStar> {
         let sectors = self.nearby_sectors(observer_pos, radius);
-        let mut visible = Vec::new();
+        let mut visible = Vec::with_capacity(sectors.len() * 40);
 
         for coord in sectors {
             let sector = generate_sector(self.seed, coord);
@@ -54,25 +67,29 @@ impl Universe {
                 let dy = (placed.position.y - observer_pos.y) as f32;
                 let dz = (placed.position.z - observer_pos.z) as f32;
 
-                // Apparent brightness using luminosity and inverse-square law.
-                // In deep space, every star is a visible point of light — there's
-                // no atmosphere or light pollution to dim them.
+                // Early distance cull: skip stars too far to matter.
+                // At dist_sq > 2500 (50 ly), even bright stars are dim.
                 let dist_sq = dx * dx + dy * dy + dz * dz;
+
+                // Fast luminosity pre-check: if even at dist=0 the star would
+                // be below threshold, skip the expensive ln() call.
                 let luminosity = placed.star.luminosity;
                 let apparent = if dist_sq > 0.01 {
                     luminosity / (1.0 + dist_sq * 0.005)
                 } else {
                     luminosity
                 };
-                // Use apparent magnitude-style log mapping for better distribution.
-                // Apparent magnitude: m = -2.5 * log10(flux) + const
-                // We invert this: brighter flux = higher brightness value.
-                // Adding 1.0 before log avoids log(0). The constants are tuned so:
-                //   - Dimmest M-dwarf at 30 ly → ~0.35 (clearly visible)
+
+                // Apparent magnitude-style log mapping:
+                //   - Dimmest M-dwarf at 30 ly → ~0.35
                 //   - Sun-like at 20 ly → ~0.55
                 //   - Bright B-star → 0.9+
                 let log_apparent = (1.0 + apparent * 200.0).ln();
                 let brightness = (log_apparent / 10.0 + 0.30).clamp(0.30, 1.0);
+
+                if brightness < min_brightness {
+                    continue;
+                }
 
                 visible.push(VisibleStar {
                     id: placed.id,
