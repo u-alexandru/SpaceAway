@@ -5,7 +5,9 @@ use sa_input::InputState;
 use sa_math::WorldPos;
 use sa_physics::PhysicsWorld;
 use sa_player::PlayerController;
-use sa_render::{Camera, DrawCommand, GpuContext, MeshData, Renderer, StarVertex, Vertex};
+use sa_render::{
+    Camera, DrawCommand, GpuContext, MeshData, NebulaInstance, Renderer, StarVertex, Vertex,
+};
 use sa_universe::{MasterSeed, Universe, VisibleStar};
 use std::sync::Arc;
 use std::time::Instant;
@@ -41,6 +43,68 @@ fn visible_stars_to_vertices(stars: &[VisibleStar]) -> Vec<StarVertex> {
         .collect()
 }
 
+/// Convert universe nebulae to GPU-ready `NebulaInstance` data.
+///
+/// Positions are relative to the observer. Nebulae beyond 20 000 ly are culled.
+fn nebulae_to_instances(
+    nebulae: &[sa_universe::Nebula],
+    observer: WorldPos,
+) -> Vec<NebulaInstance> {
+    nebulae
+        .iter()
+        .filter_map(|n| {
+            let dx = (n.x - observer.x) as f32;
+            let dy = (n.y - observer.y) as f32;
+            let dz = (n.z - observer.z) as f32;
+            let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+            if dist > 20_000.0 {
+                return None;
+            }
+            Some(NebulaInstance {
+                center: [dx, dy, dz],
+                radius: n.radius as f32,
+                color: n.color,
+                opacity: n.opacity,
+                seed: (n.seed % 10_000) as f32,
+                _pad0: 0.0,
+                _pad1: 0.0,
+                _pad2: 0.0,
+            })
+        })
+        .collect()
+}
+
+/// Convert distant galaxies to GPU-ready `NebulaInstance` data.
+///
+/// Each galaxy is placed at a large distance along its direction vector,
+/// analogous to how stars are projected onto the sky dome.
+fn distant_galaxies_to_instances(
+    galaxies: &[sa_universe::DistantGalaxy],
+) -> Vec<NebulaInstance> {
+    let dist = 80_000.0_f32;
+    galaxies
+        .iter()
+        .map(|g| NebulaInstance {
+            center: [
+                g.direction[0] * dist,
+                g.direction[1] * dist,
+                g.direction[2] * dist,
+            ],
+            radius: g.angular_size * dist,
+            color: [
+                g.color[0] * g.brightness,
+                g.color[1] * g.brightness,
+                g.color[2] * g.brightness,
+            ],
+            opacity: g.brightness,
+            seed: (g.rotation * 1000.0) % 10_000.0,
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
+        })
+        .collect()
+}
+
 /// Distance threshold (in light-years) before we regenerate the star field.
 /// Roughly one sector width.
 // Player is in meters, universe is in light-years. This threshold is in
@@ -48,6 +112,10 @@ fn visible_stars_to_vertices(stars: &[VisibleStar]) -> Vec<StarVertex> {
 // universe treats coordinates as light-years, walking 100m = 100 "ly" in
 // universe space. Set high enough that walking doesn't trigger regen.
 const STAR_REGEN_THRESHOLD: f64 = 500.0;
+
+/// Distance threshold (in light-years) before we regenerate the Milky Way
+/// cubemap. Much higher than star regen since the cubemap changes slowly.
+const CUBEMAP_REGEN_THRESHOLD: f64 = 5000.0;
 
 /// Number of sectors to query in each direction around the observer.
 const STAR_QUERY_RADIUS: i32 = 4;
@@ -86,6 +154,10 @@ struct App {
     universe: Universe,
     last_star_gen_pos: WorldPos,
     stars_initialised: bool,
+    last_cubemap_gen_pos: WorldPos,
+    cubemap_initialised: bool,
+    nebulae: Vec<sa_universe::Nebula>,
+    distant_galaxies: Vec<sa_universe::DistantGalaxy>,
     perf: PerfTimings,
     perf_update_timer: f64,
 }
@@ -131,6 +203,10 @@ impl App {
             universe,
             last_star_gen_pos: WorldPos::ORIGIN,
             stars_initialised: false,
+            last_cubemap_gen_pos: WorldPos::ORIGIN,
+            cubemap_initialised: false,
+            nebulae: Vec::new(),
+            distant_galaxies: Vec::new(),
             perf: PerfTimings::default(),
             perf_update_timer: 0.0,
         }
@@ -141,6 +217,43 @@ impl App {
         let gpu = self.gpu.as_ref().unwrap();
         let handle = renderer.mesh_store.upload(&gpu.device, &make_cube());
         self.cube_mesh = Some(handle);
+
+        // Generate Milky Way cubemap from the galaxy density model.
+        let cubemap_start = Instant::now();
+        let observer = [0.0_f64, 0.0, 0.0];
+        let cubemap_data = sa_render::generate_cubemap_data(
+            &sa_universe::galaxy_density,
+            observer,
+        );
+        renderer.update_milky_way_cubemap(gpu, &cubemap_data);
+        self.last_cubemap_gen_pos = WorldPos::ORIGIN;
+        self.cubemap_initialised = true;
+        log::info!(
+            "Generated Milky Way cubemap in {:.1}ms",
+            cubemap_start.elapsed().as_secs_f64() * 1000.0,
+        );
+
+        // Generate nebulae and distant galaxies from the master seed.
+        let seed = MasterSeed(42);
+        self.nebulae = sa_universe::generate_nebulae(seed);
+        self.distant_galaxies = sa_universe::generate_distant_galaxies(seed);
+
+        // Upload nebula instances.
+        let nebula_instances = nebulae_to_instances(&self.nebulae, WorldPos::ORIGIN);
+        renderer
+            .nebula_renderer
+            .update_instances(&gpu.device, &nebula_instances);
+        log::info!("Uploaded {} nebula instances", nebula_instances.len());
+
+        // Upload distant galaxy instances (direction-based, observer-independent).
+        let galaxy_instances = distant_galaxies_to_instances(&self.distant_galaxies);
+        renderer
+            .galaxy_renderer
+            .update_instances(&gpu.device, &galaxy_instances);
+        log::info!(
+            "Uploaded {} distant galaxy instances",
+            galaxy_instances.len(),
+        );
     }
 
     /// Rebuild the GPU star buffer from the procedural universe if the observer
@@ -166,12 +279,52 @@ impl App {
         );
         let vertices = visible_stars_to_vertices(&visible);
         renderer.star_field.update_star_buffer(&gpu.device, &vertices);
+
+        // Also refresh nebula instances (camera-relative positions change).
+        let nebula_instances = nebulae_to_instances(&self.nebulae, observer);
+        renderer
+            .nebula_renderer
+            .update_instances(&gpu.device, &nebula_instances);
+
         self.last_star_gen_pos = observer;
         self.stars_initialised = true;
 
         log::debug!(
             "Regenerated star field: {} stars at ({:.1}, {:.1}, {:.1})",
             visible.len(),
+            observer.x,
+            observer.y,
+            observer.z,
+        );
+    }
+
+    /// Regenerate the Milky Way cubemap if the observer has moved far enough.
+    /// This is expensive (~50-100ms) so the threshold is high (5000 ly).
+    fn maybe_regenerate_cubemap(&mut self) {
+        if !self.cubemap_initialised {
+            return;
+        }
+        let observer = self.camera.position;
+        let dist = observer.distance_to(self.last_cubemap_gen_pos);
+        if dist < CUBEMAP_REGEN_THRESHOLD {
+            return;
+        }
+
+        let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) else {
+            return;
+        };
+
+        let start = Instant::now();
+        let cubemap_data = sa_render::generate_cubemap_data(
+            &sa_universe::galaxy_density,
+            [observer.x, observer.y, observer.z],
+        );
+        renderer.update_milky_way_cubemap(gpu, &cubemap_data);
+        self.last_cubemap_gen_pos = observer;
+
+        log::debug!(
+            "Regenerated Milky Way cubemap in {:.1}ms at ({:.0}, {:.0}, {:.0})",
+            start.elapsed().as_secs_f64() * 1000.0,
             observer.x,
             observer.y,
             observer.z,
@@ -271,9 +424,10 @@ impl ApplicationHandler for App {
                     self.camera.pitch = player.pitch;
                 }
 
-                // --- Star regen ---
+                // --- Star regen + cubemap regen ---
                 let t2 = Instant::now();
                 self.maybe_regenerate_stars();
+                self.maybe_regenerate_cubemap();
                 self.perf.stars_us = t2.elapsed().as_micros() as u64;
 
                 // --- Render ---
