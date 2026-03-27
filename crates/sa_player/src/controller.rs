@@ -28,6 +28,7 @@ impl PlayerController {
             .lock_rotations()
             .linear_damping(0.0)
             .ccd_enabled(true)
+            .can_sleep(false) // Player must never sleep — always responsive to input
             .build();
         let body_handle = physics.add_rigid_body(body);
 

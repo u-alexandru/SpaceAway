@@ -494,7 +494,20 @@ impl App {
         if let Some(interaction) = &self.interaction {
             lines.push(format!("  \"interaction\": {{"));
             lines.push(format!("    \"hovered\": {:?},", interaction.hovered()));
-            lines.push(format!("    \"dragging\": {}", interaction.is_dragging()));
+            lines.push(format!("    \"dragging\": {},", interaction.is_dragging()));
+            // Show each interactable's collider world position
+            let mut interactable_lines = Vec::new();
+            for i in 0..10 { // max 10
+                if let Some(inter) = interaction.get(i) {
+                    if let Some(col) = self.physics.collider_set.get(inter.collider_handle) {
+                        let p = col.position().translation;
+                        interactable_lines.push(format!(
+                            "      {{\"id\": {}, \"label\": \"{}\", \"world_pos\": [{:.2}, {:.2}, {:.2}]}}",
+                            i, inter.label, p.x, p.y, p.z));
+                    }
+                } else { break; }
+            }
+            lines.push(format!("    \"interactables\": [{}]", interactable_lines.join(",")));
             lines.push(format!("  }},"));
         }
 
