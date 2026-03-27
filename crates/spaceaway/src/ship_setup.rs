@@ -35,6 +35,17 @@ pub fn create_ship_and_interactables(
     // Create ship body at world origin
     let ship = Ship::new(physics, 0.0, 0.0, 0.0);
 
+    // Add a solid floor collider inside the ship for the player to walk on.
+    // The ship spans z=0 (cockpit front) to z=29 (engine back).
+    // Floor is at y=-1.0 from ship center (matching the mesh floor).
+    // Collider half-extents: x=2.5 (covers 5m wide rooms), y=0.1, z=15 (covers 30m length)
+    let floor_collider = ColliderBuilder::cuboid(2.5, 0.1, 15.0)
+        .translation(nalgebra::Vector3::new(0.0, -1.1, 14.5)) // centered on ship z-span
+        .friction(1.0)
+        .restitution(0.0)
+        .build();
+    physics.add_collider(floor_collider, ship.body_handle);
+
     let mut interaction = InteractionSystem::new();
     let layout = cockpit_layout();
 
