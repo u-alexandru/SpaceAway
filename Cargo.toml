@@ -1,0 +1,34 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/sa_core",
+    "crates/sa_math",
+    "crates/sa_ecs",
+    "crates/spaceaway",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+# Core
+glam = { version = "0.29", features = ["serde"] }
+hecs = "0.10"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+ron = "0.8"
+
+# Windowing & Graphics
+winit = "0.30"
+wgpu = "24"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# Internal crates
+sa_core = { path = "crates/sa_core" }
+sa_math = { path = "crates/sa_math" }
+sa_ecs = { path = "crates/sa_ecs" }

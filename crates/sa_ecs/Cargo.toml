@@ -1,0 +1,9 @@
+[package]
+name = "sa_ecs"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+hecs.workspace = true
+sa_core.workspace = true
+log.workspace = true

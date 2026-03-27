@@ -1,0 +1,8 @@
+[package]
+name = "sa_core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+log.workspace = true

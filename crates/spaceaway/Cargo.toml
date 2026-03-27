@@ -1,0 +1,13 @@
+[package]
+name = "spaceaway"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sa_core.workspace = true
+sa_math.workspace = true
+sa_ecs.workspace = true
+winit.workspace = true
+wgpu.workspace = true
+log.workspace = true
+env_logger.workspace = true
