@@ -39,9 +39,9 @@ impl GpuContext {
         let mut config = surface
             .get_default_config(&adapter, size.width.max(1), size.height.max(1))
             .expect("Surface not supported by adapter");
-        // Mailbox: renders uncapped but presents on VSync — no tearing.
-        // Falls back to Fifo (standard VSync) if mailbox isn't supported.
-        config.present_mode = wgpu::PresentMode::Mailbox;
+        // Fifo = VSync (no tearing, capped at display refresh rate).
+        // Immediate = uncapped but tears. Metal doesn't support Mailbox.
+        config.present_mode = wgpu::PresentMode::Fifo;
         surface.configure(&device, &config);
 
         Self { surface, device, queue, config }
