@@ -19,6 +19,7 @@ enum DragState {
     /// at the start of the drag.
     Dragging {
         target: InteractableId,
+        #[allow(dead_code)]
         start_position: f32,
     },
 }
@@ -92,6 +93,7 @@ impl InteractionSystem {
     ///
     /// Returns `Some(InteractableId)` if a helm seat was clicked (caller
     /// should enter seated mode).
+    #[allow(clippy::too_many_arguments)]
     pub fn update(
         &mut self,
         ray_origin: [f32; 3],
@@ -122,28 +124,28 @@ impl InteractionSystem {
         // --- Handle drag state machine ---
         match &self.drag {
             DragState::Idle => {
-                if left_just_pressed {
-                    if let Some(id) = self.hovered {
-                        let interactable = &self.interactables[id];
-                        match &interactable.kind {
-                            crate::interactable::InteractableKind::Lever { position } => {
-                                self.drag = DragState::Dragging {
-                                    target: id,
-                                    start_position: *position,
-                                };
-                            }
-                            crate::interactable::InteractableKind::Button { .. } => {
-                                self.interactables[id].press_button();
-                            }
-                            crate::interactable::InteractableKind::Switch { .. } => {
-                                self.interactables[id].cycle_switch();
-                            }
-                            crate::interactable::InteractableKind::HelmSeat => {
-                                helm_seat_clicked = Some(id);
-                            }
-                            crate::interactable::InteractableKind::Screen { .. } => {
-                                // Screens are not interactive
-                            }
+                if left_just_pressed
+                    && let Some(id) = self.hovered
+                {
+                    let interactable = &self.interactables[id];
+                    match &interactable.kind {
+                        crate::interactable::InteractableKind::Lever { position } => {
+                            self.drag = DragState::Dragging {
+                                target: id,
+                                start_position: *position,
+                            };
+                        }
+                        crate::interactable::InteractableKind::Button { .. } => {
+                            self.interactables[id].press_button();
+                        }
+                        crate::interactable::InteractableKind::Switch { .. } => {
+                            self.interactables[id].cycle_switch();
+                        }
+                        crate::interactable::InteractableKind::HelmSeat => {
+                            helm_seat_clicked = Some(id);
+                        }
+                        crate::interactable::InteractableKind::Screen { .. } => {
+                            // Screens are not interactive
                         }
                     }
                 }

@@ -138,10 +138,10 @@ impl Interactable {
 
     /// Release a button. For Momentary: sets pressed = false. Toggle: no-op.
     pub fn release_button(&mut self) {
-        if let InteractableKind::Button { pressed, mode } = &mut self.kind {
-            if *mode == ButtonMode::Momentary {
-                *pressed = false;
-            }
+        if let InteractableKind::Button { pressed, mode } = &mut self.kind
+            && *mode == ButtonMode::Momentary
+        {
+            *pressed = false;
         }
     }
 
