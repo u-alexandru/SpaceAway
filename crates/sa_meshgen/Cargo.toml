@@ -1,0 +1,8 @@
+[package]
+name = "sa_meshgen"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+glam.workspace = true
+csgrs.workspace = true

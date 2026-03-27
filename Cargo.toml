@@ -9,6 +9,7 @@ members = [
     "crates/sa_physics",
     "crates/sa_player",
     "crates/sa_universe",
+    "crates/sa_meshgen",
     "crates/spaceaway",
 ]
 
@@ -49,3 +50,5 @@ sa_physics = { path = "crates/sa_physics" }
 sa_player = { path = "crates/sa_player" }
 sa_universe = { path = "crates/sa_universe" }
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
+csgrs = { version = "0.20", default-features = false, features = ["f32", "earcut"] }
+sa_meshgen = { path = "crates/sa_meshgen" }
