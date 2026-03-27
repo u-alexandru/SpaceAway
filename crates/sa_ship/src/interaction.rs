@@ -131,13 +131,16 @@ impl InteractionSystem {
         let origin = nalgebra::Point3::new(ray_origin[0], ray_origin[1], ray_origin[2]);
         let direction = nalgebra::Vector3::new(ray_dir[0], ray_dir[1], ray_dir[2]);
 
-        // Filter to sensors only (exclude solid interior/wall colliders).
-        // Among sensors, only interactable colliders are registered in
-        // collider_to_id, so any hull sensor hit resolves harmlessly to None.
-        // The hull sensor (GROUP_1, filter=NONE) and interactable sensors
-        // (GROUP_4, filter=NONE) are both sensors, but only interactables
-        // have entries in the collider_to_id map.
-        let filter = QueryFilter::default().exclude_solids();
+        // Filter to ONLY hit INTERACTABLE group (GROUP_4) sensors.
+        // We use a group filter where the ray's membership includes GROUP_4,
+        // and we exclude solids. This skips the hull sensor (GROUP_1) entirely
+        // because the ray's filter mask doesn't include GROUP_1.
+        let filter = QueryFilter::default()
+            .exclude_solids()
+            .groups(InteractionGroups::new(
+                Group::GROUP_4, // ray is "in" GROUP_4
+                Group::GROUP_4, // ray only hits GROUP_4 colliders
+            ));
 
         let hit = physics.cast_ray(origin, direction, self.max_range, true, filter);
 

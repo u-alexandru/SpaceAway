@@ -64,8 +64,8 @@ pub fn create_ship_and_interactables(
             ))
             .sensor(true)
             .collision_groups(InteractionGroups::new(
-                INTERACTABLE,  // membership: this is an interactable sensor
-                Group::NONE,   // filter: no contact forces (sensor only, detected by raycast)
+                INTERACTABLE,    // membership: this is an interactable sensor
+                INTERACTABLE,    // filter: accept queries from INTERACTABLE group (the interaction ray)
             ))
             .build();
         let collider_handle = physics.add_collider(collider, ship.body_handle);
