@@ -49,6 +49,46 @@ pub fn create_ship_and_interactables(
         .build();
     physics.add_collider(floor_collider, floor_body_handle);
 
+    // Ceiling collider
+    let ceiling = ColliderBuilder::cuboid(2.5, 0.1, 15.0).build();
+    let ceiling_body = RigidBodyBuilder::fixed()
+        .translation(nalgebra::Vector3::new(0.0, 1.3, 14.5))
+        .build();
+    let ceiling_handle = physics.add_rigid_body(ceiling_body);
+    physics.add_collider(ceiling, ceiling_handle);
+
+    // Left wall collider (runs full length of ship)
+    let left_wall = ColliderBuilder::cuboid(0.1, 1.5, 15.0).build();
+    let left_body = RigidBodyBuilder::fixed()
+        .translation(nalgebra::Vector3::new(-2.0, 0.0, 14.5))
+        .build();
+    let left_handle = physics.add_rigid_body(left_body);
+    physics.add_collider(left_wall, left_handle);
+
+    // Right wall collider
+    let right_wall = ColliderBuilder::cuboid(0.1, 1.5, 15.0).build();
+    let right_body = RigidBodyBuilder::fixed()
+        .translation(nalgebra::Vector3::new(2.0, 0.0, 14.5))
+        .build();
+    let right_handle = physics.add_rigid_body(right_body);
+    physics.add_collider(right_wall, right_handle);
+
+    // Front wall (cockpit nose)
+    let front_wall = ColliderBuilder::cuboid(2.5, 1.5, 0.1).build();
+    let front_body = RigidBodyBuilder::fixed()
+        .translation(nalgebra::Vector3::new(0.0, 0.0, 0.0))
+        .build();
+    let front_handle = physics.add_rigid_body(front_body);
+    physics.add_collider(front_wall, front_handle);
+
+    // Back wall (engine section end)
+    let back_wall = ColliderBuilder::cuboid(2.5, 1.5, 0.1).build();
+    let back_body = RigidBodyBuilder::fixed()
+        .translation(nalgebra::Vector3::new(0.0, 0.0, 29.0))
+        .build();
+    let back_handle = physics.add_rigid_body(back_body);
+    physics.add_collider(back_wall, back_handle);
+
     let mut interaction = InteractionSystem::new();
     let layout = cockpit_layout();
 
