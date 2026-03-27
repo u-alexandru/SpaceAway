@@ -1,5 +1,6 @@
 pub mod mesh;
 pub mod primitives;
+pub mod primitives_ext;
 pub mod csg;
 pub mod assembly;
 pub mod ship_parts;

@@ -3,7 +3,7 @@ use crate::mesh::{Mesh, MeshVertex};
 /// Helper: push a quad (two triangles) with flat-shading normal onto a mesh.
 /// Vertices are specified counter-clockwise when viewed from the front (normal side).
 /// Each face gets its own 4 vertices for flat shading (no shared vertices between faces).
-fn push_quad(
+pub(crate) fn push_quad(
     vertices: &mut Vec<MeshVertex>,
     indices: &mut Vec<u32>,
     corners: [[f32; 3]; 4],
@@ -23,8 +23,7 @@ fn push_quad(
 }
 
 /// Compute flat-shading normal from three points (counter-clockwise winding).
-#[allow(dead_code)]
-fn face_normal(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f32; 3] {
+pub(crate) fn face_normal(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f32; 3] {
     use glam::Vec3;
     let va = Vec3::from(a);
     let vb = Vec3::from(b);
