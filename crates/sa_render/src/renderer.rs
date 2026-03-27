@@ -50,6 +50,9 @@ impl Renderer {
         let aspect = gpu.aspect_ratio();
         let view_proj = camera.view_projection_matrix(aspect);
 
+        // Camera world position for origin rebasing
+        let cam_pos = camera.position;
+
         let uniforms = Uniforms {
             view_proj: view_proj.to_cols_array_2d(),
             light_dir: light_dir.normalize().to_array(),
@@ -131,8 +134,21 @@ impl Renderer {
 
                 for cmd in draw_commands {
                     if let Some(mesh) = self.mesh_store.get(cmd.mesh) {
+                        // Origin rebasing: subtract camera world position from
+                        // model translation so geometry is camera-relative (f32).
+                        let col3 = cmd.model_matrix.col(3);
+                        let rebased_translation = Vec3::new(
+                            (col3.x as f64 - cam_pos.x) as f32,
+                            (col3.y as f64 - cam_pos.y) as f32,
+                            (col3.z as f64 - cam_pos.z) as f32,
+                        );
+                        let mut rebased_model = cmd.model_matrix;
+                        rebased_model.col_mut(3).x = rebased_translation.x;
+                        rebased_model.col_mut(3).y = rebased_translation.y;
+                        rebased_model.col_mut(3).z = rebased_translation.z;
+
                         let instance = InstanceRaw {
-                            model: cmd.model_matrix.to_cols_array_2d(),
+                            model: rebased_model.to_cols_array_2d(),
                         };
                         let instance_buffer =
                             gpu.device

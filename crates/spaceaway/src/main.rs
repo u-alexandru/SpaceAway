@@ -85,13 +85,15 @@ impl App {
             player.update(&mut self.physics, &self.input, dt);
         }
 
-        // Step physics
-        self.physics.step(dt);
+        // Step physics (clamp dt to prevent explosion on first frame or lag spikes)
+        let physics_dt = dt.min(1.0 / 30.0);
+        if physics_dt > 0.0 {
+            self.physics.step(physics_dt);
+        }
 
         // Sync camera from player
         if let Some(player) = &self.player {
-            let pos = player.position(&self.physics);
-            self.camera.position = pos;
+            self.camera.position = player.position(&self.physics);
             self.camera.yaw = player.yaw;
             self.camera.pitch = player.pitch;
         }
