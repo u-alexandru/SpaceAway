@@ -1570,12 +1570,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "sa_input"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "winit",
+]
+
+[[package]]
 name = "sa_math"
 version = "0.1.0"
 dependencies = [
  "approx",
  "glam",
  "serde",
+]
+
+[[package]]
+name = "sa_render"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "glam",
+ "log",
+ "pollster",
+ "sa_core",
+ "sa_math",
+ "wgpu",
+ "winit",
 ]
 
 [[package]]
@@ -1729,12 +1751,16 @@ dependencies = [
 name = "spaceaway"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "env_logger",
+ "glam",
  "log",
  "pollster",
  "sa_core",
  "sa_ecs",
+ "sa_input",
  "sa_math",
+ "sa_render",
  "wgpu",
  "winit",
 ]
