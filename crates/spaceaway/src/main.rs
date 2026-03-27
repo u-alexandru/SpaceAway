@@ -336,13 +336,11 @@ impl App {
         );
     }
 
-    /// Teleport to a random position in the galaxy. Forces regen of stars + cubemap.
-    fn teleport_random(&mut self) {
+    /// Teleport to a position in the galaxy. `viewpoint` selects the type:
+    /// 0=mid-disc, 1=above-galaxy, 2=galaxy-edge, 3=near-center, 4=near-nebula
+    fn teleport_to(&mut self, viewpoint: u64) {
         self.teleport_counter += 1;
         let mut rng = sa_universe::Rng64::new(self.teleport_counter.wrapping_mul(0xDEAD_BEEF));
-
-        // Pick a viewpoint type for variety
-        let viewpoint = self.teleport_counter % 5;
         let (x, y, z, label) = match viewpoint {
             0 => {
                 // Inside the disc, mid-galaxy (like our Sun)
@@ -480,9 +478,16 @@ impl ApplicationHandler for App {
                         self.cursor_grabbed = false;
                     }
 
-                    // Press 2 to teleport to a random position in the galaxy
-                    if code == KeyCode::Digit2 && event.state.is_pressed() {
-                        self.teleport_random();
+                    // Teleport keys: each forces a specific viewpoint type
+                    if event.state.is_pressed() {
+                        match code {
+                            KeyCode::Digit1 => self.teleport_to(0), // mid-disc
+                            KeyCode::Digit2 => self.teleport_to(1), // above galaxy
+                            KeyCode::Digit3 => self.teleport_to(2), // galaxy edge
+                            KeyCode::Digit4 => self.teleport_to(3), // near center
+                            KeyCode::Digit5 => self.teleport_to(4), // near nebula
+                            _ => {}
+                        }
                     }
                 }
             }
