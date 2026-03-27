@@ -718,48 +718,54 @@ fn meshgen_to_render(mesh: &sa_meshgen::Mesh) -> MeshData {
 
 /// All ship parts for visual cycling.
 fn all_ship_parts() -> Vec<(&'static str, sa_meshgen::assembly::Part)> {
+    use sa_meshgen::colors;
     vec![
-        ("corridor", sa_meshgen::ship_parts::hull_corridor()),
-        ("room", sa_meshgen::ship_parts::hull_room()),
         ("cockpit", sa_meshgen::ship_parts::hull_cockpit()),
-        ("engine", sa_meshgen::ship_parts::hull_engine()),
+        ("corridor", sa_meshgen::ship_parts::hull_corridor(3.0)),
+        ("transition_4_5", sa_meshgen::ship_parts::hull_transition(4.0, 5.0, 1.0)),
+        ("nav_room", sa_meshgen::ship_parts::hull_room("nav", colors::ACCENT_NAVIGATION, &["port"])),
+        ("eng_room", sa_meshgen::ship_parts::hull_room("eng", colors::ACCENT_ENGINEERING, &["starboard"])),
+        ("engine_section", sa_meshgen::ship_parts::hull_engine_section()),
         ("airlock", sa_meshgen::ship_parts::hull_airlock()),
-        ("console", sa_meshgen::ship_parts::console()),
-        ("door_frame", sa_meshgen::ship_parts::door_frame()),
     ]
 }
 
-/// Assemble the full ship: cockpit -> corridor -> room -> corridor -> room -> corridor -> engine
-///                                                                         \-> airlock
+/// Assemble the full ship with hex-hull parts:
+/// cockpit -> corridor -> transition -> nav_room -> transition -> corridor
+///   -> transition -> eng_room -> transition -> engine_section
+///                        \-> airlock (starboard)
 fn assemble_ship() -> sa_meshgen::Mesh {
     use sa_meshgen::assembly::attach;
+    use sa_meshgen::colors;
     use sa_meshgen::ship_parts::*;
 
     let cockpit = hull_cockpit();
-    let corr1 = hull_corridor();
-    let nav_room = hull_room();
-    let corr2 = hull_corridor();
-    let eng_room = hull_room();
-    let corr3 = hull_corridor();
-    let engine = hull_engine();
+    let corr1 = hull_corridor(3.0);
+    let trans1 = hull_transition(4.0, 5.0, 1.0);
+    let nav_room = hull_room("nav", colors::ACCENT_NAVIGATION, &["port"]);
+    let trans2 = hull_transition(5.0, 4.0, 1.0);
+    let corr2 = hull_corridor(3.0);
+    let trans3 = hull_transition(4.0, 5.0, 1.0);
+    let eng_room = hull_room("eng", colors::ACCENT_ENGINEERING, &["starboard"]);
+    let trans4 = hull_transition(5.0, 4.0, 1.0);
+    let engine = hull_engine_section();
     let airlock = hull_airlock();
 
-    // cockpit.aft -> corridor1.fore
+    // cockpit(z=0..4) -> corridor1(3m) -> trans1(1m) -> nav_room(7m) -> trans2(1m)
+    //   -> corridor2(3m) -> trans3(1m) -> eng_room(7m) -> trans4(1m) -> engine(5m)
     let ship = attach(&cockpit, "aft", &corr1, "fore");
-    // -> nav_room.fore
+    let ship = attach(&ship, "aft", &trans1, "fore");
     let ship = attach(&ship, "aft", &nav_room, "fore");
-    // -> corridor2.fore
+    let ship = attach(&ship, "aft", &trans2, "fore");
     let ship = attach(&ship, "aft", &corr2, "fore");
-    // -> eng_room.fore
+    let ship = attach(&ship, "aft", &trans3, "fore");
     let ship = attach(&ship, "aft", &eng_room, "fore");
-    // -> corridor3.fore
-    let ship = attach(&ship, "aft", &corr3, "fore");
-    // -> engine.fore
+    let ship = attach(&ship, "aft", &trans4, "fore");
     let ship = attach(&ship, "aft", &engine, "fore");
 
-    // Attach airlock to eng_room's port connection (if still available)
-    let ship = if ship.try_connection("port").is_some() {
-        attach(&ship, "port", &airlock, "inner")
+    // Attach airlock to eng_room's starboard connection (if still available)
+    let ship = if ship.try_connection("starboard").is_some() {
+        attach(&ship, "starboard", &airlock, "inner")
     } else {
         ship
     };
