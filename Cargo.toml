@@ -27,6 +27,7 @@ wgpu = "24"
 # Logging
 log = "0.4"
 env_logger = "0.11"
+pollster = "0.4"
 
 # Internal crates
 sa_core = { path = "crates/sa_core" }
