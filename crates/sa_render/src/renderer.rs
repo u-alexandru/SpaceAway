@@ -1,6 +1,7 @@
 use crate::camera::Camera;
 use crate::gpu::GpuContext;
 use crate::mesh::{MeshMarker, MeshStore};
+use crate::nebula::{NebulaRenderer, NebulaUniforms};
 use crate::pipeline::{GeometryPipeline, InstanceRaw, Uniforms};
 use crate::sky::{MilkyWayCubemap, SkyRenderer, SkyUniforms};
 use crate::star_field::{StarField, StarUniforms};
@@ -18,6 +19,7 @@ pub struct Renderer {
     pub sky_renderer: SkyRenderer,
     pub milky_way_cubemap: MilkyWayCubemap,
     pub star_field: StarField,
+    pub nebula_renderer: NebulaRenderer,
     pub mesh_store: MeshStore,
 }
 
@@ -33,11 +35,13 @@ impl Renderer {
         let sky_renderer = SkyRenderer::new(&gpu.device, gpu.config.format, &milky_way_cubemap);
         let stars = crate::star_field::generate_stars(4000, 42);
         let star_field = StarField::new(&gpu.device, gpu.config.format, &stars);
+        let nebula_renderer = NebulaRenderer::new(&gpu.device, gpu.config.format);
         Self {
             geometry_pipeline,
             sky_renderer,
             milky_way_cubemap,
             star_field,
+            nebula_renderer,
             mesh_store: MeshStore::new(),
         }
     }
@@ -123,6 +127,23 @@ impl Renderer {
             &self.star_field.uniform_buffer,
             0,
             bytemuck::bytes_of(&star_uniforms),
+        );
+
+        // Nebula uniforms: view_proj + camera right/up for billboarding
+        let view_mat = camera.view_matrix();
+        let camera_right = Vec3::new(view_mat.col(0).x, view_mat.col(1).x, view_mat.col(2).x);
+        let camera_up = Vec3::new(view_mat.col(0).y, view_mat.col(1).y, view_mat.col(2).y);
+        let nebula_uniforms = NebulaUniforms {
+            view_proj: view_proj.to_cols_array_2d(),
+            camera_right: camera_right.to_array(),
+            _pad0: 0.0,
+            camera_up: camera_up.to_array(),
+            _pad1: 0.0,
+        };
+        gpu.queue.write_buffer(
+            &self.nebula_renderer.uniform_buffer,
+            0,
+            bytemuck::bytes_of(&nebula_uniforms),
         );
 
         let frame = match gpu.surface.get_current_texture() {
@@ -225,6 +246,10 @@ impl Renderer {
             pass.set_vertex_buffer(0, self.star_field.vertex_buffer.slice(..));
             // 6 vertices per star (2 triangles = billboard quad), instanced per star
             pass.draw(0..6, 0..self.star_field.star_count);
+
+            // Draw nebulae (after stars, alpha blended, no depth write)
+            self.nebula_renderer.render(&mut pass);
+
         }
 
         gpu.queue.submit(std::iter::once(encoder.finish()));
