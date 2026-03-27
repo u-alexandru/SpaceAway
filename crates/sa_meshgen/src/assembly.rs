@@ -16,6 +16,10 @@ pub struct ConnectPoint {
     pub position: Vec3,
     /// Outward-facing direction (which way this opening faces)
     pub normal: Vec3,
+    /// Hex ring width at this connection face
+    pub width: f32,
+    /// Hex ring height at this connection face (usually 3.0)
+    pub height: f32,
 }
 
 /// A mesh with named connection points.
@@ -67,10 +71,9 @@ fn rotation_between(from: Vec3, to: Vec3) -> Quat {
 
 /// Attach `attach_part` to `base_part` by aligning connection points.
 ///
-/// The attach part is:
-/// 1. Rotated so its connection normal faces opposite to the base connection normal
-///    (the two parts face each other at the join).
-/// 2. Translated so the connection points coincide.
+/// For fore-to-aft connections (the common case where normals are already
+/// anti-parallel along Z): translation only, no rotation needed.
+/// For other orientations: rotation + translation.
 ///
 /// Returns a new Part with the merged mesh and all remaining connection points
 /// (both base and transformed attach, minus the two used for joining).
@@ -83,18 +86,21 @@ pub fn attach(
     let base_conn = base.connection(base_conn_id);
     let attach_conn = attach_part.connection(attach_conn_id);
 
-    // Step 1: Rotate so attach_conn.normal faces opposite to base_conn.normal.
-    // We want: rotated(attach_conn.normal) == -base_conn.normal
+    // Check if this is a simple fore/aft case (normals already anti-parallel)
     let target_dir = -base_conn.normal;
-    let rot = rotation_between(attach_conn.normal, target_dir);
+    let dot = attach_conn.normal.dot(target_dir);
 
-    // Step 2: After rotation, compute where the attach connection point ended up,
-    // then translate so it meets the base connection point.
-    let rotated_attach_pos = rot * attach_conn.position;
-    let translation = base_conn.position - rotated_attach_pos;
-
-    // Build the full transform matrix: translate * rotate
-    let transform = Mat4::from_translation(translation) * Mat4::from_quat(rot);
+    let (rot, transform) = if dot > 0.9999 {
+        // Already aligned -- translation only (the common fore/aft case)
+        let translation = base_conn.position - attach_conn.position;
+        (Quat::IDENTITY, Mat4::from_translation(translation))
+    } else {
+        // Need rotation
+        let rot = rotation_between(attach_conn.normal, target_dir);
+        let rotated_attach_pos = rot * attach_conn.position;
+        let translation = base_conn.position - rotated_attach_pos;
+        (rot, Mat4::from_translation(translation) * Mat4::from_quat(rot))
+    };
 
     // Transform the attach mesh
     let transformed_mesh = attach_part.mesh.transform(transform);
@@ -120,6 +126,8 @@ pub fn attach(
             id: conn.id,
             position: new_pos,
             normal: new_normal,
+            width: conn.width,
+            height: conn.height,
         });
     }
 
@@ -144,11 +152,15 @@ mod tests {
                     id: "fore",
                     position: Vec3::new(0.0, 0.0, 1.0),
                     normal: Vec3::Z,
+                    width: 3.0,
+                    height: 2.0,
                 },
                 ConnectPoint {
                     id: "aft",
                     position: Vec3::new(0.0, 0.0, -1.0),
                     normal: Vec3::NEG_Z,
+                    width: 3.0,
+                    height: 2.0,
                 },
             ],
         }

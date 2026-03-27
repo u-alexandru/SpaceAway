@@ -5,10 +5,9 @@ pub mod csg;
 pub mod assembly;
 pub mod hull;
 pub mod ship_parts;
-pub mod full_ship;
+pub mod validate;
 
 pub use mesh::{Mesh, MeshVertex};
-pub use full_ship::build_ship;
 
 /// Color palette --- flat vertex colors, no textures.
 pub mod colors {

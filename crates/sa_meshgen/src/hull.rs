@@ -16,7 +16,7 @@ use crate::primitives::{face_normal, push_quad};
 ///  \          /
 ///   [4]----[3]      bottom-left, bottom-right
 /// ```
-pub(crate) fn hex_ring(width: f32, height: f32, z: f32) -> [[f32; 3]; 6] {
+pub fn hex_ring(width: f32, height: f32, z: f32) -> [[f32; 3]; 6] {
     let w = width;
     let h = height;
     [

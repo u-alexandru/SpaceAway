@@ -1,8 +1,12 @@
 //! Ship part catalog: functions that return Part (mesh + connection points).
 //!
-//! Every part has BOTH an exterior hexagonal hull AND interior detail
-//! (floor, ceiling, walls, consoles, door frames). All dimensions in meters.
-//! Parts are built starting at z=0, extending along +Z.
+//! Every part follows the modular ship construction standards:
+//! - Hull spans z=0 to z=length in local space
+//! - Fore connection at (0,0,0) with normal (0,0,-1)
+//! - Aft connection at (0,0,length) with normal (0,0,+1)
+//! - Width transitions ONLY in hull_transition() parts
+//! - Interior: floor at y=-1.0, ceiling at y=0.2
+//! - Connection points carry width/height metadata
 
 use crate::assembly::{ConnectPoint, Part};
 use crate::colors;
@@ -12,7 +16,7 @@ use crate::primitives::{box_mesh, cone_mesh, cylinder_mesh};
 use glam::{Mat4, Vec3};
 
 // ---------------------------------------------------------------------------
-// Shared constants
+// Shared constants (per standards Appendix B)
 // ---------------------------------------------------------------------------
 
 const STD_WIDTH: f32 = 4.0;
@@ -30,8 +34,8 @@ const FRAME_THICKNESS: f32 = 0.1;
 // ---------------------------------------------------------------------------
 
 /// Cockpit: tapered hex hull, front_width=2.0 to back_width=4.0, length=4.0.
-/// Interior: floor, ceiling, helm console at front, window panels.
-/// Connection: "aft" at z=4.0 (facing +Z).
+/// Interior: floor, ceiling, helm console at front, glass cap at nose.
+/// Connection: "aft" at z=4.0 (facing +Z), width=4.0.
 pub fn hull_cockpit() -> Part {
     let front_w = 2.0;
     let back_w = STD_WIDTH;
@@ -42,17 +46,14 @@ pub fn hull_cockpit() -> Part {
     // Exterior hull
     meshes.push(hull::hex_hull(front_w, back_w, STD_HEIGHT, length, colors::HULL_EXTERIOR));
 
-    // Front cap (nose)
-    let front_ring = hex_ring_at(front_w, STD_HEIGHT, 0.0);
+    // Front cap (glass nose) -- terminal face, rule 4.5.1
+    let front_ring = hull::hex_ring(front_w, STD_HEIGHT, 0.0);
     meshes.push(hull::hex_cap(&front_ring, colors::WINDOW_GLASS, false));
 
-    // Interior: floor, ceiling, walls
-    let interior_w = back_w - WALL_INSET * 2.0;
+    // Interior: floor, ceiling (use narrower width per rule 4.3.4)
+    let interior_w = front_w - WALL_INSET * 2.0;
     meshes.push(hull::interior_floor(interior_w, length, FLOOR_Y, colors::FLOOR));
     meshes.push(hull::interior_ceiling(interior_w, length, CEILING_Y, colors::CEILING));
-    meshes.push(hull::interior_walls(
-        back_w, FLOOR_Y, CEILING_Y, length, WALL_INSET, colors::INTERIOR_WALL,
-    ));
 
     // Helm console near the front
     let console = hull::console_mesh(1.2, colors::ACCENT_HELM);
@@ -64,11 +65,8 @@ pub fn hull_cockpit() -> Part {
     let frame = frame.transform(Mat4::from_translation(Vec3::new(0.0, FLOOR_Y, length)));
     meshes.push(frame);
 
-    // --- Structural features ---
-
-    // Antenna array: thin cylinder extending forward from top of cockpit
+    // Antenna array extending forward from top
     let antenna = cylinder_mesh(0.03, 2.5, 6, colors::ANTENNA);
-    // Cylinder is along Y by default; rotate to point along -Z (forward)
     let antenna = antenna.transform(
         Mat4::from_translation(Vec3::new(0.0, STD_HEIGHT * 0.45, -1.0))
             * Mat4::from_rotation_x(std::f32::consts::FRAC_PI_2),
@@ -83,6 +81,8 @@ pub fn hull_cockpit() -> Part {
             id: "aft",
             position: Vec3::new(0.0, 0.0, length),
             normal: Vec3::Z,
+            width: back_w,
+            height: STD_HEIGHT,
         }],
     }
 }
@@ -92,8 +92,8 @@ pub fn hull_cockpit() -> Part {
 // ---------------------------------------------------------------------------
 
 /// Standard hex corridor, width=4.0, variable length.
-/// Interior: floor, ceiling, walls, door frames at both ends.
-/// Connections: "fore" at z=0 (facing -Z), "aft" at z=length (facing +Z).
+/// Interior: floor, ceiling, door frames at both ends.
+/// Connections: "fore" at z=0, "aft" at z=length, both width=4.0.
 pub fn hull_corridor(length: f32) -> Part {
     let mut meshes = Vec::new();
 
@@ -104,9 +104,6 @@ pub fn hull_corridor(length: f32) -> Part {
     let interior_w = STD_WIDTH - WALL_INSET * 2.0;
     meshes.push(hull::interior_floor(interior_w, length, FLOOR_Y, colors::FLOOR));
     meshes.push(hull::interior_ceiling(interior_w, length, CEILING_Y, colors::CEILING));
-    meshes.push(hull::interior_walls(
-        STD_WIDTH, FLOOR_Y, CEILING_Y, length, WALL_INSET, colors::INTERIOR_WALL,
-    ));
 
     // Door frames at both ends
     let frame_fore = hull::door_frame_mesh(DOOR_W, DOOR_H, FRAME_THICKNESS, colors::INTERIOR_WALL);
@@ -126,11 +123,15 @@ pub fn hull_corridor(length: f32) -> Part {
                 id: "fore",
                 position: Vec3::new(0.0, 0.0, 0.0),
                 normal: Vec3::NEG_Z,
+                width: STD_WIDTH,
+                height: STD_HEIGHT,
             },
             ConnectPoint {
                 id: "aft",
                 position: Vec3::new(0.0, 0.0, length),
                 normal: Vec3::Z,
+                width: STD_WIDTH,
+                height: STD_HEIGHT,
             },
         ],
     }
@@ -140,14 +141,14 @@ pub fn hull_corridor(length: f32) -> Part {
 // Transition
 // ---------------------------------------------------------------------------
 
-/// Transition piece: tapers from `from_width` to `to_width` over `length` along Z.
-/// Connections: "fore" at z=0 (facing -Z), "aft" at z=length (facing +Z).
+/// Transition piece: tapers from `from_width` to `to_width` over 1.0m along Z.
+/// Connections: "fore" at z=0 with from_width, "aft" at z=1.0 with to_width.
 pub fn hull_transition(from_width: f32, to_width: f32, length: f32) -> Part {
     let mut meshes = Vec::new();
 
     meshes.push(hull::hex_hull(from_width, to_width, STD_HEIGHT, length, colors::HULL_ACCENT));
 
-    // Interior floor at the wider width
+    // Interior floor at the narrower width (rule 4.3.4)
     let floor_w = from_width.min(to_width) - WALL_INSET * 2.0;
     meshes.push(hull::interior_floor(floor_w, length, FLOOR_Y, colors::FLOOR));
     meshes.push(hull::interior_ceiling(floor_w, length, CEILING_Y, colors::CEILING));
@@ -161,11 +162,15 @@ pub fn hull_transition(from_width: f32, to_width: f32, length: f32) -> Part {
                 id: "fore",
                 position: Vec3::new(0.0, 0.0, 0.0),
                 normal: Vec3::NEG_Z,
+                width: from_width,
+                height: STD_HEIGHT,
             },
             ConnectPoint {
                 id: "aft",
                 position: Vec3::new(0.0, 0.0, length),
                 normal: Vec3::Z,
+                width: to_width,
+                height: STD_HEIGHT,
             },
         ],
     }
@@ -175,51 +180,33 @@ pub fn hull_transition(from_width: f32, to_width: f32, length: f32) -> Part {
 // Room
 // ---------------------------------------------------------------------------
 
-/// Wider hex room section (width=5.0, length=5.0).
-/// Includes built-in transition pieces on fore and aft (5.0 -> 4.0).
-/// Interior: floor, ceiling, walls, console with accent color, door frames.
-/// Connections: "fore" at z=0, "aft" at z=length.
-/// Optionally "port" and/or "starboard" if `side_doors` contains those names.
+/// Wider hex room section (constant width=5.0, length=5.0).
+/// NO embedded transitions (rule 4.4). Caller inserts transition pieces.
+/// Interior: floor, ceiling, console with accent color, door frames.
+/// Connections: "fore" at z=0 width=5.0, "aft" at z=5.0 width=5.0.
 pub fn hull_room(
     name: &str,
     accent_color: [f32; 3],
     side_doors: &[&str],
 ) -> Part {
     let room_len = 5.0;
-    let trans_len = 1.0;
-    let total_len = trans_len + room_len + trans_len; // 7.0 total
 
     let mut meshes = Vec::new();
 
-    // Fore transition: STD_WIDTH -> ROOM_WIDTH (z=0..1)
+    // Main room hull: constant ROOM_WIDTH from z=0 to z=room_len
     meshes.push(hull::hex_hull(
-        STD_WIDTH, ROOM_WIDTH, STD_HEIGHT, trans_len, colors::HULL_ACCENT,
+        ROOM_WIDTH, ROOM_WIDTH, STD_HEIGHT, room_len, colors::HULL_EXTERIOR,
     ));
 
-    // Main room hull (z=1..6)
-    let room_hull = hull::hex_hull(ROOM_WIDTH, ROOM_WIDTH, STD_HEIGHT, room_len, colors::HULL_EXTERIOR);
-    let room_hull = room_hull.transform(Mat4::from_translation(Vec3::new(0.0, 0.0, trans_len)));
-    meshes.push(room_hull);
-
-    // Aft transition: ROOM_WIDTH -> STD_WIDTH (z=6..7)
-    let aft_trans = hull::hex_hull(ROOM_WIDTH, STD_WIDTH, STD_HEIGHT, trans_len, colors::HULL_ACCENT);
-    let aft_trans = aft_trans.transform(Mat4::from_translation(Vec3::new(
-        0.0, 0.0, trans_len + room_len,
-    )));
-    meshes.push(aft_trans);
-
-    // Interior for the full length
+    // Interior
     let interior_w = ROOM_WIDTH - WALL_INSET * 2.0;
-    meshes.push(hull::interior_floor(interior_w, total_len, FLOOR_Y, colors::FLOOR));
-    meshes.push(hull::interior_ceiling(interior_w, total_len, CEILING_Y, colors::CEILING));
-    meshes.push(hull::interior_walls(
-        ROOM_WIDTH, FLOOR_Y, CEILING_Y, total_len, WALL_INSET, colors::INTERIOR_WALL,
-    ));
+    meshes.push(hull::interior_floor(interior_w, room_len, FLOOR_Y, colors::FLOOR));
+    meshes.push(hull::interior_ceiling(interior_w, room_len, CEILING_Y, colors::CEILING));
 
     // Console on one wall with accent color (placed mid-room)
     let console = hull::console_mesh(1.5, accent_color);
     let console = console.transform(
-        Mat4::from_translation(Vec3::new(-1.5, FLOOR_Y, trans_len + room_len * 0.5))
+        Mat4::from_translation(Vec3::new(-1.5, FLOOR_Y, room_len * 0.5))
             * Mat4::from_rotation_y(std::f32::consts::FRAC_PI_2),
     );
     meshes.push(console);
@@ -230,7 +217,7 @@ pub fn hull_room(
     meshes.push(frame_fore);
 
     let frame_aft = hull::door_frame_mesh(DOOR_W, DOOR_H, FRAME_THICKNESS, colors::INTERIOR_WALL);
-    let frame_aft = frame_aft.transform(Mat4::from_translation(Vec3::new(0.0, FLOOR_Y, total_len)));
+    let frame_aft = frame_aft.transform(Mat4::from_translation(Vec3::new(0.0, FLOOR_Y, room_len)));
     meshes.push(frame_aft);
 
     // --- Structural features ---
@@ -240,12 +227,10 @@ pub fn hull_room(
         let fin_length = 3.0;
         let fin_height = 2.0;
         let fin_thick = 0.05;
-        let mid_z = trans_len + room_len * 0.5;
+        let mid_z = room_len * 0.5;
         let fin_offset_x = ROOM_WIDTH * 0.5 + fin_length * 0.5;
-        // Angle the fins slightly (15 degrees outward from vertical)
         let fin_angle = 0.26; // ~15 degrees
 
-        // Port (left) radiator fin
         let fin = box_mesh(fin_length, fin_height, fin_thick, colors::RADIATOR_FIN);
         let port_fin = fin.transform(
             Mat4::from_translation(Vec3::new(-fin_offset_x, 0.2, mid_z))
@@ -253,7 +238,6 @@ pub fn hull_room(
         );
         meshes.push(port_fin);
 
-        // Starboard (right) radiator fin
         let fin = box_mesh(fin_length, fin_height, fin_thick, colors::RADIATOR_FIN);
         let starboard_fin = fin.transform(
             Mat4::from_translation(Vec3::new(fin_offset_x, 0.2, mid_z))
@@ -264,15 +248,13 @@ pub fn hull_room(
 
     // Feature: sensor dish on nav/sensors room
     if name == "nav" || name == "sensors" {
-        let dish_z = trans_len + room_len * 0.5;
+        let dish_z = room_len * 0.5;
         let dorsal_y = STD_HEIGHT * 0.5;
-        // Small cylinder as the dish base
         let dish_base = cylinder_mesh(0.15, 0.4, 8, colors::ANTENNA);
         let dish_base = dish_base.transform(
             Mat4::from_translation(Vec3::new(0.0, dorsal_y + 0.2, dish_z)),
         );
         meshes.push(dish_base);
-        // Cone on top as the dish
         let dish = cone_mesh(0.5, 0.1, 0.3, 8, colors::HULL_ACCENT);
         let dish = dish.transform(
             Mat4::from_translation(Vec3::new(0.0, dorsal_y + 0.55, dish_z)),
@@ -287,25 +269,34 @@ pub fn hull_room(
             id: "fore",
             position: Vec3::new(0.0, 0.0, 0.0),
             normal: Vec3::NEG_Z,
+            width: ROOM_WIDTH,
+            height: STD_HEIGHT,
         },
         ConnectPoint {
             id: "aft",
-            position: Vec3::new(0.0, 0.0, total_len),
+            position: Vec3::new(0.0, 0.0, room_len),
             normal: Vec3::Z,
+            width: ROOM_WIDTH,
+            height: STD_HEIGHT,
         },
     ];
 
+    // Side connections (structural attachment only -- no hull cutouts per Section 7.5)
     for &side in side_doors {
         match side {
             "port" => connections.push(ConnectPoint {
                 id: "port",
-                position: Vec3::new(-ROOM_WIDTH / 2.0, 0.0, trans_len + room_len / 2.0),
+                position: Vec3::new(-ROOM_WIDTH / 2.0, 0.0, room_len / 2.0),
                 normal: Vec3::NEG_X,
+                width: 2.5,
+                height: STD_HEIGHT,
             }),
             "starboard" => connections.push(ConnectPoint {
                 id: "starboard",
-                position: Vec3::new(ROOM_WIDTH / 2.0, 0.0, trans_len + room_len / 2.0),
+                position: Vec3::new(ROOM_WIDTH / 2.0, 0.0, room_len / 2.0),
                 normal: Vec3::X,
+                width: 2.5,
+                height: STD_HEIGHT,
             }),
             _ => {}
         }
@@ -318,13 +309,12 @@ pub fn hull_room(
 // Engine section
 // ---------------------------------------------------------------------------
 
-/// Engine section: tapered hull front_width=4.0 to back_width=2.5, length=5.0.
-/// Two engine nacelles (cylinders) extending from back, with cones at tips.
-/// Interior: floor, engine console.
-/// Connection: "fore" at z=0 (facing -Z).
+/// Engine section: tapered hull front_width=3.5 to back_width=2.0, length=5.0.
+/// Two engine nacelles + nozzles extending from back.
+/// Connection: "fore" at z=0 (facing -Z), width=3.5.
 pub fn hull_engine_section() -> Part {
-    let front_w = STD_WIDTH;
-    let back_w = 2.5;
+    let front_w = 3.5;
+    let back_w = 2.0;
     let length = 5.0;
 
     let mut meshes = Vec::new();
@@ -332,13 +322,14 @@ pub fn hull_engine_section() -> Part {
     // Exterior hull
     meshes.push(hull::hex_hull(front_w, back_w, STD_HEIGHT, length, colors::HULL_EXTERIOR));
 
+    // Back cap (terminal face, rule 4.5.1)
+    let back_ring = hull::hex_ring(back_w, STD_HEIGHT, length);
+    meshes.push(hull::hex_cap(&back_ring, colors::HULL_EXTERIOR, true));
+
     // Interior
     let interior_w = front_w - WALL_INSET * 2.0;
     meshes.push(hull::interior_floor(interior_w, length, FLOOR_Y, colors::FLOOR));
     meshes.push(hull::interior_ceiling(interior_w, length, CEILING_Y, colors::CEILING));
-    meshes.push(hull::interior_walls(
-        front_w, FLOOR_Y, CEILING_Y, length, WALL_INSET, colors::INTERIOR_WALL,
-    ));
 
     // Engine console
     let console = hull::console_mesh(1.2, colors::ACCENT_ENGINE);
@@ -350,11 +341,10 @@ pub fn hull_engine_section() -> Part {
     let frame = frame.transform(Mat4::from_translation(Vec3::new(0.0, FLOOR_Y, 0.0)));
     meshes.push(frame);
 
-    // Engine nacelles: two cylinders extending from the back
+    // Engine nacelles
     let nacelle_r = 0.5;
     let nacelle_len = 3.0;
     let nacelle = cylinder_mesh(nacelle_r, nacelle_len, 8, colors::HULL_ACCENT);
-    // Cylinders are along Y by default; rotate to point along Z
     let rot_z = Mat4::from_rotation_x(std::f32::consts::FRAC_PI_2);
 
     let nacelle_left = nacelle.transform(
@@ -367,7 +357,7 @@ pub fn hull_engine_section() -> Part {
     );
     meshes.push(nacelle_right);
 
-    // Engine cones at the tips of the nacelles
+    // Engine cones at tips
     let cone = cone_mesh(nacelle_r, 0.0, 1.0, 8, colors::ACCENT_ENGINE);
     let cone_left = cone.transform(
         Mat4::from_translation(Vec3::new(-0.8, -0.3, length + nacelle_len + 0.5)) * rot_z,
@@ -387,6 +377,8 @@ pub fn hull_engine_section() -> Part {
             id: "fore",
             position: Vec3::new(0.0, 0.0, 0.0),
             normal: Vec3::NEG_Z,
+            width: front_w,
+            height: STD_HEIGHT,
         }],
     }
 }
@@ -396,19 +388,18 @@ pub fn hull_engine_section() -> Part {
 // ---------------------------------------------------------------------------
 
 /// Airlock: small hex hull width=2.5, height=3.0, length=2.5.
-/// Two door frames (inner and outer), yellow warning accent strips.
-/// Connection: "inner" at z=0 (facing -Z).
+/// Outer cap sealed. Inner connection at z=0, width=2.5.
 pub fn hull_airlock() -> Part {
     let w = 2.5;
     let length = 2.5;
 
     let mut meshes = Vec::new();
 
-    // Exterior hull with warning accent
+    // Exterior hull
     meshes.push(hull::hex_hull(w, w, STD_HEIGHT, length, colors::AIRLOCK_WARNING));
 
-    // Outer cap (sealed end)
-    let outer_ring = hex_ring_at(w, STD_HEIGHT, length);
+    // Outer cap (sealed end, rule 4.5.1)
+    let outer_ring = hull::hex_ring(w, STD_HEIGHT, length);
     meshes.push(hull::hex_cap(&outer_ring, colors::HULL_ACCENT, true));
 
     // Interior
@@ -434,27 +425,10 @@ pub fn hull_airlock() -> Part {
             id: "inner",
             position: Vec3::new(0.0, 0.0, 0.0),
             normal: Vec3::NEG_Z,
+            width: w,
+            height: STD_HEIGHT,
         }],
     }
-}
-
-// ---------------------------------------------------------------------------
-// Helper: generate hex ring at a position (re-exports hull internal logic)
-// ---------------------------------------------------------------------------
-
-/// Generate hex ring vertices at a given width, height, and z position.
-/// This duplicates the logic from hull::hex_ring which is private.
-fn hex_ring_at(width: f32, height: f32, z: f32) -> [[f32; 3]; 6] {
-    let w = width;
-    let h = height;
-    [
-        [-w * 0.375, h * 0.5, z],
-        [w * 0.375, h * 0.5, z],
-        [w * 0.5, 0.0, z],
-        [w * 0.375, -h * 0.5, z],
-        [-w * 0.375, -h * 0.5, z],
-        [-w * 0.5, 0.0, z],
-    ]
 }
 
 // ---------------------------------------------------------------------------
@@ -464,12 +438,19 @@ fn hex_ring_at(width: f32, height: f32, z: f32) -> [[f32; 3]; 6] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::validate::validate_part;
 
     #[test]
     fn cockpit_has_aft_connection() {
         let p = hull_cockpit();
         assert_eq!(p.connections.len(), 1);
         assert!(p.try_connection("aft").is_some());
+    }
+
+    #[test]
+    fn cockpit_validates() {
+        let p = hull_cockpit();
+        validate_part(&p).unwrap();
     }
 
     #[test]
@@ -480,11 +461,25 @@ mod tests {
     }
 
     #[test]
+    fn cockpit_aft_width() {
+        let p = hull_cockpit();
+        let aft = p.connection("aft");
+        assert!((aft.width - STD_WIDTH).abs() < 1e-4);
+        assert!((aft.position.z - 4.0).abs() < 1e-4);
+    }
+
+    #[test]
     fn corridor_has_two_connections() {
         let p = hull_corridor(3.0);
         assert_eq!(p.connections.len(), 2);
         assert!(p.try_connection("fore").is_some());
         assert!(p.try_connection("aft").is_some());
+    }
+
+    #[test]
+    fn corridor_validates() {
+        let p = hull_corridor(3.0);
+        validate_part(&p).unwrap();
     }
 
     #[test]
@@ -506,11 +501,31 @@ mod tests {
     }
 
     #[test]
+    fn corridor_widths_correct() {
+        let p = hull_corridor(3.0);
+        assert!((p.connection("fore").width - STD_WIDTH).abs() < 1e-4);
+        assert!((p.connection("aft").width - STD_WIDTH).abs() < 1e-4);
+    }
+
+    #[test]
     fn transition_has_two_connections() {
         let p = hull_transition(4.0, 5.0, 1.0);
         assert_eq!(p.connections.len(), 2);
         assert!(p.try_connection("fore").is_some());
         assert!(p.try_connection("aft").is_some());
+    }
+
+    #[test]
+    fn transition_validates() {
+        let p = hull_transition(4.0, 5.0, 1.0);
+        validate_part(&p).unwrap();
+    }
+
+    #[test]
+    fn transition_widths_correct() {
+        let p = hull_transition(4.0, 5.0, 1.0);
+        assert!((p.connection("fore").width - 4.0).abs() < 1e-4);
+        assert!((p.connection("aft").width - 5.0).abs() < 1e-4);
     }
 
     #[test]
@@ -524,6 +539,34 @@ mod tests {
         let p = hull_room("nav", colors::ACCENT_NAVIGATION, &[]);
         assert!(p.try_connection("fore").is_some());
         assert!(p.try_connection("aft").is_some());
+    }
+
+    #[test]
+    fn room_validates() {
+        let p = hull_room("nav", colors::ACCENT_NAVIGATION, &[]);
+        validate_part(&p).unwrap();
+    }
+
+    #[test]
+    fn room_widths_are_room_width() {
+        let p = hull_room("nav", colors::ACCENT_NAVIGATION, &[]);
+        assert!((p.connection("fore").width - ROOM_WIDTH).abs() < 1e-4);
+        assert!((p.connection("aft").width - ROOM_WIDTH).abs() < 1e-4);
+    }
+
+    #[test]
+    fn room_no_embedded_transitions() {
+        // Room fore and aft should both be at ROOM_WIDTH (5.0), not STD_WIDTH (4.0)
+        let p = hull_room("test", [0.5; 3], &[]);
+        let fore = p.connection("fore");
+        let aft = p.connection("aft");
+        assert!((fore.width - ROOM_WIDTH).abs() < 1e-4,
+            "fore width should be ROOM_WIDTH, got {}", fore.width);
+        assert!((aft.width - ROOM_WIDTH).abs() < 1e-4,
+            "aft width should be ROOM_WIDTH, got {}", aft.width);
+        // Length should be 5.0 (room only), not 7.0 (room + transitions)
+        assert!((aft.position.z - 5.0).abs() < 1e-4,
+            "aft z should be 5.0, got {}", aft.position.z);
     }
 
     #[test]
@@ -548,6 +591,18 @@ mod tests {
     }
 
     #[test]
+    fn engine_section_validates() {
+        let p = hull_engine_section();
+        validate_part(&p).unwrap();
+    }
+
+    #[test]
+    fn engine_fore_width() {
+        let p = hull_engine_section();
+        assert!((p.connection("fore").width - 3.5).abs() < 1e-4);
+    }
+
+    #[test]
     fn engine_section_mesh_not_empty() {
         let p = hull_engine_section();
         assert!(!p.mesh.vertices.is_empty());
@@ -558,6 +613,12 @@ mod tests {
         let p = hull_airlock();
         assert_eq!(p.connections.len(), 1);
         assert!(p.try_connection("inner").is_some());
+    }
+
+    #[test]
+    fn airlock_validates() {
+        let p = hull_airlock();
+        validate_part(&p).unwrap();
     }
 
     #[test]
@@ -610,8 +671,9 @@ mod tests {
     }
 
     #[test]
-    fn full_ship_bounding_box_roughly_correct() {
+    fn full_ship_assembly_with_validation() {
         use crate::assembly::attach;
+        use crate::validate::{validate_connection, validate_part};
 
         let cockpit = hull_cockpit();
         let corr1 = hull_corridor(3.0);
@@ -620,11 +682,34 @@ mod tests {
         let trans2 = hull_transition(ROOM_WIDTH, STD_WIDTH, 1.0);
         let corr2 = hull_corridor(3.0);
         let trans3 = hull_transition(STD_WIDTH, ROOM_WIDTH, 1.0);
-        let eng_room = hull_room("eng", colors::ACCENT_ENGINEERING, &["starboard"]);
-        let trans4 = hull_transition(ROOM_WIDTH, STD_WIDTH, 1.0);
+        let eng_room = hull_room("eng", colors::ACCENT_ENGINEERING, &[]);
+        let trans4 = hull_transition(ROOM_WIDTH, 3.5, 1.0);
         let engine = hull_engine_section();
-        let airlock = hull_airlock();
 
+        // Validate all parts
+        validate_part(&cockpit).unwrap();
+        validate_part(&corr1).unwrap();
+        validate_part(&trans1).unwrap();
+        validate_part(&nav_room).unwrap();
+        validate_part(&trans2).unwrap();
+        validate_part(&corr2).unwrap();
+        validate_part(&trans3).unwrap();
+        validate_part(&eng_room).unwrap();
+        validate_part(&trans4).unwrap();
+        validate_part(&engine).unwrap();
+
+        // Validate connections
+        validate_connection(&cockpit, "aft", &corr1, "fore").unwrap();
+        validate_connection(&corr1, "aft", &trans1, "fore").unwrap();
+        validate_connection(&trans1, "aft", &nav_room, "fore").unwrap();
+        validate_connection(&nav_room, "aft", &trans2, "fore").unwrap();
+        validate_connection(&trans2, "aft", &corr2, "fore").unwrap();
+        validate_connection(&corr2, "aft", &trans3, "fore").unwrap();
+        validate_connection(&trans3, "aft", &eng_room, "fore").unwrap();
+        validate_connection(&eng_room, "aft", &trans4, "fore").unwrap();
+        validate_connection(&trans4, "aft", &engine, "fore").unwrap();
+
+        // Assemble
         let ship = attach(&cockpit, "aft", &corr1, "fore");
         let ship = attach(&ship, "aft", &trans1, "fore");
         let ship = attach(&ship, "aft", &nav_room, "fore");
@@ -634,15 +719,10 @@ mod tests {
         let ship = attach(&ship, "aft", &eng_room, "fore");
         let ship = attach(&ship, "aft", &trans4, "fore");
         let ship = attach(&ship, "aft", &engine, "fore");
-        let ship = if ship.try_connection("starboard").is_some() {
-            attach(&ship, "starboard", &airlock, "inner")
-        } else {
-            ship
-        };
 
         let (min, max) = ship.mesh.bounding_box();
         let length = max.z - min.z;
-        // Ship should be roughly 29m + nacelles, so allow some tolerance
+        // Expected hull length: 4+3+1+5+1+3+1+5+1+5 = 29m + nacelles
         assert!(
             length > 25.0 && length < 45.0,
             "ship length {length} should be roughly 28-40m"

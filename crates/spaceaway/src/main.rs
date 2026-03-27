@@ -718,16 +718,51 @@ fn meshgen_to_render(mesh: &sa_meshgen::Mesh) -> MeshData {
 
 /// All ship parts for visual cycling.
 fn all_ship_parts() -> Vec<(&'static str, sa_meshgen::Mesh)> {
+    use sa_meshgen::ship_parts::*;
     vec![
-        ("cockpit", sa_meshgen::full_ship::build_cockpit()),
-        ("nav_room", sa_meshgen::full_ship::build_nav_room()),
-        ("engine_section", sa_meshgen::full_ship::build_engine_section()),
+        ("cockpit", hull_cockpit().mesh),
+        ("corridor", hull_corridor(3.0).mesh),
+        ("transition_4_5", hull_transition(4.0, 5.0, 1.0).mesh),
+        ("nav_room", hull_room("nav", sa_meshgen::colors::ACCENT_NAVIGATION, &[]).mesh),
+        ("eng_room", hull_room("eng", sa_meshgen::colors::ACCENT_ENGINEERING, &[]).mesh),
+        ("transition_5_35", hull_transition(5.0, 3.5, 1.0).mesh),
+        ("engine_section", hull_engine_section().mesh),
+        ("airlock", hull_airlock().mesh),
     ]
 }
 
-/// Build the full ship as a single continuous mesh — no assembly, no gaps.
+/// Build the full ship using the modular assembly system.
+///
+/// Layout:
+/// cockpit(4.0) -> corridor(4.0) -> transition(4.0->5.0) -> nav_room(5.0)
+/// -> transition(5.0->4.0) -> corridor(4.0) -> transition(4.0->5.0)
+/// -> eng_room(5.0) -> transition(5.0->3.5) -> engine(3.5)
 fn assemble_ship() -> sa_meshgen::Mesh {
-    sa_meshgen::full_ship::build_ship()
+    use sa_meshgen::assembly::attach;
+    use sa_meshgen::ship_parts::*;
+
+    let cockpit = hull_cockpit();
+    let corr1 = hull_corridor(3.0);
+    let trans1 = hull_transition(4.0, 5.0, 1.0);
+    let nav_room = hull_room("nav", sa_meshgen::colors::ACCENT_NAVIGATION, &[]);
+    let trans2 = hull_transition(5.0, 4.0, 1.0);
+    let corr2 = hull_corridor(3.0);
+    let trans3 = hull_transition(4.0, 5.0, 1.0);
+    let eng_room = hull_room("eng", sa_meshgen::colors::ACCENT_ENGINEERING, &[]);
+    let trans4 = hull_transition(5.0, 3.5, 1.0);
+    let engine = hull_engine_section();
+
+    let ship = attach(&cockpit, "aft", &corr1, "fore");
+    let ship = attach(&ship, "aft", &trans1, "fore");
+    let ship = attach(&ship, "aft", &nav_room, "fore");
+    let ship = attach(&ship, "aft", &trans2, "fore");
+    let ship = attach(&ship, "aft", &corr2, "fore");
+    let ship = attach(&ship, "aft", &trans3, "fore");
+    let ship = attach(&ship, "aft", &eng_room, "fore");
+    let ship = attach(&ship, "aft", &trans4, "fore");
+    let ship = attach(&ship, "aft", &engine, "fore");
+
+    ship.mesh
 }
 
 fn make_cube() -> MeshData {
