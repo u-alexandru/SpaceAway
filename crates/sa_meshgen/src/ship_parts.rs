@@ -5,7 +5,7 @@
 //! - Fore connection at (0,0,0) with normal (0,0,-1)
 //! - Aft connection at (0,0,length) with normal (0,0,+1)
 //! - Width transitions ONLY in hull_transition() parts
-//! - Interior: floor at y=-1.0, ceiling at y=0.2
+//! - Interior: floor at y=-1.0, ceiling at y=+1.2 (2.2m headroom)
 //! - Connection points carry width/height metadata
 
 use crate::assembly::{ConnectPoint, Part};
@@ -23,11 +23,10 @@ const STD_WIDTH: f32 = 4.0;
 const STD_HEIGHT: f32 = 3.0;
 const ROOM_WIDTH: f32 = 5.0;
 const FLOOR_Y: f32 = -1.0;
-const CEILING_Y: f32 = 0.2;
+const CEILING_Y: f32 = 1.2;
 const WALL_INSET: f32 = 0.15;
 const DOOR_W: f32 = 1.2;
 const DOOR_H: f32 = 2.0;
-const FRAME_THICKNESS: f32 = 0.1;
 
 // ---------------------------------------------------------------------------
 // Cockpit
@@ -60,10 +59,10 @@ pub fn hull_cockpit() -> Part {
     let console = console.transform(Mat4::from_translation(Vec3::new(0.0, FLOOR_Y, 0.8)));
     meshes.push(console);
 
-    // Door frame at aft
-    let frame = hull::door_frame_mesh(DOOR_W, DOOR_H, FRAME_THICKNESS, colors::INTERIOR_WALL);
-    let frame = frame.transform(Mat4::from_translation(Vec3::new(0.0, FLOOR_Y, length)));
-    meshes.push(frame);
+    // Bulkhead with door at aft
+    let bulkhead = hull::bulkhead_with_door(interior_w, FLOOR_Y, CEILING_Y, DOOR_W, DOOR_H, colors::BULKHEAD);
+    let bulkhead = bulkhead.transform(Mat4::from_translation(Vec3::new(0.0, 0.0, length)));
+    meshes.push(bulkhead);
 
     // Antenna array extending forward from top
     let antenna = cylinder_mesh(0.03, 2.5, 6, colors::ANTENNA);
@@ -105,14 +104,13 @@ pub fn hull_corridor(length: f32) -> Part {
     meshes.push(hull::interior_floor(interior_w, length, FLOOR_Y, colors::FLOOR));
     meshes.push(hull::interior_ceiling(interior_w, length, CEILING_Y, colors::CEILING));
 
-    // Door frames at both ends
-    let frame_fore = hull::door_frame_mesh(DOOR_W, DOOR_H, FRAME_THICKNESS, colors::INTERIOR_WALL);
-    let frame_fore = frame_fore.transform(Mat4::from_translation(Vec3::new(0.0, FLOOR_Y, 0.0)));
-    meshes.push(frame_fore);
+    // Bulkheads with doors at both ends
+    let bulkhead_fore = hull::bulkhead_with_door(interior_w, FLOOR_Y, CEILING_Y, DOOR_W, DOOR_H, colors::BULKHEAD);
+    meshes.push(bulkhead_fore);
 
-    let frame_aft = hull::door_frame_mesh(DOOR_W, DOOR_H, FRAME_THICKNESS, colors::INTERIOR_WALL);
-    let frame_aft = frame_aft.transform(Mat4::from_translation(Vec3::new(0.0, FLOOR_Y, length)));
-    meshes.push(frame_aft);
+    let bulkhead_aft = hull::bulkhead_with_door(interior_w, FLOOR_Y, CEILING_Y, DOOR_W, DOOR_H, colors::BULKHEAD);
+    let bulkhead_aft = bulkhead_aft.transform(Mat4::from_translation(Vec3::new(0.0, 0.0, length)));
+    meshes.push(bulkhead_aft);
 
     let mesh = Mesh::merge(&meshes);
 
@@ -211,14 +209,13 @@ pub fn hull_room(
     );
     meshes.push(console);
 
-    // Door frames at fore and aft
-    let frame_fore = hull::door_frame_mesh(DOOR_W, DOOR_H, FRAME_THICKNESS, colors::INTERIOR_WALL);
-    let frame_fore = frame_fore.transform(Mat4::from_translation(Vec3::new(0.0, FLOOR_Y, 0.0)));
-    meshes.push(frame_fore);
+    // Bulkheads with doors at fore and aft
+    let bulkhead_fore = hull::bulkhead_with_door(interior_w, FLOOR_Y, CEILING_Y, DOOR_W, DOOR_H, colors::BULKHEAD);
+    meshes.push(bulkhead_fore);
 
-    let frame_aft = hull::door_frame_mesh(DOOR_W, DOOR_H, FRAME_THICKNESS, colors::INTERIOR_WALL);
-    let frame_aft = frame_aft.transform(Mat4::from_translation(Vec3::new(0.0, FLOOR_Y, room_len)));
-    meshes.push(frame_aft);
+    let bulkhead_aft = hull::bulkhead_with_door(interior_w, FLOOR_Y, CEILING_Y, DOOR_W, DOOR_H, colors::BULKHEAD);
+    let bulkhead_aft = bulkhead_aft.transform(Mat4::from_translation(Vec3::new(0.0, 0.0, room_len)));
+    meshes.push(bulkhead_aft);
 
     // --- Structural features ---
 
@@ -336,10 +333,9 @@ pub fn hull_engine_section() -> Part {
     let console = console.transform(Mat4::from_translation(Vec3::new(0.0, FLOOR_Y, 1.5)));
     meshes.push(console);
 
-    // Door frame at fore
-    let frame = hull::door_frame_mesh(DOOR_W, DOOR_H, FRAME_THICKNESS, colors::INTERIOR_WALL);
-    let frame = frame.transform(Mat4::from_translation(Vec3::new(0.0, FLOOR_Y, 0.0)));
-    meshes.push(frame);
+    // Bulkhead with door at fore
+    let bulkhead = hull::bulkhead_with_door(interior_w, FLOOR_Y, CEILING_Y, DOOR_W, DOOR_H, colors::BULKHEAD);
+    meshes.push(bulkhead);
 
     // Engine nacelles
     let nacelle_r = 0.5;
@@ -407,15 +403,14 @@ pub fn hull_airlock() -> Part {
     meshes.push(hull::interior_floor(interior_w, length, FLOOR_Y, colors::FLOOR));
     meshes.push(hull::interior_ceiling(interior_w, length, CEILING_Y, colors::CEILING));
 
-    // Inner door frame
-    let frame_inner = hull::door_frame_mesh(DOOR_W, DOOR_H, FRAME_THICKNESS, colors::INTERIOR_WALL);
-    let frame_inner = frame_inner.transform(Mat4::from_translation(Vec3::new(0.0, FLOOR_Y, 0.0)));
-    meshes.push(frame_inner);
+    // Inner bulkhead with door
+    let bulkhead_inner = hull::bulkhead_with_door(interior_w, FLOOR_Y, CEILING_Y, DOOR_W, DOOR_H, colors::BULKHEAD);
+    meshes.push(bulkhead_inner);
 
-    // Outer door frame
-    let frame_outer = hull::door_frame_mesh(DOOR_W, DOOR_H, FRAME_THICKNESS, colors::AIRLOCK_WARNING);
-    let frame_outer = frame_outer.transform(Mat4::from_translation(Vec3::new(0.0, FLOOR_Y, length)));
-    meshes.push(frame_outer);
+    // Outer bulkhead with door (airlock warning color)
+    let bulkhead_outer = hull::bulkhead_with_door(interior_w, FLOOR_Y, CEILING_Y, DOOR_W, DOOR_H, colors::AIRLOCK_WARNING);
+    let bulkhead_outer = bulkhead_outer.transform(Mat4::from_translation(Vec3::new(0.0, 0.0, length)));
+    meshes.push(bulkhead_outer);
 
     let mesh = Mesh::merge(&meshes);
 

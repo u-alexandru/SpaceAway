@@ -345,6 +345,92 @@ pub fn console_mesh(width: f32, accent_color: [f32; 3]) -> Mesh {
     Mesh { vertices, indices }
 }
 
+/// Build a bulkhead wall that fills the interior cross-section with a door opening.
+///
+/// The bulkhead sits in the XY plane at z=0 (the caller translates it to the
+/// correct Z position). It spans from `-interior_width/2` to `+interior_width/2`
+/// in X, and from `floor_y` to `ceiling_y` in Y.
+///
+/// A rectangular doorway is cut out: `door_w` wide (centered on X=0) and
+/// `door_h` tall (bottom at `floor_y`).
+///
+/// Built as three panels: left of door, right of door, and lintel above door.
+/// All panels face -Z (fore-facing). For an aft-facing bulkhead, translate to the
+/// desired Z and apply a 180-degree Y rotation, or build a second copy facing +Z.
+pub fn bulkhead_with_door(
+    interior_width: f32,
+    floor_y: f32,
+    ceiling_y: f32,
+    door_w: f32,
+    door_h: f32,
+    color: [f32; 3],
+) -> Mesh {
+    let hw = interior_width / 2.0;
+    let hdw = door_w / 2.0;
+    let door_top = floor_y + door_h;
+    let depth = 0.05; // half-thickness (total 0.1m panel)
+
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+
+    // Front face normal (faces -Z = toward the viewer / fore)
+    let normal_front: [f32; 3] = [0.0, 0.0, -1.0];
+    // Back face normal (faces +Z = toward aft)
+    let normal_back: [f32; 3] = [0.0, 0.0, 1.0];
+
+    // --- Left panel (x from -hw to -hdw, y from floor_y to ceiling_y) ---
+    let left_front = [
+        [-hw, floor_y, -depth],
+        [-hdw, floor_y, -depth],
+        [-hdw, ceiling_y, -depth],
+        [-hw, ceiling_y, -depth],
+    ];
+    push_quad(&mut vertices, &mut indices, left_front, normal_front, color);
+    let left_back = [
+        [-hdw, floor_y, depth],
+        [-hw, floor_y, depth],
+        [-hw, ceiling_y, depth],
+        [-hdw, ceiling_y, depth],
+    ];
+    push_quad(&mut vertices, &mut indices, left_back, normal_back, color);
+
+    // --- Right panel (x from +hdw to +hw, y from floor_y to ceiling_y) ---
+    let right_front = [
+        [hdw, floor_y, -depth],
+        [hw, floor_y, -depth],
+        [hw, ceiling_y, -depth],
+        [hdw, ceiling_y, -depth],
+    ];
+    push_quad(&mut vertices, &mut indices, right_front, normal_front, color);
+    let right_back = [
+        [hw, floor_y, depth],
+        [hdw, floor_y, depth],
+        [hdw, ceiling_y, depth],
+        [hw, ceiling_y, depth],
+    ];
+    push_quad(&mut vertices, &mut indices, right_back, normal_back, color);
+
+    // --- Lintel above door (x from -hdw to +hdw, y from door_top to ceiling_y) ---
+    if door_top < ceiling_y {
+        let lintel_front = [
+            [-hdw, door_top, -depth],
+            [hdw, door_top, -depth],
+            [hdw, ceiling_y, -depth],
+            [-hdw, ceiling_y, -depth],
+        ];
+        push_quad(&mut vertices, &mut indices, lintel_front, normal_front, color);
+        let lintel_back = [
+            [hdw, door_top, depth],
+            [-hdw, door_top, depth],
+            [-hdw, ceiling_y, depth],
+            [hdw, ceiling_y, depth],
+        ];
+        push_quad(&mut vertices, &mut indices, lintel_back, normal_back, color);
+    }
+
+    Mesh { vertices, indices }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -443,5 +529,50 @@ mod tests {
         let m = console_mesh(1.2, [0.2, 0.4, 0.7]);
         assert!(!m.vertices.is_empty());
         assert!(m.triangle_count() >= 3);
+    }
+
+    #[test]
+    fn bulkhead_with_door_not_empty() {
+        let m = bulkhead_with_door(3.7, -1.0, 1.2, 1.2, 2.0, [0.5; 3]);
+        assert!(!m.vertices.is_empty());
+        // 3 panels (left, right, lintel) x 2 faces (front, back) = 6 quads = 12 triangles
+        assert_eq!(m.triangle_count(), 12);
+    }
+
+    #[test]
+    fn bulkhead_has_door_opening() {
+        let m = bulkhead_with_door(4.0, -1.0, 1.2, 1.2, 2.0, [0.5; 3]);
+        // The door opening goes from x=-0.6 to x=+0.6 and y=-1.0 to y=+1.0.
+        // No vertex should be inside the door opening area on the front face.
+        let hdw = 0.6;
+        let door_top = -1.0 + 2.0; // = 1.0
+        for v in &m.vertices {
+            let x = v.position[0];
+            let y = v.position[1];
+            // No vertex should be strictly inside the door opening
+            let in_door_x = x > -hdw + 0.01 && x < hdw - 0.01;
+            let in_door_y = y > -1.0 + 0.01 && y < door_top - 0.01;
+            assert!(!(in_door_x && in_door_y), "vertex inside door opening: {:?}", v.position);
+        }
+    }
+
+    #[test]
+    fn bulkhead_no_degenerate_triangles() {
+        let m = bulkhead_with_door(3.7, -1.0, 1.2, 1.2, 2.0, [0.5; 3]);
+        for tri in m.indices.chunks_exact(3) {
+            let a = Vec3::from(m.vertices[tri[0] as usize].position);
+            let b = Vec3::from(m.vertices[tri[1] as usize].position);
+            let c = Vec3::from(m.vertices[tri[2] as usize].position);
+            let area = (b - a).cross(c - a).length() / 2.0;
+            assert!(area > 1e-6, "bulkhead triangle should have non-zero area");
+        }
+    }
+
+    #[test]
+    fn bulkhead_no_lintel_when_door_fills_height() {
+        // Door height = ceiling - floor = 2.2m, so no lintel needed
+        let m = bulkhead_with_door(4.0, -1.0, 1.2, 1.2, 2.2, [0.5; 3]);
+        // Only 2 panels (left, right) x 2 faces = 4 quads = 8 triangles
+        assert_eq!(m.triangle_count(), 8);
     }
 }

@@ -26,4 +26,5 @@ pub mod colors {
     pub const AIRLOCK_WARNING: [f32; 3] = [0.65, 0.55, 0.10];
     pub const RADIATOR_FIN: [f32; 3] = [0.22, 0.22, 0.25];
     pub const ANTENNA: [f32; 3] = [0.50, 0.50, 0.52];
+    pub const BULKHEAD: [f32; 3] = [0.42, 0.42, 0.45];
 }

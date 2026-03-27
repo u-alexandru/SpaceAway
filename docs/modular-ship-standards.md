@@ -199,16 +199,12 @@ All values relative to Y=0 (hex ring center):
 | Feature       | Y position | Derivation                       |
 |---------------|------------|----------------------------------|
 | Hull top      | +1.500     | h * 0.5 = 3.0 * 0.5             |
-| Ceiling       | +0.200     | CEILING_Y constant               |
+| Ceiling       | +1.200     | CEILING_Y constant               |
 | Hex center    |  0.000     | Origin                           |
 | Floor         | -1.000     | FLOOR_Y constant                 |
 | Hull bottom   | -1.500     | -h * 0.5 = -3.0 * 0.5           |
 
-The walkable interior height is: ceiling - floor = 0.2 - (-1.0) = **1.2 meters**.
-
-Note: This is quite low for a crewed vessel. If a more realistic interior height is
-desired in the future, adjust FLOOR_Y and CEILING_Y while keeping the hex ring
-centered at Y=0.
+The walkable interior height is: ceiling - floor = 1.2 - (-1.0) = **2.2 meters**.
 
 ### 2.5 Hex Ring Geometry
 
@@ -327,7 +323,7 @@ Every part builder function MUST follow these rules:
 | Rule | Requirement |
 |------|-------------|
 | 4.3.1 | Floor at y = FLOOR_Y (-1.0) |
-| 4.3.2 | Ceiling at y = CEILING_Y (+0.2) |
+| 4.3.2 | Ceiling at y = CEILING_Y (+1.2) |
 | 4.3.3 | Side walls inset WALL_INSET (0.15m) from the hull's [5]-[2] X extent |
 | 4.3.4 | Floor/ceiling/wall width is based on the NARROWER end if tapered |
 | 4.3.5 | Interior spans the full z=[0, length] of the part |
@@ -626,7 +622,7 @@ const STD_WIDTH: f32    = 4.0;    // Standard corridor/passage width
 const ROOM_WIDTH: f32   = 5.0;    // Wide room width
 const STD_HEIGHT: f32   = 3.0;    // Universal hex cross-section height
 const FLOOR_Y: f32      = -1.0;   // Interior floor Y position
-const CEILING_Y: f32    = 0.2;    // Interior ceiling Y position
+const CEILING_Y: f32    = 1.2;    // Interior ceiling Y position (2.2m headroom)
 const WALL_INSET: f32   = 0.15;   // Interior wall offset from hull edge
 const HULL_INSET: f32   = 0.05;   // Interior hull panel offset (Z-fighting)
 const DOOR_W: f32       = 1.2;    // Standard door width
