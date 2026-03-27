@@ -122,7 +122,7 @@ impl Renderer {
         let star_uniforms = StarUniforms {
             view_proj: star_vp.to_cols_array_2d(),
             screen_height: gpu.config.height as f32,
-            _pad0: 0.0,
+            screen_width: gpu.config.width as f32,
             _pad1: 0.0,
             _pad2: 0.0,
         };
@@ -209,43 +209,52 @@ impl Renderer {
             pass.set_bind_group(0, &self.sky_renderer.bind_group, &[]);
             pass.draw(0..6, 0..1);
 
-            // Draw geometry
+            // Draw geometry — collect instance buffers up-front so they
+            // live as long as the render pass (the pass borrows their slices).
+            let instance_buffers: Vec<wgpu::Buffer> = draw_commands
+                .iter()
+                .filter_map(|cmd| {
+                    self.mesh_store.get(cmd.mesh)?;
+                    let col3 = cmd.model_matrix.col(3);
+                    let rebased_translation = Vec3::new(
+                        (col3.x as f64 - cam_pos.x) as f32,
+                        (col3.y as f64 - cam_pos.y) as f32,
+                        (col3.z as f64 - cam_pos.z) as f32,
+                    );
+                    let mut rebased_model = cmd.model_matrix;
+                    rebased_model.col_mut(3).x = rebased_translation.x;
+                    rebased_model.col_mut(3).y = rebased_translation.y;
+                    rebased_model.col_mut(3).z = rebased_translation.z;
+
+                    let instance = InstanceRaw {
+                        model: rebased_model.to_cols_array_2d(),
+                    };
+                    Some(
+                        gpu.device
+                            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                label: Some("Instance Buffer"),
+                                contents: bytemuck::bytes_of(&instance),
+                                usage: wgpu::BufferUsages::VERTEX,
+                            }),
+                    )
+                })
+                .collect();
+
             if !draw_commands.is_empty() {
                 pass.set_pipeline(&self.geometry_pipeline.pipeline);
                 pass.set_bind_group(0, &self.geometry_pipeline.uniform_bind_group, &[]);
 
+                let mut buf_idx = 0;
                 for cmd in draw_commands {
                     if let Some(mesh) = self.mesh_store.get(cmd.mesh) {
-                        // Origin rebasing: subtract camera world position from
-                        // model translation so geometry is camera-relative (f32).
-                        let col3 = cmd.model_matrix.col(3);
-                        let rebased_translation = Vec3::new(
-                            (col3.x as f64 - cam_pos.x) as f32,
-                            (col3.y as f64 - cam_pos.y) as f32,
-                            (col3.z as f64 - cam_pos.z) as f32,
-                        );
-                        let mut rebased_model = cmd.model_matrix;
-                        rebased_model.col_mut(3).x = rebased_translation.x;
-                        rebased_model.col_mut(3).y = rebased_translation.y;
-                        rebased_model.col_mut(3).z = rebased_translation.z;
-
-                        let instance = InstanceRaw {
-                            model: rebased_model.to_cols_array_2d(),
-                        };
-                        let instance_buffer =
-                            gpu.device
-                                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                                    label: Some("Instance Buffer"),
-                                    contents: bytemuck::bytes_of(&instance),
-                                    usage: wgpu::BufferUsages::VERTEX,
-                                });
                         pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-                        pass.set_vertex_buffer(1, instance_buffer.slice(..));
+                        pass.set_vertex_buffer(1, instance_buffers[buf_idx].slice(..));
                         pass.set_index_buffer(
                             mesh.index_buffer.slice(..),
                             wgpu::IndexFormat::Uint32,
                         );
                         pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                        buf_idx += 1;
                     }
                 }
             }

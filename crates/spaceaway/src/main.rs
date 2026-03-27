@@ -404,6 +404,19 @@ impl App {
         };
 
         self.camera.position = WorldPos::new(x, y, z);
+
+        // Move the physics body to the new position so the next frame doesn't
+        // overwrite the camera with the old body position.
+        if let Some(player) = &self.player
+            && let Some(body) = self.physics.get_body_mut(player.body_handle)
+        {
+            body.set_translation(
+                rapier3d::na::Vector3::new(x as f32, y as f32, z as f32),
+                true,
+            );
+            body.set_linvel(rapier3d::na::Vector3::new(0.0, 0.0, 0.0), true);
+        }
+
         let r = (x * x + y * y + z * z).sqrt();
         log::info!(
             "Teleported to ({:.0}, {:.0}, {:.0}) — {:.0} ly from center [{}]",
@@ -568,7 +581,7 @@ impl ApplicationHandler for App {
                     let commands = vec![
                         DrawCommand {
                             mesh: cube,
-                            model_matrix: Mat4::from_translation(Vec3::new(0.0, -0.1, 0.0))
+                            model_matrix: Mat4::from_translation(Vec3::new(0.0, 0.0, 0.0))
                                 * Mat4::from_scale(Vec3::new(50.0, 0.1, 50.0)),
                         },
                         DrawCommand {

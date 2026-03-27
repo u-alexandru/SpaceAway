@@ -39,7 +39,16 @@ fn vs_main(vertex: VertexInput, instance: Instance) -> VertexOutput {
         instance.model_3,
     );
     let world_pos = model * vec4<f32>(vertex.position, 1.0);
-    let world_normal = normalize((model * vec4<f32>(vertex.normal, 0.0)).xyz);
+    // Cofactor matrix for correct normal transform under non-uniform scale
+    let col0 = model[0].xyz;
+    let col1 = model[1].xyz;
+    let col2 = model[2].xyz;
+    let cofactor0 = cross(col1, col2);
+    let cofactor1 = cross(col2, col0);
+    let cofactor2 = cross(col0, col1);
+    let world_normal = normalize(
+        cofactor0 * vertex.normal.x + cofactor1 * vertex.normal.y + cofactor2 * vertex.normal.z
+    );
 
     var out: VertexOutput;
     out.clip_position = uniforms.view_proj * world_pos;

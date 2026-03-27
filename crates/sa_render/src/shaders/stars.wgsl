@@ -1,7 +1,7 @@
 struct StarUniforms {
     view_proj: mat4x4<f32>,
     screen_height: f32,
-    _pad0: f32,
+    screen_width: f32,
     _pad1: f32,
     _pad2: f32,
 };
@@ -46,9 +46,9 @@ fn vs_main(
 
     // Convert to NDC to snap center to pixel grid (reduces flicker)
     let ndc = clip.xy / clip.w;
-    let pixel = ndc * uniforms.screen_height * 0.5;
+    let pixel = vec2<f32>(ndc.x * uniforms.screen_width * 0.5, ndc.y * uniforms.screen_height * 0.5);
     let snapped_pixel = round(pixel);
-    let snapped_ndc = snapped_pixel / (uniforms.screen_height * 0.5);
+    let snapped_ndc = vec2<f32>(snapped_pixel.x / (uniforms.screen_width * 0.5), snapped_pixel.y / (uniforms.screen_height * 0.5));
 
     // Star size: bright stars get a slightly larger quad.
     // Dim stars stay at 1px (crisp point), bright ones up to 2.5px.

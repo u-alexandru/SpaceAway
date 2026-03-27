@@ -15,7 +15,7 @@ pub struct StarVertex {
 pub struct StarUniforms {
     pub view_proj: [[f32; 4]; 4],
     pub screen_height: f32,
-    pub _pad0: f32,
+    pub screen_width: f32,
     pub _pad1: f32,
     pub _pad2: f32,
 }
