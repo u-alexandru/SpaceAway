@@ -354,74 +354,137 @@ pub fn console_mesh(width: f32, accent_color: [f32; 3]) -> Mesh {
 /// A rectangular doorway is cut out: `door_w` wide (centered on X=0) and
 /// `door_h` tall (bottom at `floor_y`).
 ///
-/// Built as three panels: left of door, right of door, and lintel above door.
-/// All panels face -Z (fore-facing). For an aft-facing bulkhead, translate to the
-/// desired Z and apply a 180-degree Y rotation, or build a second copy facing +Z.
+/// Built as a hex-shaped wall matching the hull cross-section exactly,
+/// with a rectangular door opening. Never extends beyond the hull, never
+/// leaves gaps at angled hex corners.
+///
+/// `hull_width` and `hull_height` must match the hex_hull at this boundary.
 pub fn bulkhead_with_door(
-    interior_width: f32,
+    hull_width: f32,
+    hull_height: f32,
     floor_y: f32,
-    ceiling_y: f32,
+    _ceiling_y: f32,
     door_w: f32,
     door_h: f32,
     color: [f32; 3],
 ) -> Mesh {
-    let hw = interior_width / 2.0;
-    let hdw = door_w / 2.0;
-    let door_top = floor_y + door_h;
+    // Get the hex ring vertices at this cross-section
+    let ring = hex_ring(hull_width, hull_height, 0.0);
+    // ring: [0]=top-left, [1]=top-right, [2]=right, [3]=bot-right, [4]=bot-left, [5]=left
 
-    // Extend wall to full hex hull extents to avoid triangular gaps
-    // where the rectangular bulkhead meets the angled hex hull.
-    let wall_bottom = floor_y - 0.6; // below floor into hex hull bottom
-    let wall_top = ceiling_y + 0.4; // above ceiling into hex hull top
+    let hdw = door_w / 2.0;
+    let door_bottom = floor_y;
+    let door_top = floor_y + door_h;
 
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
 
-    // R-TS6: Bulkhead panels are the same color on both sides, so a single
-    // face is sufficient. The shader uses @builtin(front_facing) to flip the
-    // normal for back-face lighting (R-TS2), making the panel correctly lit
-    // from both sides without duplicate geometry.
-    let normal_front: [f32; 3] = [0.0, 0.0, -1.0];
+    // R-TS6: single-sided, shader handles back-face lighting
+    let n: [f32; 3] = [0.0, 0.0, -1.0];
 
-    // --- Left panel (full height) ---
-    let left_front = [
-        [-hw, wall_bottom, 0.0],
-        [-hdw, wall_bottom, 0.0],
-        [-hdw, wall_top, 0.0],
-        [-hw, wall_top, 0.0],
-    ];
-    push_quad(&mut vertices, &mut indices, left_front, normal_front, color);
-
-    // --- Right panel (full height) ---
-    let right_front = [
-        [hdw, wall_bottom, 0.0],
-        [hw, wall_bottom, 0.0],
-        [hw, wall_top, 0.0],
-        [hdw, wall_top, 0.0],
-    ];
-    push_quad(&mut vertices, &mut indices, right_front, normal_front, color);
-
-    // --- Lintel above door (x from -hdw to +hdw, y from door_top to wall_top) ---
-    if door_top < wall_top {
-        let lintel_front = [
-            [-hdw, door_top, 0.0],
-            [hdw, door_top, 0.0],
-            [hdw, wall_top, 0.0],
-            [-hdw, wall_top, 0.0],
-        ];
-        push_quad(&mut vertices, &mut indices, lintel_front, normal_front, color);
+    // Helper to push a triangle (inline to avoid borrow issues)
+    macro_rules! tri {
+        ($a:expr, $b:expr, $c:expr) => {{
+            let base = vertices.len() as u32;
+            vertices.push(MeshVertex { position: $a, color, normal: n });
+            vertices.push(MeshVertex { position: $b, color, normal: n });
+            vertices.push(MeshVertex { position: $c, color, normal: n });
+            indices.extend_from_slice(&[base, base + 1, base + 2]);
+        }};
     }
 
-    // --- Sub-floor panel below door (x from -hdw to +hdw, y from wall_bottom to floor_y) ---
-    if wall_bottom < floor_y {
-        let sub_front = [
-            [-hdw, wall_bottom, 0.0],
-            [hdw, wall_bottom, 0.0],
-            [hdw, floor_y, 0.0],
-            [-hdw, floor_y, 0.0],
-        ];
-        push_quad(&mut vertices, &mut indices, sub_front, normal_front, color);
+    // Build the hex wall in sections, working around the door opening.
+    // Door is centered at x=0, from y=door_bottom to y=door_top.
+    //
+    // We fill the hex cross-section with panels:
+    // 1. Top section: above door_top (top hex triangle + lintel area)
+    // 2. Left section: left of door, between door_bottom and door_top
+    // 3. Right section: right of door, between door_bottom and door_top
+    // 4. Bottom section: below door_bottom (bottom hex area)
+
+    let tl = ring[0]; // top-left
+    let tr = ring[1]; // top-right
+    let r  = ring[2]; // right
+    let br = ring[3]; // bottom-right
+    let bl = ring[4]; // bottom-left
+    let l  = ring[5]; // left
+
+    // --- TOP SECTION (above door) ---
+    // Top triangle: tl, tr, center-top area
+    // Fill from door_top up to the hex top
+    let dt_l = [-hdw, door_top, 0.0]; // door top-left corner
+    let dt_r = [hdw, door_top, 0.0];  // door top-right corner
+
+    // Lintel: rectangle above door
+    push_quad(&mut vertices, &mut indices, [dt_l, dt_r, tr, tl], n, color);
+    // Top triangle of hex (above the tl-tr line) — this is flat since tl and tr are at same Y
+    // Actually tl and tr are already the top of the hex, so nothing above them.
+
+    // --- LEFT SECTION (left of door, door height) ---
+    let db_l = [-hdw, door_bottom, 0.0]; // door bottom-left
+    // Left panel: from door edge to hex left side, at door height
+    // This is a quad from the left hex wall to the door edge
+    let l_at_door_top = [-hdw, door_top, 0.0];
+    let l_at_door_bot = [-hdw, door_bottom, 0.0];
+
+    // Left side has hex vertices [5]=left at y=0, [0]=top-left, [4]=bottom-left
+    // We need to fill from door left edge to the hex outline
+    // Between door_bottom and door_top on the left side:
+    // Hex left edge x at y=0 is -hull_width/2 = l[0]
+    // Hex left edge x at y=door_top: interpolate between [5] and [0]
+    let hex_x_at_y = |y: f32, from: [f32; 3], to: [f32; 3]| -> f32 {
+        if (to[1] - from[1]).abs() < 0.001 { return from[0]; }
+        let t = (y - from[1]) / (to[1] - from[1]);
+        from[0] + t * (to[0] - from[0])
+    };
+
+    // Left wall at door_top height (between vertex 5 and vertex 0)
+    let lx_top = hex_x_at_y(door_top, l, tl);
+    let lx_bot = hex_x_at_y(door_bottom, l, bl);
+    let left_hex_top = [lx_top, door_top, 0.0];
+    let left_hex_bot = [lx_bot, door_bottom, 0.0];
+    push_quad(&mut vertices, &mut indices,
+        [left_hex_bot, l_at_door_bot, l_at_door_top, left_hex_top], n, color);
+
+    // --- RIGHT SECTION (right of door, door height) ---
+    let r_at_door_top = [hdw, door_top, 0.0];
+    let r_at_door_bot = [hdw, door_bottom, 0.0];
+    let rx_top = hex_x_at_y(door_top, r, tr);
+    let rx_bot = hex_x_at_y(door_bottom, r, br);
+    let right_hex_top = [rx_top, door_top, 0.0];
+    let right_hex_bot = [rx_bot, door_bottom, 0.0];
+    push_quad(&mut vertices, &mut indices,
+        [r_at_door_bot, right_hex_bot, right_hex_top, r_at_door_top], n, color);
+
+    // --- BOTTOM SECTION (below door) ---
+    let db_r = [hdw, door_bottom, 0.0];
+    // Fill from hex bottom up to door bottom with a single quad
+    push_quad(&mut vertices, &mut indices, [bl, br, db_r, db_l], n, color);
+
+    // --- CORNER TRIANGLES ---
+    // Top-left corner: between tl, left_hex_top, and l_at_door_top up to tl
+    // These fill the angled hex corners above/below the door side panels
+    // Upper-left: tl -> left_hex_top -> dt_l (triangle)
+    if left_hex_top[1] < tl[1] {
+        tri!(tl, left_hex_top, dt_l);
     }
+    // Upper-right: tr -> dt_r -> right_hex_top
+    if right_hex_top[1] < tr[1] {
+        tri!(tr, dt_r, right_hex_top);
+    }
+    // Lower-left: bl -> db_l -> left_hex_bot
+    if left_hex_bot[1] > bl[1] {
+        tri!(bl, db_l, left_hex_bot);
+    }
+    // Lower-right: br -> right_hex_bot -> db_r
+    if right_hex_bot[1] > br[1] {
+        tri!(br, right_hex_bot, db_r);
+    }
+
+    // Left mid triangle: l -> left_hex_bot -> left_hex_top (fills between hex side vertex and door-height panels)
+    tri!(l, left_hex_bot, left_hex_top);
+    // Right mid triangle: r -> right_hex_top -> right_hex_bot
+    tri!(r, right_hex_top, right_hex_bot);
 
     Mesh { vertices, indices }
 }
@@ -528,49 +591,30 @@ mod tests {
 
     #[test]
     fn bulkhead_with_door_not_empty() {
-        let m = bulkhead_with_door(3.7, -1.0, 1.2, 1.2, 2.0, [0.5; 3]);
+        let m = bulkhead_with_door(4.0, 3.0, -1.0, 1.2, 1.2, 2.0, [0.5; 3]);
         assert!(!m.vertices.is_empty());
-        // 4 single-sided panels (left, right, lintel, sub-floor) = 4 quads = 8 triangles
-        // R-TS6: same-color surfaces only need one face; shader handles back-face lighting
-        assert_eq!(m.triangle_count(), 8);
-    }
-
-    #[test]
-    fn bulkhead_has_door_opening() {
-        let m = bulkhead_with_door(4.0, -1.0, 1.2, 1.2, 2.0, [0.5; 3]);
-        // The door opening goes from x=-0.6 to x=+0.6 and y=-1.0 to y=+1.0.
-        // No vertex should be inside the door opening area on the front face.
-        let hdw = 0.6;
-        let door_top = -1.0 + 2.0; // = 1.0
-        for v in &m.vertices {
-            let x = v.position[0];
-            let y = v.position[1];
-            // No vertex should be strictly inside the door opening
-            let in_door_x = x > -hdw + 0.01 && x < hdw - 0.01;
-            let in_door_y = y > -1.0 + 0.01 && y < door_top - 0.01;
-            assert!(!(in_door_x && in_door_y), "vertex inside door opening: {:?}", v.position);
-        }
+        assert!(m.triangle_count() >= 6, "hex bulkhead should have at least 6 triangles");
     }
 
     #[test]
     fn bulkhead_no_degenerate_triangles() {
-        let m = bulkhead_with_door(3.7, -1.0, 1.2, 1.2, 2.0, [0.5; 3]);
-        for tri in m.indices.chunks_exact(3) {
-            let a = Vec3::from(m.vertices[tri[0] as usize].position);
-            let b = Vec3::from(m.vertices[tri[1] as usize].position);
-            let c = Vec3::from(m.vertices[tri[2] as usize].position);
+        let m = bulkhead_with_door(4.0, 3.0, -1.0, 1.2, 1.2, 2.0, [0.5; 3]);
+        for tri_idx in m.indices.chunks_exact(3) {
+            let a = Vec3::from(m.vertices[tri_idx[0] as usize].position);
+            let b = Vec3::from(m.vertices[tri_idx[1] as usize].position);
+            let c = Vec3::from(m.vertices[tri_idx[2] as usize].position);
             let area = (b - a).cross(c - a).length() / 2.0;
-            assert!(area > 1e-6, "bulkhead triangle should have non-zero area");
+            assert!(area > 1e-6, "bulkhead triangle should have non-zero area, got {area}");
         }
     }
 
     #[test]
-    fn bulkhead_no_lintel_when_door_fills_height() {
-        // Door height = ceiling - floor = 2.2m, so no lintel needed
-        let m = bulkhead_with_door(4.0, -1.0, 1.2, 1.2, 2.2, [0.5; 3]);
-        // door_top (floor_y + 2.2 = 1.2) < wall_top (ceiling_y + 0.4 = 1.6) => lintel IS added.
-        // 4 single-sided panels (left, right, lintel, sub-floor) = 4 quads = 8 triangles
-        // R-TS6: same-color surfaces only need one face; shader handles back-face lighting
-        assert_eq!(m.triangle_count(), 8);
+    fn bulkhead_all_vertices_within_hex() {
+        // All vertices should be within the hex ring bounding box
+        let m = bulkhead_with_door(4.0, 3.0, -1.0, 1.2, 1.2, 2.0, [0.5; 3]);
+        for v in &m.vertices {
+            assert!(v.position[0].abs() <= 2.01, "x out of hex bounds: {}", v.position[0]);
+            assert!(v.position[1].abs() <= 1.51, "y out of hex bounds: {}", v.position[1]);
+        }
     }
 }

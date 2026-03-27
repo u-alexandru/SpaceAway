@@ -54,8 +54,8 @@ pub fn hull_cockpit() -> Part {
     meshes.push(hull::interior_floor(interior_w, length, FLOOR_Y, colors::FLOOR));
     meshes.push(hull::interior_ceiling(interior_w, length, CEILING_Y, colors::CEILING));
 
-    // Bulkhead with door at aft
-    let bulkhead = hull::bulkhead_with_door(interior_w, FLOOR_Y, CEILING_Y, DOOR_W, DOOR_H, colors::BULKHEAD);
+    // Bulkhead with door at aft (use back_w since that's the hull width at z=length)
+    let bulkhead = hull::bulkhead_with_door(back_w, STD_HEIGHT, FLOOR_Y, CEILING_Y, DOOR_W, DOOR_H, colors::BULKHEAD);
     let bulkhead = bulkhead.transform(Mat4::from_translation(Vec3::new(0.0, 0.0, length)));
     meshes.push(bulkhead);
 
@@ -100,10 +100,10 @@ pub fn hull_corridor(length: f32) -> Part {
     meshes.push(hull::interior_ceiling(interior_w, length, CEILING_Y, colors::CEILING));
 
     // Bulkheads with doors at both ends
-    let bulkhead_fore = hull::bulkhead_with_door(interior_w, FLOOR_Y, CEILING_Y, DOOR_W, DOOR_H, colors::BULKHEAD);
+    let bulkhead_fore = hull::bulkhead_with_door(STD_WIDTH, STD_HEIGHT, FLOOR_Y, CEILING_Y, DOOR_W, DOOR_H, colors::BULKHEAD);
     meshes.push(bulkhead_fore);
 
-    let bulkhead_aft = hull::bulkhead_with_door(interior_w, FLOOR_Y, CEILING_Y, DOOR_W, DOOR_H, colors::BULKHEAD);
+    let bulkhead_aft = hull::bulkhead_with_door(STD_WIDTH, STD_HEIGHT, FLOOR_Y, CEILING_Y, DOOR_W, DOOR_H, colors::BULKHEAD);
     let bulkhead_aft = bulkhead_aft.transform(Mat4::from_translation(Vec3::new(0.0, 0.0, length)));
     meshes.push(bulkhead_aft);
 
@@ -199,10 +199,10 @@ pub fn hull_room(
     // Furniture (consoles, chairs) will be added as separate objects later
 
     // Bulkheads with doors at fore and aft
-    let bulkhead_fore = hull::bulkhead_with_door(interior_w, FLOOR_Y, CEILING_Y, DOOR_W, DOOR_H, colors::BULKHEAD);
+    let bulkhead_fore = hull::bulkhead_with_door(ROOM_WIDTH, STD_HEIGHT, FLOOR_Y, CEILING_Y, DOOR_W, DOOR_H, colors::BULKHEAD);
     meshes.push(bulkhead_fore);
 
-    let bulkhead_aft = hull::bulkhead_with_door(interior_w, FLOOR_Y, CEILING_Y, DOOR_W, DOOR_H, colors::BULKHEAD);
+    let bulkhead_aft = hull::bulkhead_with_door(ROOM_WIDTH, STD_HEIGHT, FLOOR_Y, CEILING_Y, DOOR_W, DOOR_H, colors::BULKHEAD);
     let bulkhead_aft = bulkhead_aft.transform(Mat4::from_translation(Vec3::new(0.0, 0.0, room_len)));
     meshes.push(bulkhead_aft);
 
@@ -320,7 +320,7 @@ pub fn hull_engine_section() -> Part {
     // Furniture (engine console) will be added as separate objects later
 
     // Bulkhead with door at fore
-    let bulkhead = hull::bulkhead_with_door(interior_w, FLOOR_Y, CEILING_Y, DOOR_W, DOOR_H, colors::BULKHEAD);
+    let bulkhead = hull::bulkhead_with_door(front_w, STD_HEIGHT, FLOOR_Y, CEILING_Y, DOOR_W, DOOR_H, colors::BULKHEAD);
     meshes.push(bulkhead);
 
     // Engine nacelles
@@ -390,11 +390,11 @@ pub fn hull_airlock() -> Part {
     meshes.push(hull::interior_ceiling(interior_w, length, CEILING_Y, colors::CEILING));
 
     // Inner bulkhead with door
-    let bulkhead_inner = hull::bulkhead_with_door(interior_w, FLOOR_Y, CEILING_Y, DOOR_W, DOOR_H, colors::BULKHEAD);
+    let bulkhead_inner = hull::bulkhead_with_door(w, STD_HEIGHT, FLOOR_Y, CEILING_Y, DOOR_W, DOOR_H, colors::BULKHEAD);
     meshes.push(bulkhead_inner);
 
     // Outer bulkhead with door (airlock warning color)
-    let bulkhead_outer = hull::bulkhead_with_door(interior_w, FLOOR_Y, CEILING_Y, DOOR_W, DOOR_H, colors::AIRLOCK_WARNING);
+    let bulkhead_outer = hull::bulkhead_with_door(w, STD_HEIGHT, FLOOR_Y, CEILING_Y, DOOR_W, DOOR_H, colors::AIRLOCK_WARNING);
     let bulkhead_outer = bulkhead_outer.transform(Mat4::from_translation(Vec3::new(0.0, 0.0, length)));
     meshes.push(bulkhead_outer);
 
