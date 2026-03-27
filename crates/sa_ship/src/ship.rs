@@ -40,11 +40,13 @@ impl Ship {
             .build();
         let body_handle = physics.add_rigid_body(body);
 
-        // Attach a large box collider for the ship hull (rough approximation).
-        // Width ~5m, height ~3m, length ~30m.
-        // Use `.mass()` to set the ship mass directly on the collider.
+        // Hull collider is a SENSOR — provides mass/inertia but doesn't
+        // generate contact forces. The player walks on a separate floor
+        // collider added in ship_setup. A solid hull collider would
+        // trap/eject the player since they spawn inside it.
         let collider = ColliderBuilder::cuboid(2.5, 1.5, 15.0)
             .mass(Self::MASS)
+            .sensor(true)
             .build();
         physics.add_collider(collider, body_handle);
 
