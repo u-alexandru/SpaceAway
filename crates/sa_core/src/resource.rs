@@ -50,6 +50,7 @@ impl HandleGenerator {
         Self { next_id: 0 }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn next<T>(&mut self) -> Handle<T> {
         let id = self.next_id;
         self.next_id += 1;
