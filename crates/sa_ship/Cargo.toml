@@ -12,3 +12,4 @@ sa_input.workspace = true
 rapier3d.workspace = true
 glam.workspace = true
 nalgebra.workspace = true
+winit.workspace = true
