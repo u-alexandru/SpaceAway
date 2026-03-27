@@ -7,6 +7,7 @@ pub mod hull;
 pub mod ship_parts;
 pub mod validate;
 pub mod interactables;
+pub mod auto_collider;
 
 pub use mesh::{Mesh, MeshVertex};
 

@@ -124,7 +124,6 @@ impl InteractionSystem {
         left_pressed: bool,
         left_just_released: bool,
         physics: &sa_physics::PhysicsWorld,
-        exclude_collider: Option<ColliderHandle>,
     ) -> Option<InteractableId> {
         let mut helm_seat_clicked = None;
 
@@ -132,12 +131,13 @@ impl InteractionSystem {
         let origin = nalgebra::Point3::new(ray_origin[0], ray_origin[1], ray_origin[2]);
         let direction = nalgebra::Vector3::new(ray_dir[0], ray_dir[1], ray_dir[2]);
 
-        // Only hit sensors, and exclude the hull sensor collider which the
-        // player is always inside of.
-        let mut filter = QueryFilter::default().exclude_solids();
-        if let Some(excluded) = exclude_collider {
-            filter = filter.exclude_collider(excluded);
-        }
+        // Filter to sensors only (exclude solid interior/wall colliders).
+        // Among sensors, only interactable colliders are registered in
+        // collider_to_id, so any hull sensor hit resolves harmlessly to None.
+        // The hull sensor (GROUP_1, filter=NONE) and interactable sensors
+        // (GROUP_4, filter=NONE) are both sensors, but only interactables
+        // have entries in the collider_to_id map.
+        let filter = QueryFilter::default().exclude_solids();
 
         let hit = physics.cast_ray(origin, direction, self.max_range, true, filter);
 

@@ -8,6 +8,8 @@ use sa_ship::interaction::InteractionSystem;
 use sa_ship::ship::Ship;
 use sa_ship::station::{cockpit_layout, PlacementKind};
 
+use crate::ship_colliders::INTERACTABLE;
+
 /// IDs for the key interactables, so the game loop can read their state.
 #[allow(dead_code)]
 pub struct ShipInteractableIds {
@@ -51,6 +53,8 @@ pub fn create_ship_and_interactables(
     for placement in &layout.interactables {
         // Create a sensor collider for raycast detection.
         // Sensors don't generate contact forces --- they only detect raycasts.
+        // Uses INTERACTABLE collision group so the interaction raycast can
+        // filter exclusively to this group, avoiding hits on hull/interior.
         let half = placement.collider_half_extents;
         let collider = ColliderBuilder::cuboid(half.x, half.y, half.z)
             .translation(nalgebra::Vector3::new(
@@ -59,6 +63,10 @@ pub fn create_ship_and_interactables(
                 placement.position.z,
             ))
             .sensor(true)
+            .collision_groups(InteractionGroups::new(
+                INTERACTABLE,  // membership: this is an interactable sensor
+                Group::NONE,   // filter: no contact forces (sensor only, detected by raycast)
+            ))
             .build();
         let collider_handle = physics.add_collider(collider, ship.body_handle);
 

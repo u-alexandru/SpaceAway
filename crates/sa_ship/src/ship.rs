@@ -46,15 +46,17 @@ impl Ship {
         // generate contact forces. The player walks on a separate floor
         // collider added in ship_setup. A solid hull collider would
         // trap/eject the player since they spawn inside it.
-        // Hull sensor: provides mass/inertia only. Uses collision group 0x0002
-        // (bit 1) so the interaction raycast (group 0x0001) ignores it.
-        // Interactable sensors use default group (0xFFFF) so they ARE hit.
+        // Hull sensor: provides mass/inertia only. Uses SHIP_HULL group
+        // (GROUP_1 = 0x0001) per collision-system-standards.md.
+        // Filter is NONE: no contact forces, pure mass provider.
+        // Interaction raycasts filter to INTERACTABLE group only, so this
+        // is automatically excluded without needing per-collider exclusion.
         let collider = ColliderBuilder::cuboid(2.5, 1.5, 15.0)
             .mass(Self::MASS)
             .sensor(true)
             .collision_groups(InteractionGroups::new(
-                Group::GROUP_2,  // this collider is in group 2
-                Group::NONE,     // it interacts with nothing (pure mass provider)
+                Group::GROUP_1,  // SHIP_HULL: hull sensor group
+                Group::NONE,     // interacts with nothing (pure mass provider)
             ))
             .build();
         let hull_collider = physics.add_collider(collider, body_handle);

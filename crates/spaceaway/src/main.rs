@@ -801,9 +801,9 @@ impl ApplicationHandler for App {
 
                         let (_, mouse_dy) = self.input.mouse.delta();
 
-                        // Exclude the ship hull sensor from raycasts — the player
-                        // is always inside it, so it would block all interactables.
-                        let exclude = self.ship.as_ref().map(|s| s.hull_collider);
+                        // Collision groups handle filtering: exclude_solids()
+                        // limits to sensors, and only interactable sensors are
+                        // registered in the collider_to_id map.
                         let helm_clicked = interaction.update(
                             ray_origin,
                             ray_dir,
@@ -812,7 +812,6 @@ impl ApplicationHandler for App {
                             self.input.mouse.left_pressed(),
                             self.input.mouse.left_just_released(),
                             &self.physics,
-                            exclude,
                         );
 
                         // If helm seat was clicked, enter seated mode
