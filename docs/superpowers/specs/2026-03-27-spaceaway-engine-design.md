@@ -379,3 +379,20 @@ Minimal. Ambient drones that emerge and fade based on context (approaching anoma
 - `cargo test --workspace` on every push
 - Cross-compile check for Windows target on macOS CI
 - No manual steps
+
+## Implementation Status
+
+Current as of 2026-03-27.
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| Phase 1 | Foundation — workspace, sa_core, sa_math, sa_ecs, sa_input, event bus, unit types, coordinate system | ✓ Complete |
+| Phase 2 | Renderer — sa_render, wgpu pipeline, flat-shaded low-poly, star field point rendering, two-sided rendering | ✓ Complete |
+| Phase 3 | Physics & Player — sa_physics (rapier3d), sa_player, first-person camera, fly mode | ✓ Complete |
+| Phase 4 | Procedural Universe — sa_universe, H-R diagram star generation, planetary systems, xxHash64 seeding, Poisson-disk star placement, origin rebasing | ✓ Complete |
+| Phase 4.5 | Galaxy Structure — galaxy density model, dust lanes, nebulae, distant galaxies, teleport viewpoints | ✓ Complete |
+| Phase 5 | Ship Systems — sa_meshgen mesh generation complete, all ship parts built (cockpit, corridors, rooms, transitions, engine, airlock), modular assembly system, two-sided rendering standard established; game systems (ship simulation, stations, survival) next | IN PROGRESS |
+| Phase 6 | Networking — sa_net, P2P host model, quinn/QUIC, state sync | Planned |
+| Phase 7 | Audio — sa_audio, kira, spatial audio, interior/exterior sound model | Planned |
+
+Phases not yet started: sa_ship (ship simulation, stations), sa_survival (power, life support), planet landing, volumetric nebulae, GPU terrain.
