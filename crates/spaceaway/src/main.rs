@@ -52,6 +52,19 @@ const STAR_REGEN_THRESHOLD: f64 = 500.0;
 /// Number of sectors to query in each direction around the observer.
 const STAR_QUERY_RADIUS: i32 = 5;
 
+/// Per-frame performance timings in microseconds.
+#[derive(Default)]
+struct PerfTimings {
+    player_us: u64,
+    physics_us: u64,
+    stars_us: u64,
+    render_us: u64,
+    total_us: u64,
+    fps: f64,
+    star_count: u32,
+    draw_calls: u32,
+}
+
 struct App {
     window: Option<Arc<Window>>,
     gpu: Option<GpuContext>,
@@ -68,11 +81,10 @@ struct App {
     physics: PhysicsWorld,
     player: Option<PlayerController>,
     universe: Universe,
-    /// The observer position at which the star field was last generated,
-    /// used to decide when the buffer needs rebuilding.
     last_star_gen_pos: WorldPos,
-    /// Whether the initial star field has been pushed to the GPU yet.
     stars_initialised: bool,
+    perf: PerfTimings,
+    perf_update_timer: f64,
 }
 
 impl App {
@@ -116,6 +128,8 @@ impl App {
             universe,
             last_star_gen_pos: WorldPos::ORIGIN,
             stars_initialised: false,
+            perf: PerfTimings::default(),
+            perf_update_timer: 0.0,
         }
     }
 
@@ -124,32 +138,6 @@ impl App {
         let gpu = self.gpu.as_ref().unwrap();
         let handle = renderer.mesh_store.upload(&gpu.device, &make_cube());
         self.cube_mesh = Some(handle);
-    }
-
-    fn update(&mut self) {
-        let dt = self.time.delta_seconds() as f32;
-
-        // Update player controller (reads input, sets velocity)
-        if let Some(player) = &mut self.player {
-            player.update(&mut self.physics, &self.input, dt);
-        }
-
-        // Step physics (clamp dt to prevent explosion on first frame or lag spikes)
-        let physics_dt = dt.min(1.0 / 30.0);
-        if physics_dt > 0.0 {
-            self.physics.step(physics_dt);
-        }
-
-        // Sync camera from player
-        if let Some(player) = &self.player {
-            self.camera.position = player.position(&self.physics);
-            self.camera.yaw = player.yaw;
-            self.camera.pitch = player.pitch;
-        }
-
-        // Regenerate star field from the procedural universe when the player
-        // has moved far enough or on first frame after the GPU is ready.
-        self.maybe_regenerate_stars();
     }
 
     /// Rebuild the GPU star buffer from the procedural universe if the observer
@@ -248,45 +236,97 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
-                let now = Instant::now();
+                let frame_start = Instant::now();
+                let now = frame_start;
                 self.time.advance(now - self.last_frame);
                 self.last_frame = now;
                 self.schedule
                     .run(&mut self.world, &mut self.events, &self.time);
-                self.update();
 
+                // --- Player + Physics ---
+                let t0 = Instant::now();
+                let dt = self.time.delta_seconds() as f32;
+                if let Some(player) = &mut self.player {
+                    player.update(&mut self.physics, &self.input, dt);
+                }
+                self.perf.player_us = t0.elapsed().as_micros() as u64;
+
+                let t1 = Instant::now();
+                let physics_dt = dt.min(1.0 / 30.0);
+                if physics_dt > 0.0 {
+                    self.physics.step(physics_dt);
+                }
+                self.perf.physics_us = t1.elapsed().as_micros() as u64;
+
+                if let Some(player) = &self.player {
+                    self.camera.position = player.position(&self.physics);
+                    self.camera.yaw = player.yaw;
+                    self.camera.pitch = player.pitch;
+                }
+
+                // --- Star regen ---
+                let t2 = Instant::now();
+                self.maybe_regenerate_stars();
+                self.perf.stars_us = t2.elapsed().as_micros() as u64;
+
+                // --- Render ---
+                let t3 = Instant::now();
                 if let (Some(gpu), Some(renderer), Some(cube)) =
                     (&self.gpu, &self.renderer, self.cube_mesh)
                 {
                     let commands = vec![
-                        // Ground plane: flat scaled cube at y=0
                         DrawCommand {
                             mesh: cube,
                             model_matrix: Mat4::from_translation(Vec3::new(0.0, -0.1, 0.0))
                                 * Mat4::from_scale(Vec3::new(50.0, 0.1, 50.0)),
                         },
-                        // Box obstacle 1
                         DrawCommand {
                             mesh: cube,
                             model_matrix: Mat4::from_translation(Vec3::new(5.0, 1.0, -3.0)),
                         },
-                        // Box obstacle 2
                         DrawCommand {
                             mesh: cube,
                             model_matrix: Mat4::from_translation(Vec3::new(-4.0, 1.0, -6.0)),
                         },
-                        // Box obstacle 3
                         DrawCommand {
                             mesh: cube,
                             model_matrix: Mat4::from_translation(Vec3::new(2.0, 1.0, -10.0)),
                         },
                     ];
+                    self.perf.draw_calls = commands.len() as u32;
+                    self.perf.star_count = renderer.star_field.star_count;
                     renderer.render_frame(
                         gpu,
                         &self.camera,
                         &commands,
                         Vec3::new(0.5, -0.8, -0.3),
                     );
+                }
+                self.perf.render_us = t3.elapsed().as_micros() as u64;
+                self.perf.total_us = frame_start.elapsed().as_micros() as u64;
+
+                let dt_secs = self.time.delta_seconds();
+                if dt_secs > 0.0 {
+                    self.perf.fps = 1.0 / dt_secs;
+                }
+
+                // Update window title with perf stats every 0.5s
+                self.perf_update_timer += dt_secs;
+                if self.perf_update_timer >= 0.5 {
+                    self.perf_update_timer = 0.0;
+                    if let Some(window) = &self.window {
+                        window.set_title(&format!(
+                            "SpaceAway | {:.0} FPS | frame {:.1}ms | player {:.1}ms | physics {:.1}ms | stars {:.1}ms ({}) | render {:.1}ms | draws {}",
+                            self.perf.fps,
+                            self.perf.total_us as f64 / 1000.0,
+                            self.perf.player_us as f64 / 1000.0,
+                            self.perf.physics_us as f64 / 1000.0,
+                            self.perf.stars_us as f64 / 1000.0,
+                            self.perf.star_count,
+                            self.perf.render_us as f64 / 1000.0,
+                            self.perf.draw_calls,
+                        ));
+                    }
                 }
 
                 self.events.flush();
