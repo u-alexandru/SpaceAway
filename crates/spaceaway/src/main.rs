@@ -2,6 +2,8 @@ use glam::{Mat4, Vec3};
 use sa_core::{EventBus, FrameTime};
 use sa_ecs::{GameWorld, Schedule};
 use sa_input::InputState;
+use sa_physics::PhysicsWorld;
+use sa_player::PlayerController;
 use sa_render::{Camera, DrawCommand, GpuContext, MeshData, Renderer, Vertex};
 use std::sync::Arc;
 use std::time::Instant;
@@ -24,12 +26,32 @@ struct App {
     last_frame: Instant,
     cube_mesh: Option<sa_core::Handle<sa_render::MeshMarker>>,
     cursor_grabbed: bool,
+    physics: PhysicsWorld,
+    player: Option<PlayerController>,
 }
 
 impl App {
     fn new() -> Self {
-        let mut camera = Camera::new();
-        camera.position = sa_math::WorldPos::new(0.0, 2.0, 10.0);
+        let mut physics = PhysicsWorld::new();
+
+        // Add ground plane at y=0
+        sa_physics::add_ground(&mut physics, 0.0);
+
+        // Add 3 static box obstacles
+        let obs1 = sa_physics::spawn_static_body(&mut physics, 5.0, 1.0, -3.0);
+        sa_physics::attach_box_collider(&mut physics, obs1, 1.0, 1.0, 1.0);
+
+        let obs2 = sa_physics::spawn_static_body(&mut physics, -4.0, 1.0, -6.0);
+        sa_physics::attach_box_collider(&mut physics, obs2, 1.0, 1.0, 1.0);
+
+        let obs3 = sa_physics::spawn_static_body(&mut physics, 2.0, 1.0, -10.0);
+        sa_physics::attach_box_collider(&mut physics, obs3, 1.0, 1.0, 1.0);
+
+        // Spawn player at (0, 2, 10)
+        let player = PlayerController::spawn(&mut physics, 0.0, 2.0, 10.0);
+
+        let camera = Camera::new();
+
         Self {
             window: None,
             gpu: None,
@@ -43,6 +65,8 @@ impl App {
             last_frame: Instant::now(),
             cube_mesh: None,
             cursor_grabbed: false,
+            physics,
+            player: Some(player),
         }
     }
 
@@ -55,28 +79,22 @@ impl App {
 
     fn update(&mut self) {
         let dt = self.time.delta_seconds() as f32;
-        let speed = 10.0 * dt;
-        if self.input.keyboard.is_pressed(KeyCode::KeyW) {
-            self.camera.move_forward(speed);
-        }
-        if self.input.keyboard.is_pressed(KeyCode::KeyS) {
-            self.camera.move_forward(-speed);
-        }
-        if self.input.keyboard.is_pressed(KeyCode::KeyA) {
-            self.camera.move_right(-speed);
-        }
-        if self.input.keyboard.is_pressed(KeyCode::KeyD) {
-            self.camera.move_right(speed);
-        }
-        if self.input.keyboard.is_pressed(KeyCode::Space) {
-            self.camera.move_up(speed);
-        }
-        if self.input.keyboard.is_pressed(KeyCode::ShiftLeft) {
-            self.camera.move_up(-speed);
+
+        // Update player controller (reads input, sets velocity)
+        if let Some(player) = &mut self.player {
+            player.update(&mut self.physics, &self.input, dt);
         }
 
-        let (dx, dy) = self.input.mouse.delta();
-        self.camera.rotate(dx * 0.003, -dy * 0.003);
+        // Step physics
+        self.physics.step(dt);
+
+        // Sync camera from player
+        if let Some(player) = &self.player {
+            let pos = player.position(&self.physics);
+            self.camera.position = pos;
+            self.camera.yaw = player.yaw;
+            self.camera.pitch = player.pitch;
+        }
     }
 
     fn grab_cursor(&mut self) {
@@ -155,23 +173,26 @@ impl ApplicationHandler for App {
                     (&self.gpu, &self.renderer, self.cube_mesh)
                 {
                     let commands = vec![
+                        // Ground plane: flat scaled cube at y=0
                         DrawCommand {
                             mesh: cube,
-                            model_matrix: Mat4::from_translation(Vec3::new(0.0, 0.0, 0.0)),
+                            model_matrix: Mat4::from_translation(Vec3::new(0.0, -0.1, 0.0))
+                                * Mat4::from_scale(Vec3::new(50.0, 0.1, 50.0)),
                         },
+                        // Box obstacle 1
                         DrawCommand {
                             mesh: cube,
-                            model_matrix: Mat4::from_translation(Vec3::new(5.0, 0.0, -3.0)),
+                            model_matrix: Mat4::from_translation(Vec3::new(5.0, 1.0, -3.0)),
                         },
+                        // Box obstacle 2
                         DrawCommand {
                             mesh: cube,
-                            model_matrix: Mat4::from_translation(Vec3::new(-4.0, 1.0, -6.0))
-                                * Mat4::from_rotation_y(0.5),
+                            model_matrix: Mat4::from_translation(Vec3::new(-4.0, 1.0, -6.0)),
                         },
+                        // Box obstacle 3
                         DrawCommand {
                             mesh: cube,
-                            model_matrix: Mat4::from_translation(Vec3::new(2.0, -1.0, -10.0))
-                                * Mat4::from_scale(Vec3::splat(2.0)),
+                            model_matrix: Mat4::from_translation(Vec3::new(2.0, 1.0, -10.0)),
                         },
                     ];
                     renderer.render_frame(
