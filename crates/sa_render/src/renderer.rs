@@ -20,6 +20,7 @@ pub struct Renderer {
     pub milky_way_cubemap: MilkyWayCubemap,
     pub star_field: StarField,
     pub nebula_renderer: NebulaRenderer,
+    pub galaxy_renderer: NebulaRenderer,
     pub mesh_store: MeshStore,
 }
 
@@ -36,12 +37,14 @@ impl Renderer {
         let stars = crate::star_field::generate_stars(4000, 42);
         let star_field = StarField::new(&gpu.device, gpu.config.format, &stars);
         let nebula_renderer = NebulaRenderer::new(&gpu.device, gpu.config.format);
+        let galaxy_renderer = NebulaRenderer::new(&gpu.device, gpu.config.format);
         Self {
             geometry_pipeline,
             sky_renderer,
             milky_way_cubemap,
             star_field,
             nebula_renderer,
+            galaxy_renderer,
             mesh_store: MeshStore::new(),
         }
     }
@@ -142,6 +145,11 @@ impl Renderer {
         };
         gpu.queue.write_buffer(
             &self.nebula_renderer.uniform_buffer,
+            0,
+            bytemuck::bytes_of(&nebula_uniforms),
+        );
+        gpu.queue.write_buffer(
+            &self.galaxy_renderer.uniform_buffer,
             0,
             bytemuck::bytes_of(&nebula_uniforms),
         );
@@ -250,6 +258,8 @@ impl Renderer {
             // Draw nebulae (after stars, alpha blended, no depth write)
             self.nebula_renderer.render(&mut pass);
 
+            // Draw distant galaxies (same pipeline as nebulae, smaller/dimmer)
+            self.galaxy_renderer.render(&mut pass);
         }
 
         gpu.queue.submit(std::iter::once(encoder.finish()));
