@@ -6,6 +6,7 @@ pub mod assembly;
 pub mod hull;
 pub mod ship_parts;
 pub mod validate;
+pub mod interactables;
 
 pub use mesh::{Mesh, MeshVertex};
 
