@@ -1,3 +1,5 @@
+mod ship_setup;
+
 use glam::{Mat4, Vec3};
 use sa_core::{EventBus, FrameTime};
 use sa_ecs::{GameWorld, Schedule};
@@ -8,6 +10,9 @@ use sa_player::PlayerController;
 use sa_render::{
     Camera, DrawCommand, GpuContext, MeshData, NebulaInstance, Renderer, StarVertex, Vertex,
 };
+use sa_ship::helm::HelmController;
+use sa_ship::interaction::InteractionSystem;
+use sa_ship::ship::Ship;
 use sa_universe::{MasterSeed, Universe, VisibleStar};
 use std::sync::Arc;
 use std::time::Instant;
@@ -178,33 +183,39 @@ struct App {
     teleport_counter: u64,
     fly_mode: bool,
     fly_speed: f64, // light-years per second
-    /// Current ship part mesh handle (for key 6/7 viewing).
+    /// Current ship part mesh handle (for key 6/7 viewing, also the hull in normal mode).
     ship_part_mesh: Option<sa_core::Handle<sa_render::MeshMarker>>,
     /// Index into all_ship_parts() for cycling (key 6).
     ship_part_index: usize,
     /// View mode: 0=normal scene, 6=single ship part, 7=full ship.
     view_mode: u8,
+    /// Ship entity (physics body + propulsion state).
+    ship: Option<Ship>,
+    /// Interaction system for ship interactables.
+    interaction: Option<InteractionSystem>,
+    /// IDs of key interactables for game-loop wiring.
+    ship_ids: Option<ship_setup::ShipInteractableIds>,
+    /// Helm controller for seated flight mode.
+    helm: Option<HelmController>,
+    /// GPU mesh handles for interactable objects.
+    interactable_meshes: Vec<sa_core::Handle<sa_render::MeshMarker>>,
 }
 
 impl App {
     fn new() -> Self {
-        let mut physics = PhysicsWorld::new();
+        // Zero gravity for space
+        let mut physics = PhysicsWorld::with_gravity(0.0, 0.0, 0.0);
 
-        // Add ground plane at y=0
-        sa_physics::add_ground(&mut physics, 0.0);
+        // Create ship and interactables
+        let (ship, interaction, ids) =
+            ship_setup::create_ship_and_interactables(&mut physics);
 
-        // Add 3 static box obstacles
-        let obs1 = sa_physics::spawn_static_body(&mut physics, 5.0, 1.0, -3.0);
-        sa_physics::attach_box_collider(&mut physics, obs1, 1.0, 1.0, 1.0);
+        // Helm controller: viewpoint is cockpit seat position + eye height
+        let helm = HelmController::new(glam::Vec3::new(0.0, 0.3, 1.5));
 
-        let obs2 = sa_physics::spawn_static_body(&mut physics, -4.0, 1.0, -6.0);
-        sa_physics::attach_box_collider(&mut physics, obs2, 1.0, 1.0, 1.0);
-
-        let obs3 = sa_physics::spawn_static_body(&mut physics, 2.0, 1.0, -10.0);
-        sa_physics::attach_box_collider(&mut physics, obs3, 1.0, 1.0, 1.0);
-
-        // Spawn player at (0, 2, 10)
-        let player = PlayerController::spawn(&mut physics, 0.0, 2.0, 10.0);
+        // Spawn player inside the cockpit (near the helm seat)
+        // Player gets simulated gravity via force each frame
+        let player = PlayerController::spawn(&mut physics, 0.0, 0.0, 2.5);
 
         let camera = Camera::new();
         let universe = Universe::new(MasterSeed(42));
@@ -233,10 +244,15 @@ impl App {
             perf_update_timer: 0.0,
             teleport_counter: 0,
             fly_mode: false,
-            fly_speed: 5.0, // 5 m/s default for ship inspection. Press + to go faster.
+            fly_speed: 5.0,
             ship_part_mesh: None,
             ship_part_index: 0,
             view_mode: 0,
+            ship: Some(ship),
+            interaction: Some(interaction),
+            ship_ids: Some(ids),
+            helm: Some(helm),
+            interactable_meshes: Vec::new(),
         }
     }
 
@@ -266,6 +282,23 @@ impl App {
         log::info!(
             "Uploaded {} distant galaxy instances",
             galaxy_instances.len(),
+        );
+
+        // Generate and upload ship hull mesh
+        let ship_meshes = ship_setup::generate_ship_meshes();
+        let hull_data = meshgen_to_render(&ship_meshes.hull);
+        let hull_handle = renderer.mesh_store.upload(&gpu.device, &hull_data);
+        self.ship_part_mesh = Some(hull_handle);
+
+        // Upload interactable meshes
+        for (mesh, _pos) in &ship_meshes.interactable_meshes {
+            let data = meshgen_to_render(mesh);
+            let handle = renderer.mesh_store.upload(&gpu.device, &data);
+            self.interactable_meshes.push(handle);
+        }
+        log::info!(
+            "Uploaded ship hull + {} interactable meshes",
+            self.interactable_meshes.len(),
         );
     }
 
@@ -539,7 +572,7 @@ impl ApplicationHandler for App {
                 self.schedule
                     .run(&mut self.world, &mut self.events, &self.time);
 
-                // --- Player + Physics ---
+                // --- Player + Physics + Helm ---
                 let t0 = Instant::now();
                 let dt = self.time.delta_seconds() as f32;
 
@@ -577,10 +610,59 @@ impl ApplicationHandler for App {
                     if self.input.keyboard.is_pressed(KC::ShiftLeft) {
                         self.camera.position.y -= speed;
                     }
+                } else if self.helm.as_ref().map(|h| h.is_seated()).unwrap_or(false) {
+                    // --- Seated at helm: control ship ---
+                    if let Some(ship) = &self.ship {
+                        // Reset forces each frame so only current input applies
+                        ship.reset_forces(&mut self.physics);
+
+                        let wants_stand = if let Some(helm) = &self.helm {
+                            helm.update_seated(ship, &mut self.physics, &self.input, dt)
+                        } else {
+                            false
+                        };
+
+                        if wants_stand
+                            && let Some(helm) = &mut self.helm
+                        {
+                            helm.stand_up();
+                            // Re-enable player physics body
+                            if let Some(player) = &self.player
+                                && let Some(body) = self.physics.get_body_mut(player.body_handle)
+                            {
+                                body.set_enabled(true);
+                            }
+                            log::info!("Left helm seated mode");
+                        }
+                    }
+
+                    // Physics step
+                    let physics_dt = dt.min(1.0 / 30.0);
+                    if physics_dt > 0.0 {
+                        self.physics.step(physics_dt);
+                    }
+
+                    // Camera follows ship orientation
+                    if let (Some(helm), Some(ship)) = (&self.helm, &self.ship) {
+                        if let Some((cx, cy, cz)) = helm.camera_position(&self.physics, ship) {
+                            self.camera.position = WorldPos::new(cx as f64, cy as f64, cz as f64);
+                        }
+                        if let Some((yaw, pitch)) = helm.camera_orientation(&self.physics, ship) {
+                            self.camera.yaw = yaw;
+                            self.camera.pitch = pitch;
+                        }
+                    }
                 } else {
-                    // Walk mode: physics-driven
+                    // --- Walk mode: physics-driven ---
                     if let Some(player) = &mut self.player {
                         player.update(&mut self.physics, &self.input, dt);
+                    }
+
+                    // Simulated mag-boot gravity: ~1g on a ~80kg player = ~785 N downward
+                    if let Some(player) = &self.player
+                        && let Some(body) = self.physics.get_body_mut(player.body_handle)
+                    {
+                        body.add_force(nalgebra::Vector3::new(0.0, -785.0, 0.0), true);
                     }
 
                     let physics_dt = dt.min(1.0 / 30.0);
@@ -594,6 +676,75 @@ impl ApplicationHandler for App {
                         self.camera.pitch = player.pitch;
                     }
                 }
+
+                // Always update query pipeline after physics step (needed for raycasting)
+                self.physics.update_query_pipeline();
+
+                // --- Interaction ---
+                if let (Some(interaction), Some(player)) = (&mut self.interaction, &self.player) {
+                    let is_standing = self.helm.as_ref()
+                        .map(|h| !h.is_seated())
+                        .unwrap_or(true);
+
+                    if is_standing && !self.fly_mode {
+                        let eye_pos = player.position(&self.physics);
+                        let fwd = player.forward();
+                        let ray_origin = [eye_pos.x as f32, eye_pos.y as f32, eye_pos.z as f32];
+                        let ray_dir = [fwd.x, fwd.y, fwd.z];
+
+                        let (_, mouse_dy) = self.input.mouse.delta();
+
+                        let helm_clicked = interaction.update(
+                            ray_origin,
+                            ray_dir,
+                            mouse_dy,
+                            self.input.mouse.left_just_pressed(),
+                            self.input.mouse.left_pressed(),
+                            self.input.mouse.left_just_released(),
+                            &self.physics,
+                        );
+
+                        // If helm seat was clicked, enter seated mode
+                        if helm_clicked.is_some()
+                            && let Some(helm) = &mut self.helm
+                        {
+                            helm.sit_down();
+                            // Disable player physics body while seated
+                            if let Some(body) = self.physics.get_body_mut(player.body_handle) {
+                                body.set_enabled(false);
+                            }
+                            log::info!("Entered helm seated mode");
+                        }
+                    }
+                }
+
+                // Sync interactable state -> ship state
+                if let (Some(interaction), Some(ship), Some(ids)) =
+                    (&self.interaction, &mut self.ship, &self.ship_ids)
+                {
+                    // Throttle lever -> ship.throttle
+                    if let Some(lever) = interaction.get(ids.throttle_lever) {
+                        ship.throttle = lever.lever_position().unwrap_or(0.0);
+                    }
+                    // Engine button -> ship.engine_on
+                    if let Some(button) = interaction.get(ids.engine_button) {
+                        ship.engine_on = button.is_button_pressed().unwrap_or(false);
+                    }
+                }
+                // Update speed screen text
+                if let (Some(interaction), Some(ship)) = (&mut self.interaction, &self.ship)
+                    && let Some(ids) = &self.ship_ids
+                {
+                    let speed = ship.speed(&self.physics);
+                    if let Some(screen) = interaction.get_mut(ids.speed_screen) {
+                        screen.set_screen_text(vec![
+                            format!("Speed: {:.1} m/s", speed),
+                            format!("Throttle: {:.0}%", ship.throttle * 100.0),
+                            format!("Engine: {}", if ship.engine_on { "ON" } else { "OFF" }),
+                        ]);
+                    }
+                }
+
                 self.perf.player_us = t0.elapsed().as_micros() as u64;
                 self.perf.physics_us = 0;
 
@@ -606,7 +757,7 @@ impl ApplicationHandler for App {
                 let t3 = Instant::now();
                 if let (Some(gpu), Some(renderer)) = (&self.gpu, &self.renderer) {
                     let commands = if self.view_mode == 6 || self.view_mode == 7 {
-                        // Ship part viewing: show just the part/ship at origin, no ground or cubes
+                        // Debug: ship part viewing at origin
                         if let Some(ship_mesh) = self.ship_part_mesh {
                             vec![DrawCommand {
                                 mesh: ship_mesh,
@@ -615,29 +766,31 @@ impl ApplicationHandler for App {
                         } else {
                             vec![]
                         }
-                    } else if let Some(cube) = self.cube_mesh {
-                        // Normal scene with ground plane and test cubes
-                        vec![
-                            DrawCommand {
-                                mesh: cube,
-                                model_matrix: Mat4::from_translation(Vec3::new(0.0, 0.0, 0.0))
-                                    * Mat4::from_scale(Vec3::new(50.0, 0.1, 50.0)),
-                            },
-                            DrawCommand {
-                                mesh: cube,
-                                model_matrix: Mat4::from_translation(Vec3::new(5.0, 1.0, -3.0)),
-                            },
-                            DrawCommand {
-                                mesh: cube,
-                                model_matrix: Mat4::from_translation(Vec3::new(-4.0, 1.0, -6.0)),
-                            },
-                            DrawCommand {
-                                mesh: cube,
-                                model_matrix: Mat4::from_translation(Vec3::new(2.0, 1.0, -10.0)),
-                            },
-                        ]
                     } else {
-                        vec![]
+                        // Normal gameplay: render ship hull + interactables
+                        let mut cmds = Vec::new();
+
+                        // Ship hull
+                        if let Some(hull_handle) = self.ship_part_mesh {
+                            cmds.push(DrawCommand {
+                                mesh: hull_handle,
+                                model_matrix: Mat4::IDENTITY,
+                            });
+                        }
+
+                        // Interactable meshes at their positions
+                        let layout = sa_ship::station::cockpit_layout();
+                        for (i, handle) in self.interactable_meshes.iter().enumerate() {
+                            if let Some(placement) = layout.interactables.get(i) {
+                                let pos = placement.position;
+                                cmds.push(DrawCommand {
+                                    mesh: *handle,
+                                    model_matrix: Mat4::from_translation(pos),
+                                });
+                            }
+                        }
+
+                        cmds
                     };
                     self.perf.draw_calls = commands.len() as u32;
                     self.perf.star_count = renderer.star_field.star_count;
@@ -661,12 +814,22 @@ impl ApplicationHandler for App {
                 if self.perf_update_timer >= 0.5 {
                     self.perf_update_timer = 0.0;
                     if let Some(window) = &self.window {
+                        let helm_status = if self.fly_mode {
+                            "FLY".to_string()
+                        } else if self.helm.as_ref().map(|h| h.is_seated()).unwrap_or(false) {
+                            let speed = self.ship.as_ref()
+                                .map(|s| s.speed(&self.physics))
+                                .unwrap_or(0.0);
+                            format!("HELM {:.1}m/s", speed)
+                        } else {
+                            "WALK".to_string()
+                        };
                         window.set_title(&format!(
-                            "SpaceAway | {:.0} FPS | frame {:.1}ms | player {:.1}ms | physics {:.1}ms | stars {:.1}ms ({}) | render {:.1}ms | draws {}",
+                            "SpaceAway | {:.0} FPS | {} | frame {:.1}ms | player {:.1}ms | stars {:.1}ms ({}) | render {:.1}ms | draws {}",
                             self.perf.fps,
+                            helm_status,
                             self.perf.total_us as f64 / 1000.0,
                             self.perf.player_us as f64 / 1000.0,
-                            self.perf.physics_us as f64 / 1000.0,
                             self.perf.stars_us as f64 / 1000.0,
                             self.perf.star_count,
                             self.perf.render_us as f64 / 1000.0,
