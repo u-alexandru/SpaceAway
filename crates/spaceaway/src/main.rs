@@ -674,6 +674,28 @@ impl ApplicationHandler for App {
                         self.camera.position = player.position(&self.physics);
                         self.camera.yaw = player.yaw;
                         self.camera.pitch = player.pitch;
+
+                        // Debug: log player physics state every 60 frames
+                        if self.time.frame_count() % 60 == 0 {
+                            if let Some(body) = self.physics.get_body(player.body_handle) {
+                                let pos = body.translation();
+                                let vel = body.linvel();
+                                log::info!(
+                                    "[DEBUG] Player pos=({:.2},{:.2},{:.2}) vel=({:.2},{:.2},{:.2}) sleeping={}",
+                                    pos.x, pos.y, pos.z, vel.x, vel.y, vel.z, body.is_sleeping()
+                                );
+                            }
+                            if let Some(ship) = &self.ship {
+                                if let Some(body) = self.physics.get_body(ship.body_handle) {
+                                    let pos = body.translation();
+                                    log::info!(
+                                        "[DEBUG] Ship pos=({:.2},{:.2},{:.2}) colliders={}",
+                                        pos.x, pos.y, pos.z,
+                                        self.physics.collider_set.len()
+                                    );
+                                }
+                            }
+                        }
                     }
                 }
 

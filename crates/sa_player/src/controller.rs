@@ -34,6 +34,7 @@ impl PlayerController {
         let collider = ColliderBuilder::capsule_y(PLAYER_HALF_HEIGHT, PLAYER_RADIUS)
             .friction(0.0)
             .restitution(0.0)
+            .mass(80.0) // 80 kg player — must match the mag-boot gravity force (785 N ≈ 80kg × 9.81)
             .build();
         physics.add_collider(collider, body_handle);
 
