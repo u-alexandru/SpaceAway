@@ -233,7 +233,7 @@ impl App {
             perf_update_timer: 0.0,
             teleport_counter: 0,
             fly_mode: false,
-            fly_speed: 500.0, // 500 ly/s default
+            fly_speed: 5.0, // 5 m/s default for ship inspection. Press + to go faster.
             ship_part_mesh: None,
             ship_part_index: 0,
             view_mode: 0,
