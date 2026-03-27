@@ -132,12 +132,14 @@ impl Renderer {
             bytemuck::bytes_of(&star_uniforms),
         );
 
-        // Nebula uniforms: view_proj + camera right/up for billboarding
+        // Nebula uniforms: use the star view_proj (rotation-only, no translation)
+        // because nebulae are at galaxy scale (light-years), effectively at infinity.
+        // The game binary places nebula instances as direction * large_distance.
         let view_mat = camera.view_matrix();
         let camera_right = Vec3::new(view_mat.col(0).x, view_mat.col(1).x, view_mat.col(2).x);
         let camera_up = Vec3::new(view_mat.col(0).y, view_mat.col(1).y, view_mat.col(2).y);
         let nebula_uniforms = NebulaUniforms {
-            view_proj: view_proj.to_cols_array_2d(),
+            view_proj: star_vp.to_cols_array_2d(),
             camera_right: camera_right.to_array(),
             _pad0: 0.0,
             camera_up: camera_up.to_array(),
