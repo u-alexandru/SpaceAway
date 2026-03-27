@@ -176,6 +176,8 @@ struct App {
     perf: PerfTimings,
     perf_update_timer: f64,
     teleport_counter: u64,
+    fly_mode: bool,
+    fly_speed: f64, // light-years per second
 }
 
 impl App {
@@ -224,6 +226,8 @@ impl App {
             perf: PerfTimings::default(),
             perf_update_timer: 0.0,
             teleport_counter: 0,
+            fly_mode: false,
+            fly_speed: 500.0, // 500 ly/s default
         }
     }
 
@@ -447,6 +451,12 @@ impl ApplicationHandler for App {
                             KeyCode::Digit3 => self.teleport_to(2), // galaxy edge
                             KeyCode::Digit4 => self.teleport_to(3), // near center
                             KeyCode::Digit5 => self.teleport_to(4), // near nebula
+                            KeyCode::KeyF => {
+                                self.fly_mode = !self.fly_mode;
+                                log::info!("Fly mode: {}", if self.fly_mode { "ON (WASD to fly, scroll to change speed)" } else { "OFF" });
+                            }
+                            KeyCode::Equal => { self.fly_speed *= 2.0; log::info!("Fly speed: {:.0} ly/s", self.fly_speed); }
+                            KeyCode::Minus => { self.fly_speed = (self.fly_speed / 2.0).max(1.0); log::info!("Fly speed: {:.0} ly/s", self.fly_speed); }
                             _ => {}
                         }
                     }
@@ -476,23 +486,60 @@ impl ApplicationHandler for App {
                 // --- Player + Physics ---
                 let t0 = Instant::now();
                 let dt = self.time.delta_seconds() as f32;
-                if let Some(player) = &mut self.player {
-                    player.update(&mut self.physics, &self.input, dt);
+
+                if self.fly_mode {
+                    // Fly mode: move camera directly in light-years, bypass physics
+                    let (dx, dy) = self.input.mouse.delta();
+                    self.camera.rotate(dx * 0.003, -dy * 0.003);
+
+                    let fwd = self.camera.forward();
+                    let right = self.camera.right();
+                    let speed = self.fly_speed * dt as f64;
+
+                    use winit::keyboard::KeyCode as KC;
+                    if self.input.keyboard.is_pressed(KC::KeyW) {
+                        self.camera.position.x += fwd.x as f64 * speed;
+                        self.camera.position.y += fwd.y as f64 * speed;
+                        self.camera.position.z += fwd.z as f64 * speed;
+                    }
+                    if self.input.keyboard.is_pressed(KC::KeyS) {
+                        self.camera.position.x -= fwd.x as f64 * speed;
+                        self.camera.position.y -= fwd.y as f64 * speed;
+                        self.camera.position.z -= fwd.z as f64 * speed;
+                    }
+                    if self.input.keyboard.is_pressed(KC::KeyA) {
+                        self.camera.position.x -= right.x as f64 * speed;
+                        self.camera.position.z -= right.z as f64 * speed;
+                    }
+                    if self.input.keyboard.is_pressed(KC::KeyD) {
+                        self.camera.position.x += right.x as f64 * speed;
+                        self.camera.position.z += right.z as f64 * speed;
+                    }
+                    if self.input.keyboard.is_pressed(KC::Space) {
+                        self.camera.position.y += speed;
+                    }
+                    if self.input.keyboard.is_pressed(KC::ShiftLeft) {
+                        self.camera.position.y -= speed;
+                    }
+                } else {
+                    // Walk mode: physics-driven
+                    if let Some(player) = &mut self.player {
+                        player.update(&mut self.physics, &self.input, dt);
+                    }
+
+                    let physics_dt = dt.min(1.0 / 30.0);
+                    if physics_dt > 0.0 {
+                        self.physics.step(physics_dt);
+                    }
+
+                    if let Some(player) = &self.player {
+                        self.camera.position = player.position(&self.physics);
+                        self.camera.yaw = player.yaw;
+                        self.camera.pitch = player.pitch;
+                    }
                 }
                 self.perf.player_us = t0.elapsed().as_micros() as u64;
-
-                let t1 = Instant::now();
-                let physics_dt = dt.min(1.0 / 30.0);
-                if physics_dt > 0.0 {
-                    self.physics.step(physics_dt);
-                }
-                self.perf.physics_us = t1.elapsed().as_micros() as u64;
-
-                if let Some(player) = &self.player {
-                    self.camera.position = player.position(&self.physics);
-                    self.camera.yaw = player.yaw;
-                    self.camera.pitch = player.pitch;
-                }
+                self.perf.physics_us = 0;
 
                 // --- Star regen ---
                 let t2 = Instant::now();

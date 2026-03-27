@@ -140,14 +140,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         total_weight += contribution;
     }
 
-    // S-curve brightness: smoothstep gives a soft ramp that is near-zero for
-    // low accumulated values and rises smoothly for high values.
-    // This keeps the sky BLACK outside the dense band while the band itself
-    // glows softly. The range [0.05, 0.6] controls the transition:
-    //   - Below 0.05 accumulated: black (empty space)
-    //   - 0.05-0.6: smooth transition
-    //   - Above 0.6: maxes out at 0.7 brightness
-    let brightness = smoothstep(0.05, 0.6, accumulated) * 0.7;
+    // Two-part curve: smoothstep kills low values (dark sky) while pow
+    // preserves structure in bright regions (spiral arms visible from above).
+    //   - Below 0.03: black (empty space)
+    //   - 0.03-0.15: smooth fade-in (band edges)
+    //   - Above 0.15: pow(0.7) preserves arm/interarm contrast
+    let fade = smoothstep(0.03, 0.15, accumulated);
+    let detail = pow(accumulated * 1.5, 0.7);
+    let brightness = min(fade * detail, 0.85);
 
     // Warmth ratio
     var warmth: f32 = 0.0;
