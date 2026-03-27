@@ -11,7 +11,7 @@ impl InputState {
         Self { keyboard: KeyboardState::new(), mouse: MouseState::new() }
     }
 
-    pub fn end_frame(&mut self) { self.mouse.clear_delta(); }
+    pub fn end_frame(&mut self) { self.mouse.clear_delta(); self.keyboard.end_frame(); }
 }
 
 impl Default for InputState { fn default() -> Self { Self::new() } }

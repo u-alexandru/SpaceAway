@@ -1,6 +1,6 @@
-//! Helm seated mode: when the player sits at the helm, mouse controls
-//! ship rotation, WASD controls thrust/RCS, and the camera locks to the
-//! helm viewpoint.
+//! Helm seated mode: when the player sits at the helm, WASD controls
+//! ship rotation (pitch/yaw), Q controls roll, and the camera can
+//! free-look independently. E exits the seat.
 
 use crate::ship::Ship;
 use glam::Vec3;
@@ -15,8 +15,8 @@ pub enum HelmState {
     Seated,
 }
 
-/// Mouse sensitivity for ship rotation while seated.
-const HELM_MOUSE_SENSITIVITY: f32 = 0.0002;
+/// Rotation rate for keyboard-driven ship rotation (normalized input * this).
+const HELM_ROTATION_RATE: f32 = 1.0;
 
 /// Controls the helm seated mode.
 pub struct HelmController {
@@ -52,17 +52,17 @@ impl HelmController {
         self.state == HelmState::Seated
     }
 
-    /// Process input while seated and apply forces to the ship.
-    /// Returns `true` if the player wants to stand up (left click).
+    /// Process input while seated and apply rotation to the ship.
+    /// Returns `true` if the player wants to stand up (E key).
     ///
     /// Input mapping while seated:
-    /// - Mouse X -> yaw
-    /// - Mouse Y -> pitch
-    /// - W/S -> forward/backward RCS
-    /// - A/D -> lateral RCS
-    /// - Space -> thrust up
-    /// - ShiftLeft -> thrust down
-    /// - Q/E -> roll
+    /// - W/S -> pitch (nose up/down)
+    /// - A/D -> yaw (turn left/right)
+    /// - Q -> roll left
+    ///
+    /// Mouse does NOT control the ship; it controls the camera (handled
+    /// in the game loop). Thrust comes from the throttle lever and engine
+    /// button, applied every frame in the game loop regardless of seating.
     pub fn update_seated(
         &self,
         ship: &Ship,
@@ -74,52 +74,31 @@ impl HelmController {
             return false;
         }
 
-        // Mouse -> rotation
-        let (dx, dy) = input.mouse.delta();
-        let yaw = -dx * HELM_MOUSE_SENSITIVITY;
-        let pitch = dy * HELM_MOUSE_SENSITIVITY;
+        // WASD -> ship rotation
+        let mut pitch = 0.0_f32;
+        let mut yaw = 0.0_f32;
+        let mut roll = 0.0_f32;
 
-        let mut roll = 0.0;
-        if input.keyboard.is_pressed(KeyCode::KeyQ) {
-            roll -= 1.0;
+        if input.keyboard.is_pressed(KeyCode::KeyW) {
+            pitch += HELM_ROTATION_RATE;
         }
-        if input.keyboard.is_pressed(KeyCode::KeyE) {
-            roll += 1.0;
+        if input.keyboard.is_pressed(KeyCode::KeyS) {
+            pitch -= HELM_ROTATION_RATE;
+        }
+        if input.keyboard.is_pressed(KeyCode::KeyA) {
+            yaw -= HELM_ROTATION_RATE;
+        }
+        if input.keyboard.is_pressed(KeyCode::KeyD) {
+            yaw += HELM_ROTATION_RATE;
+        }
+        if input.keyboard.is_pressed(KeyCode::KeyQ) {
+            roll -= HELM_ROTATION_RATE;
         }
 
         ship.apply_rotation(physics, pitch, yaw, roll);
 
-        // WASD + Space/Shift -> RCS
-        let mut longitudinal = 0.0_f32;
-        let mut lateral = 0.0_f32;
-        let mut vertical = 0.0_f32;
-
-        if input.keyboard.is_pressed(KeyCode::KeyW) {
-            longitudinal += 1.0;
-        }
-        if input.keyboard.is_pressed(KeyCode::KeyS) {
-            longitudinal -= 1.0;
-        }
-        if input.keyboard.is_pressed(KeyCode::KeyA) {
-            lateral -= 1.0;
-        }
-        if input.keyboard.is_pressed(KeyCode::KeyD) {
-            lateral += 1.0;
-        }
-        if input.keyboard.is_pressed(KeyCode::Space) {
-            vertical += 1.0;
-        }
-        if input.keyboard.is_pressed(KeyCode::ShiftLeft) {
-            vertical -= 1.0;
-        }
-
-        ship.apply_rcs(physics, lateral, vertical, longitudinal);
-
-        // Apply main engine thrust (throttle lever controls magnitude)
-        ship.apply_thrust(physics);
-
-        // Stand up on left click
-        input.mouse.left_just_pressed()
+        // E key = stand up (exit seat)
+        input.keyboard.just_pressed(KeyCode::KeyE)
     }
 
     /// Compute the camera world position when seated.
@@ -139,23 +118,6 @@ impl HelmController {
                 ship_pos.y + world_offset.y,
                 ship_pos.z + world_offset.z,
             )
-        })
-    }
-
-    /// Get the ship's forward direction for camera orientation when seated.
-    /// Returns (yaw, pitch) matching the ship's current orientation.
-    pub fn camera_orientation(
-        &self,
-        physics: &PhysicsWorld,
-        ship: &Ship,
-    ) -> Option<(f32, f32)> {
-        physics.get_body(ship.body_handle).map(|body| {
-            let rot = body.rotation();
-            // Ship forward is -Z in local space
-            let forward = rot * nalgebra::Vector3::new(0.0, 0.0, -1.0);
-            let yaw = forward.x.atan2(-forward.z);
-            let pitch = forward.y.asin();
-            (yaw, pitch)
         })
     }
 }

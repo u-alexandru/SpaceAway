@@ -3,16 +3,29 @@ use winit::keyboard::KeyCode;
 
 pub struct KeyboardState {
     pressed: HashSet<KeyCode>,
+    just_pressed: HashSet<KeyCode>,
 }
 
 impl KeyboardState {
-    pub fn new() -> Self { Self { pressed: HashSet::new() } }
+    pub fn new() -> Self { Self { pressed: HashSet::new(), just_pressed: HashSet::new() } }
 
     pub fn set_pressed(&mut self, key: KeyCode, pressed: bool) {
-        if pressed { self.pressed.insert(key); } else { self.pressed.remove(&key); }
+        if pressed {
+            if self.pressed.insert(key) {
+                self.just_pressed.insert(key);
+            }
+        } else {
+            self.pressed.remove(&key);
+        }
     }
 
     pub fn is_pressed(&self, key: KeyCode) -> bool { self.pressed.contains(&key) }
+
+    /// Returns true only on the frame the key was first pressed.
+    pub fn just_pressed(&self, key: KeyCode) -> bool { self.just_pressed.contains(&key) }
+
+    /// Clear per-frame state. Call at end of each frame.
+    pub fn end_frame(&mut self) { self.just_pressed.clear(); }
 }
 
 impl Default for KeyboardState { fn default() -> Self { Self::new() } }

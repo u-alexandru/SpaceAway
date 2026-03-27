@@ -717,7 +717,7 @@ impl ApplicationHandler for App {
                         self.camera.position.y -= speed;
                     }
                 } else if self.helm.as_ref().map(|h| h.is_seated()).unwrap_or(false) {
-                    // --- Seated at helm: control ship ---
+                    // --- Seated at helm: WASD rotates ship, mouse free-looks ---
                     if let Some(ship) = &self.ship {
                         // Reset forces each frame so only current input applies
                         ship.reset_forces(&mut self.physics);
@@ -727,6 +727,9 @@ impl ApplicationHandler for App {
                         } else {
                             false
                         };
+
+                        // Apply continuous thrust from throttle lever + engine button
+                        ship.apply_thrust(&mut self.physics);
 
                         if wants_stand
                             && let Some(helm) = &mut self.helm
@@ -748,20 +751,28 @@ impl ApplicationHandler for App {
                         self.physics.step(physics_dt);
                     }
 
-                    // Camera follows ship orientation
-                    if let (Some(helm), Some(ship)) = (&self.helm, &self.ship) {
-                        if let Some((cx, cy, cz)) = helm.camera_position(&self.physics, ship) {
-                            self.camera.position = WorldPos::new(cx as f64, cy as f64, cz as f64);
-                        }
-                        if let Some((yaw, pitch)) = helm.camera_orientation(&self.physics, ship) {
-                            self.camera.yaw = yaw;
-                            self.camera.pitch = pitch;
-                        }
+                    // Mouse -> free-look camera (independent of ship orientation)
+                    let (dx, dy) = self.input.mouse.delta();
+                    self.camera.rotate(dx * 0.003, -dy * 0.003);
+
+                    // Camera position fixed at helm viewpoint (moves with ship)
+                    if let (Some(helm), Some(ship)) = (&self.helm, &self.ship)
+                        && let Some((cx, cy, cz)) = helm.camera_position(&self.physics, ship)
+                    {
+                        self.camera.position = WorldPos::new(cx as f64, cy as f64, cz as f64);
                     }
                 } else {
                     // --- Walk mode: physics-driven ---
                     if let Some(player) = &mut self.player {
                         player.update(&mut self.physics, &self.input, dt);
+                    }
+
+                    // Apply continuous ship thrust even when not seated.
+                    // The lever/button state persists, so the ship keeps
+                    // thrusting based on throttle × engine_on.
+                    if let Some(ship) = &self.ship {
+                        ship.reset_forces(&mut self.physics);
+                        ship.apply_thrust(&mut self.physics);
                     }
 
                     // Gravity handled by PhysicsWorld (0, -9.81, 0).
@@ -787,46 +798,61 @@ impl ApplicationHandler for App {
                 // Always update query pipeline after physics step (needed for raycasting)
                 self.physics.update_query_pipeline();
 
-                // --- Interaction ---
-                if let (Some(interaction), Some(player)) = (&mut self.interaction, &self.player) {
-                    let is_standing = self.helm.as_ref()
-                        .map(|h| !h.is_seated())
-                        .unwrap_or(true);
+                // --- Interaction (runs in both standing and seated modes) ---
+                let is_seated = self.helm.as_ref()
+                    .map(|h| h.is_seated())
+                    .unwrap_or(false);
 
-                    if is_standing && !self.fly_mode {
+                if let (Some(interaction), Some(player)) = (&mut self.interaction, &self.player)
+                    && !self.fly_mode
+                {
+                    // When seated, use camera position/direction for raycasting
+                    // (player can look around cockpit and click interactables).
+                    // When standing, use player eye position/direction.
+                    let (ray_origin, ray_dir) = if is_seated {
+                        let pos = self.camera.position;
+                        let fwd = self.camera.forward();
+                        (
+                            [pos.x as f32, pos.y as f32, pos.z as f32],
+                            [fwd.x, fwd.y, fwd.z],
+                        )
+                    } else {
                         let eye_pos = player.position(&self.physics);
                         let fwd = player.forward();
-                        let ray_origin = [eye_pos.x as f32, eye_pos.y as f32, eye_pos.z as f32];
-                        let ray_dir = [fwd.x, fwd.y, fwd.z];
+                        (
+                            [eye_pos.x as f32, eye_pos.y as f32, eye_pos.z as f32],
+                            [fwd.x, fwd.y, fwd.z],
+                        )
+                    };
 
-                        let (_, mouse_dy) = self.input.mouse.delta();
+                    let (_, mouse_dy) = self.input.mouse.delta();
 
-                        // Collision groups handle filtering: exclude_solids()
-                        // limits to sensors, and only interactable sensors are
-                        // registered in the collider_to_id map.
-                        let helm_clicked = interaction.update(
-                            ray_origin,
-                            ray_dir,
-                            mouse_dy,
-                            self.input.mouse.left_just_pressed(),
-                            self.input.mouse.left_pressed(),
-                            self.input.mouse.left_just_released(),
-                            &self.physics,
-                        );
+                    // Collision groups handle filtering: exclude_solids()
+                    // limits to sensors, and only interactable sensors are
+                    // registered in the collider_to_id map.
+                    let helm_clicked = interaction.update(
+                        ray_origin,
+                        ray_dir,
+                        mouse_dy,
+                        self.input.mouse.left_just_pressed(),
+                        self.input.mouse.left_pressed(),
+                        self.input.mouse.left_just_released(),
+                        &self.physics,
+                    );
 
-                        // If helm seat was clicked, enter seated mode
-                        if helm_clicked.is_some()
-                            && let Some(helm) = &mut self.helm
-                        {
-                            helm.sit_down();
-                            // Disable player physics body while seated
-                            if let Some(body) = self.physics.get_body_mut(player.body_handle) {
-                                body.set_enabled(false);
-                            }
-                            log::info!("Entered helm seated mode");
+                    // If helm seat was clicked while standing, enter seated mode
+                    if !is_seated && helm_clicked.is_some()
+                        && let Some(helm) = &mut self.helm
+                    {
+                        helm.sit_down();
+                        // Disable player physics body while seated
+                        if let Some(body) = self.physics.get_body_mut(player.body_handle) {
+                            body.set_enabled(false);
                         }
+                        log::info!("Entered helm seated mode");
                     }
                 }
+
 
                 // Sync interactable state -> ship state
                 if let (Some(interaction), Some(ship), Some(ids)) =
