@@ -2,41 +2,52 @@
 
 use crate::seed::{MasterSeed, Rng64};
 
-/// Galaxy model constants.
-const DISC_HALF_THICKNESS: f64 = 500.0;
-const ARM_WIDTH: f64 = 2000.0;
-const BULGE_RADIUS: f64 = 5000.0;
-const BASE_DENSITY: f64 = 0.1;
-const SPIRAL_K: f64 = 0.3;
-const NUM_ARMS: usize = 2;
+/// Galaxy model constants based on measured Milky Way parameters.
+/// Sources: Wikipedia Milky Way, ESA Gaia data, Vallée 2017 spiral arm survey.
+const DISC_HALF_THICKNESS: f64 = 1000.0; // ~1000 ly scale height (measured: 700-1300 ly)
+const ARM_WIDTH: f64 = 2500.0; // spiral arm width in ly
+const BULGE_RADIUS: f64 = 5000.0; // central bulge radius
+const BASE_DENSITY: f64 = 0.08; // inter-arm baseline
+const SPIRAL_K: f64 = 0.25; // tighter spiral (~13° pitch angle)
+const NUM_ARMS: usize = 4; // 4 major arms (Milky Way has 4)
+/// Dust absorption coefficient along spiral arm inner edges.
+const DUST_STRENGTH: f64 = 0.4;
 
 /// Disc component: exponential falloff from the galactic plane (y=0).
 fn disc(y: f64) -> f64 {
     (-y.abs() / DISC_HALF_THICKNESS).exp()
 }
 
-/// Distance from point (x, z) to the nearest spiral arm centerline.
-/// Two logarithmic spirals offset by PI.
-fn arm_distance(x: f64, z: f64) -> f64 {
+/// Distance from point (x, z) to the nearest spiral arm centerline,
+/// and also returns signed angular offset (negative = inside/toward center).
+/// Four logarithmic spirals offset by PI/2 each.
+fn arm_info(x: f64, z: f64) -> (f64, f64) {
     let r = (x * x + z * z).sqrt().max(1.0);
     let theta = z.atan2(x);
 
     let mut min_dist = f64::MAX;
+    let mut min_signed = 0.0_f64;
+    let arm_spacing = std::f64::consts::TAU / NUM_ARMS as f64;
     for i in 0..NUM_ARMS {
-        let offset = i as f64 * std::f64::consts::PI;
-        // Arm centerline angle at radius r: theta_arm = k * ln(r) + offset
+        let offset = i as f64 * arm_spacing;
         let theta_arm = SPIRAL_K * r.ln() + offset;
-        // Angular distance, wrapped to [-PI, PI]
         let mut d_theta = theta - theta_arm;
         d_theta = d_theta.rem_euclid(std::f64::consts::TAU);
         if d_theta > std::f64::consts::PI {
             d_theta -= std::f64::consts::TAU;
         }
-        // Convert angular distance to linear distance at this radius
         let linear_dist = d_theta.abs() * r;
-        min_dist = min_dist.min(linear_dist);
+        if linear_dist < min_dist {
+            min_dist = linear_dist;
+            min_signed = d_theta * r; // negative = trailing edge (inside)
+        }
     }
-    min_dist
+    (min_dist, min_signed)
+}
+
+/// Distance from point (x, z) to the nearest spiral arm centerline.
+fn arm_distance(x: f64, z: f64) -> f64 {
+    arm_info(x, z).0
 }
 
 /// Spiral arm boost: gaussian falloff from arm centerline.
@@ -49,6 +60,23 @@ fn arm_boost(x: f64, z: f64) -> f64 {
 fn bulge(x: f64, y: f64, z: f64) -> f64 {
     let r = (x * x + y * y + z * z).sqrt();
     (-r / BULGE_RADIUS).exp()
+}
+
+/// Dust density at a point. Dust concentrates on the inner (trailing)
+/// edges of spiral arms, in the disc plane. Used for Beer-Lambert
+/// absorption when ray-marching the Milky Way cubemap.
+pub fn dust_density(x: f64, y: f64, z: f64) -> f64 {
+    let (_dist, signed) = arm_info(x, z);
+    let dist = _dist;
+    // Dust is on the inner edge of arms (signed < 0) and within ~1500 ly
+    let edge_factor = if signed < 0.0 {
+        (-dist * dist / (1500.0 * 1500.0)).exp() * DUST_STRENGTH
+    } else {
+        (-dist * dist / (1000.0 * 1000.0)).exp() * DUST_STRENGTH * 0.3
+    };
+    // Only in the disc plane
+    let disc_factor = (-y.abs() / (DISC_HALF_THICKNESS * 0.6)).exp();
+    edge_factor * disc_factor
 }
 
 /// Master galaxy density function.
@@ -198,8 +226,8 @@ mod tests {
         let on_arm_z = r * theta_arm.sin();
         let on_arm = galaxy_density(on_arm_x, 0.0, on_arm_z);
 
-        // Pick a point well between arms (offset by PI/2 from arm)
-        let theta_off = theta_arm + std::f64::consts::FRAC_PI_2;
+        // Pick a point well between arms (offset by PI/4 from arm — midpoint between 4 arms)
+        let theta_off = theta_arm + std::f64::consts::FRAC_PI_4;
         let off_arm_x = r * theta_off.cos();
         let off_arm_z = r * theta_off.sin();
         let off_arm = galaxy_density(off_arm_x, 0.0, off_arm_z);

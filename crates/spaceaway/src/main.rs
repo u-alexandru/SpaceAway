@@ -219,10 +219,12 @@ impl App {
         self.cube_mesh = Some(handle);
 
         // Generate Milky Way cubemap from the galaxy density model.
+        // Observer at ~27,000 ly from center (Sun's actual position in the Milky Way).
         let cubemap_start = Instant::now();
-        let observer = [0.0_f64, 0.0, 0.0];
+        let observer = [27000.0_f64, 0.0, 0.0];
         let cubemap_data = sa_render::generate_cubemap_data(
             &sa_universe::galaxy_density,
+            &sa_universe::dust_density,
             observer,
         );
         renderer.update_milky_way_cubemap(gpu, &cubemap_data);
@@ -317,6 +319,7 @@ impl App {
         let start = Instant::now();
         let cubemap_data = sa_render::generate_cubemap_data(
             &sa_universe::galaxy_density,
+            &sa_universe::dust_density,
             [observer.x, observer.y, observer.z],
         );
         renderer.update_milky_way_cubemap(gpu, &cubemap_data);

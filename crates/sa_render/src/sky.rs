@@ -40,6 +40,7 @@ const FACE_DIRS: [([f32; 3], [f32; 3], [f32; 3]); 6] = [
 /// Returns 6 faces of RGBA u8 data, each `CUBEMAP_SIZE` x `CUBEMAP_SIZE`.
 pub fn generate_cubemap_data(
     density_fn: &dyn Fn(f64, f64, f64) -> f64,
+    dust_density_fn: &dyn Fn(f64, f64, f64) -> f64,
     observer: [f64; 3],
 ) -> Vec<Vec<u8>> {
     let size = CUBEMAP_SIZE as usize;
@@ -65,9 +66,11 @@ pub fn generate_cubemap_data(
                 let len = (dx * dx + dy * dy + dz * dz).sqrt();
                 let (dx, dy, dz) = (dx / len, dy / len, dz / len);
 
-                // Integrate density along ray
+                // Integrate density along ray using Beer-Lambert absorption.
+                // Dust absorbs light from stars behind it, creating dark lanes.
                 let mut accumulated = 0.0_f64;
-                let mut warm_factor = 0.0_f64;
+                let mut warm_accumulated = 0.0_f64;
+                let mut transmittance = 1.0_f64; // Beer-Lambert: starts at 1 (no absorption)
 
                 for s in 0..num_samples {
                     let t = (s as f64 + 0.5) * step;
@@ -75,24 +78,33 @@ pub fn generate_cubemap_data(
                     let sy = observer[1] + dy as f64 * t;
                     let sz = observer[2] + dz as f64 * t;
 
-                    let d = density_fn(sx, sy, sz);
-                    accumulated += d * step / max_dist;
+                    // Star emission at this point
+                    let emission = density_fn(sx, sy, sz);
+                    // Dust absorption at this point (Beer-Lambert)
+                    let dust = dust_density_fn(sx, sy, sz);
+                    transmittance *= (-dust * step * 0.00005).exp();
+
+                    // Light reaching us = emission * transmittance
+                    let contribution = emission * transmittance * step / max_dist;
+                    accumulated += contribution;
 
                     // Track warmth: closer to center = warmer color
                     let r_center = (sx * sx + sy * sy + sz * sz).sqrt();
                     if r_center < 15000.0 {
-                        warm_factor += d * step / max_dist;
+                        warm_accumulated += contribution;
                     }
                 }
 
-                // Map to brightness
-                let brightness = (accumulated * 3.0).min(1.0);
-                let warmth = (warm_factor / accumulated.max(0.001)).min(1.0);
+                // Map to brightness (boosted for visibility)
+                let brightness = (accumulated * 4.0).min(1.0);
+                let warmth = (warm_accumulated / accumulated.max(0.001)).clamp(0.0, 1.0);
 
-                // Color: blend from blue-white (arm) to warm gold (center)
-                let cool = [0.7_f32, 0.75, 0.9];
-                let warm = [0.95_f32, 0.85, 0.65];
-                let w = warmth as f32;
+                // Color: mostly blue-white, warm only near center.
+                // Real Milky Way band is predominantly silvery-white with
+                // golden warmth only in the central bulge direction.
+                let cool = [0.78_f32, 0.82, 0.95]; // silvery blue-white
+                let warm = [0.95_f32, 0.85, 0.65]; // golden (bulge)
+                let w = (warmth as f32).powf(2.0); // square to reduce warmth spread
                 let r = (cool[0] * (1.0 - w) + warm[0] * w) * brightness as f32;
                 let g = (cool[1] * (1.0 - w) + warm[1] * w) * brightness as f32;
                 let b = (cool[2] * (1.0 - w) + warm[2] * w) * brightness as f32;
