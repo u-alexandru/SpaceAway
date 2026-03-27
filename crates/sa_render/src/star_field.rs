@@ -14,6 +14,10 @@ pub struct StarVertex {
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct StarUniforms {
     pub view_proj: [[f32; 4]; 4],
+    pub screen_height: f32,
+    pub _pad0: f32,
+    pub _pad1: f32,
+    pub _pad2: f32,
 }
 
 pub struct StarField {
@@ -79,9 +83,11 @@ impl StarField {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
+                // Each star is an instance drawn as 6 vertices (2 triangles).
+                // The vertex shader uses vertex_index % 6 to determine the quad corner.
                 buffers: &[wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<StarVertex>() as wgpu::BufferAddress,
-                    step_mode: wgpu::VertexStepMode::Vertex,
+                    step_mode: wgpu::VertexStepMode::Instance,
                     attributes: &[
                         wgpu::VertexAttribute { offset: 0, shader_location: 0, format: wgpu::VertexFormat::Float32x3 },
                         wgpu::VertexAttribute { offset: 12, shader_location: 1, format: wgpu::VertexFormat::Float32 },
@@ -95,13 +101,24 @@ impl StarField {
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::SrcAlpha,
+                            dst_factor: wgpu::BlendFactor::One,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::One,
+                            operation: wgpu::BlendOperation::Max,
+                        },
+                    }),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             }),
             primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::PointList,
+                topology: wgpu::PrimitiveTopology::TriangleList,
                 ..Default::default()
             },
             depth_stencil: Some(wgpu::DepthStencilState {

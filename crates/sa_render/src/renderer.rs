@@ -72,6 +72,10 @@ impl Renderer {
         let star_vp = camera.projection_matrix(aspect) * star_view;
         let star_uniforms = StarUniforms {
             view_proj: star_vp.to_cols_array_2d(),
+            screen_height: gpu.config.height as f32,
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
         };
         gpu.queue.write_buffer(
             &self.star_field.uniform_buffer,
@@ -172,7 +176,8 @@ impl Renderer {
             pass.set_pipeline(&self.star_field.pipeline);
             pass.set_bind_group(0, &self.star_field.bind_group, &[]);
             pass.set_vertex_buffer(0, self.star_field.vertex_buffer.slice(..));
-            pass.draw(0..self.star_field.star_count, 0..1);
+            // 6 vertices per star (2 triangles = billboard quad), instanced per star
+            pass.draw(0..6, 0..self.star_field.star_count);
         }
 
         gpu.queue.submit(std::iter::once(encoder.finish()));

@@ -43,7 +43,11 @@ fn visible_stars_to_vertices(stars: &[VisibleStar]) -> Vec<StarVertex> {
 
 /// Distance threshold (in light-years) before we regenerate the star field.
 /// Roughly one sector width.
-const STAR_REGEN_THRESHOLD_LY: f64 = 5.0;
+// Player is in meters, universe is in light-years. This threshold is in
+// whatever units WorldPos uses. Since physics/player uses meters and the
+// universe treats coordinates as light-years, walking 100m = 100 "ly" in
+// universe space. Set high enough that walking doesn't trigger regen.
+const STAR_REGEN_THRESHOLD: f64 = 500.0;
 
 /// Number of sectors to query in each direction around the observer.
 const STAR_QUERY_RADIUS: i32 = 5;
@@ -155,7 +159,7 @@ impl App {
         let observer = self.camera.position;
         let dist = observer.distance_to(self.last_star_gen_pos);
 
-        let needs_regen = !self.stars_initialised || dist > STAR_REGEN_THRESHOLD_LY;
+        let needs_regen = !self.stars_initialised || dist > STAR_REGEN_THRESHOLD;
         if !needs_regen {
             return;
         }
