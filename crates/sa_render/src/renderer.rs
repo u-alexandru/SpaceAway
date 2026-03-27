@@ -105,7 +105,7 @@ impl Renderer {
         let sky_uniforms = SkyUniforms {
             inv_view_proj: inv_view_proj.to_cols_array_2d(),
             galactic_center_dir: gc_dir.to_array(),
-            core_brightness: 0.8,
+            core_brightness: 0.35,
             cubemap_enabled: 1,
             _pad0: 0.0,
             _pad1: 0.0,

@@ -95,16 +95,19 @@ pub fn generate_cubemap_data(
                     }
                 }
 
-                // Map to brightness (boosted for visibility)
-                let brightness = (accumulated * 4.0).min(1.0);
+                // Use sqrt for brightness to give a wider dynamic range.
+                // The band should be clearly visible but space outside should be dark.
+                let brightness = (accumulated * 2.0).sqrt().min(1.0);
+
+                // Warmth: only warm when the ray passes very close to the bulge.
+                // Use distance of the brightest sample to center, not accumulated ratio.
                 let warmth = (warm_accumulated / accumulated.max(0.001)).clamp(0.0, 1.0);
 
-                // Color: mostly blue-white, warm only near center.
-                // Real Milky Way band is predominantly silvery-white with
-                // golden warmth only in the central bulge direction.
-                let cool = [0.78_f32, 0.82, 0.95]; // silvery blue-white
-                let warm = [0.95_f32, 0.85, 0.65]; // golden (bulge)
-                let w = (warmth as f32).powf(2.0); // square to reduce warmth spread
+                // Color: silvery blue-white everywhere, warm gold ONLY in the bulge.
+                let cool = [0.75_f32, 0.80, 0.95]; // silvery blue-white
+                let warm = [1.0_f32, 0.88, 0.65]; // golden (bulge)
+                // Cube warmth to really restrict it to the center
+                let w = (warmth as f32).powf(3.0);
                 let r = (cool[0] * (1.0 - w) + warm[0] * w) * brightness as f32;
                 let g = (cool[1] * (1.0 - w) + warm[1] * w) * brightness as f32;
                 let b = (cool[2] * (1.0 - w) + warm[2] * w) * brightness as f32;
