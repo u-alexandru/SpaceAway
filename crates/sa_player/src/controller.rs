@@ -16,6 +16,7 @@ pub struct PlayerController {
     pub yaw: f32,
     pub pitch: f32,
     pub grounded: bool,
+    prev_space_pressed: bool,
 }
 
 impl PlayerController {
@@ -25,7 +26,8 @@ impl PlayerController {
         let body = RigidBodyBuilder::dynamic()
             .translation(nalgebra::Vector3::new(x, y, z))
             .lock_rotations()
-            .linear_damping(0.5)
+            .linear_damping(0.0)
+            .ccd_enabled(true)
             .build();
         let body_handle = physics.add_rigid_body(body);
 
@@ -40,6 +42,7 @@ impl PlayerController {
             yaw: 0.0,
             pitch: 0.0,
             grounded: true,
+            prev_space_pressed: false,
         }
     }
 
@@ -82,12 +85,16 @@ impl PlayerController {
                 nalgebra::Vector3::new(target_vel.x, current_vel.y, target_vel.z);
             body.set_linvel(new_vel, true);
 
-            // Simple grounded check
-            self.grounded = current_vel.y.abs() < 0.1;
+            // Grounded check with wider margin to catch landing frame
+            self.grounded = current_vel.y.abs() < 0.5;
         }
 
-        // Jump
-        if input.keyboard.is_pressed(KeyCode::Space)
+        // Rising-edge jump detection: only jump on the frame Space is first pressed
+        let space_pressed = input.keyboard.is_pressed(KeyCode::Space);
+        let jump_requested = space_pressed && !self.prev_space_pressed;
+        self.prev_space_pressed = space_pressed;
+
+        if jump_requested
             && self.grounded
             && let Some(body) = physics.get_body_mut(self.body_handle)
         {

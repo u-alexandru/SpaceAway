@@ -122,7 +122,7 @@ pub fn generate_nebulae(master: MasterSeed) -> Vec<Nebula> {
         // Place near spiral arms: pick a random radius and arm angle
         let r = rng.range_f64(2000.0, 30000.0);
         let arm_idx = (rng.next_u64() % NUM_ARMS as u64) as usize;
-        let arm_offset = arm_idx as f64 * std::f64::consts::PI;
+        let arm_offset = arm_idx as f64 * (std::f64::consts::TAU / 4.0);
         let theta_arm = SPIRAL_K * r.ln() + arm_offset;
         // Scatter around the arm centerline
         let theta_scatter = rng.range_f64(-0.3, 0.3);
