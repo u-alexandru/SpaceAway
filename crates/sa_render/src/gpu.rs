@@ -36,9 +36,12 @@ impl GpuContext {
         .expect("Failed to create GPU device");
 
         let size = window.inner_size();
-        let config = surface
+        let mut config = surface
             .get_default_config(&adapter, size.width.max(1), size.height.max(1))
             .expect("Surface not supported by adapter");
+        // Disable VSync: use Immediate (uncapped) or Mailbox (uncapped, no tearing).
+        // AutoNoVsync picks the best available non-vsync mode.
+        config.present_mode = wgpu::PresentMode::AutoNoVsync;
         surface.configure(&device, &config);
 
         Self { surface, device, queue, config }
