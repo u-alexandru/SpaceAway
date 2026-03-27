@@ -5,61 +5,66 @@
 
 use crate::colors;
 use crate::mesh::Mesh;
-use crate::primitives::{box_mesh, cylinder_mesh};
+use crate::primitives::box_mesh;
 use glam::{Mat4, Vec3};
 
-/// Lever mesh: a thin cylinder rod on a box track with a box base.
+/// Lever mesh: a visible handle on a track with a base.
 ///
-/// - Rod: cylinder, radius 0.02, height 0.3, oriented along Y
-/// - Track: thin box 0.05 x 0.4 x 0.02 (visual guide for the lever range)
-/// - Base: box 0.1 x 0.02 x 0.06
+/// - Handle: box 0.06 x 0.15 x 0.06 (grippable knob)
+/// - Shaft: box 0.03 x 0.25 x 0.03 (connects handle to base)
+/// - Track: box 0.08 x 0.5 x 0.04 (visual guide showing travel range)
+/// - Base: box 0.15 x 0.04 x 0.10 (mounted on console)
 ///
-/// The rod is positioned at `lever_position` (0.0 = bottom, 1.0 = top)
-/// along the track's 0.4m travel range. Default: bottom (0.0).
+/// The handle slides along the track's 0.5m travel range.
 pub fn lever_mesh(lever_position: f32) -> Mesh {
     let pos = lever_position.clamp(0.0, 1.0);
-    let travel = 0.4; // total travel distance
+    let travel = 0.5;
     let rod_y_offset = -travel / 2.0 + pos * travel;
 
     let mut meshes = Vec::new();
 
-    // Track (thin vertical guide)
-    let track = box_mesh(0.05, travel, 0.02, colors::HULL_ACCENT);
+    // Track (vertical guide rail)
+    let track = box_mesh(0.08, travel, 0.04, colors::HULL_ACCENT);
     meshes.push(track);
 
     // Base plate
-    let base = box_mesh(0.1, 0.02, 0.06, colors::FLOOR);
+    let base = box_mesh(0.15, 0.04, 0.10, colors::FLOOR);
     let base = base.transform(Mat4::from_translation(Vec3::new(
         0.0,
-        -travel / 2.0 - 0.01,
+        -travel / 2.0 - 0.02,
         0.0,
     )));
     meshes.push(base);
 
-    // Rod (cylinder along Y)
-    let rod = cylinder_mesh(0.02, 0.3, 6, colors::ACCENT_HELM);
-    let rod = rod.transform(Mat4::from_translation(Vec3::new(0.0, rod_y_offset, 0.03)));
-    meshes.push(rod);
+    // Shaft (vertical rod connecting handle to track)
+    let shaft = box_mesh(0.03, 0.20, 0.03, colors::ACCENT_HELM);
+    let shaft = shaft.transform(Mat4::from_translation(Vec3::new(0.0, rod_y_offset, 0.04)));
+    meshes.push(shaft);
+
+    // Handle knob (grippable top)
+    let handle = box_mesh(0.06, 0.06, 0.06, colors::ACCENT_ENGINE);
+    let handle = handle.transform(Mat4::from_translation(Vec3::new(0.0, rod_y_offset + 0.13, 0.04)));
+    meshes.push(handle);
 
     Mesh::merge(&meshes)
 }
 
-/// Button mesh: a small raised box on a base plate.
+/// Button mesh: a visible raised box on a base plate.
 ///
-/// - Button face: box 0.08 x 0.08 x 0.04
-/// - Base plate: box 0.12 x 0.12 x 0.02
+/// - Button face: box 0.12 x 0.12 x 0.06 (clearly visible)
+/// - Base plate: box 0.18 x 0.04 x 0.18
 ///
 /// `pressed`: if true, the button face is depressed (lower Y offset).
 pub fn button_mesh(pressed: bool) -> Mesh {
     let mut meshes = Vec::new();
 
     // Base plate
-    let base = box_mesh(0.12, 0.02, 0.12, colors::FLOOR);
+    let base = box_mesh(0.18, 0.04, 0.18, colors::FLOOR);
     meshes.push(base);
 
     // Button face
-    let button_y = if pressed { 0.015 } else { 0.03 };
-    let button = box_mesh(0.08, 0.04, 0.08, colors::ACCENT_ENGINE);
+    let button_y = if pressed { 0.025 } else { 0.05 };
+    let button = box_mesh(0.12, 0.06, 0.12, colors::ACCENT_ENGINE);
     let button = button.transform(Mat4::from_translation(Vec3::new(0.0, button_y, 0.0)));
     meshes.push(button);
 
@@ -116,9 +121,9 @@ pub fn helm_seat_mesh() -> Mesh {
     let seat = box_mesh(0.5, 0.1, 0.5, colors::HULL_ACCENT);
     meshes.push(seat);
 
-    // Back (vertical surface behind seat)
+    // Back (vertical surface behind seat, toward aft/+Z since person faces -Z/forward)
     let back = box_mesh(0.5, 0.6, 0.1, colors::HULL_ACCENT);
-    let back = back.transform(Mat4::from_translation(Vec3::new(0.0, 0.35, -0.2)));
+    let back = back.transform(Mat4::from_translation(Vec3::new(0.0, 0.35, 0.3)));
     meshes.push(back);
 
     Mesh::merge(&meshes)
