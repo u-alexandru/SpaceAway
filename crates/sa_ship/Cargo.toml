@@ -1,0 +1,14 @@
+[package]
+name = "sa_ship"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sa_core.workspace = true
+sa_math.workspace = true
+sa_physics.workspace = true
+sa_ecs.workspace = true
+sa_input.workspace = true
+rapier3d.workspace = true
+glam.workspace = true
+nalgebra.workspace = true

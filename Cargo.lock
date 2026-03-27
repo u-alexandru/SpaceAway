@@ -2151,6 +2151,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "sa_ship"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "nalgebra",
+ "rapier3d 0.22.0",
+ "sa_core",
+ "sa_ecs",
+ "sa_input",
+ "sa_math",
+ "sa_physics",
+]
+
+[[package]]
 name = "sa_universe"
 version = "0.1.0"
 dependencies = [

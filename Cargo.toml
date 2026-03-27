@@ -10,6 +10,7 @@ members = [
     "crates/sa_player",
     "crates/sa_universe",
     "crates/sa_meshgen",
+    "crates/sa_ship",
     "crates/spaceaway",
 ]
 
@@ -53,3 +54,4 @@ xxhash-rust = { version = "0.8", features = ["xxh3"] }
 csgrs = { version = "0.20", default-features = false, features = ["f32", "earcut"] }
 nalgebra = "0.33"
 sa_meshgen = { path = "crates/sa_meshgen" }
+sa_ship = { path = "crates/sa_ship" }
