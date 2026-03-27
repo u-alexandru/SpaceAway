@@ -51,4 +51,5 @@ sa_player = { path = "crates/sa_player" }
 sa_universe = { path = "crates/sa_universe" }
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 csgrs = { version = "0.20", default-features = false, features = ["f32", "earcut"] }
+nalgebra = "0.33"
 sa_meshgen = { path = "crates/sa_meshgen" }
