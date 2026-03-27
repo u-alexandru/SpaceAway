@@ -205,7 +205,10 @@ struct App {
 impl App {
     fn new() -> Self {
         // Zero gravity for space
-        let mut physics = PhysicsWorld::with_gravity(0.0, 0.0, 0.0);
+        // Use normal gravity — the ship body has gravity_scale(0.0) so it's unaffected.
+        // The player body uses default gravity_scale(1.0) so it falls naturally onto the floor.
+        // This is more stable than manually applying force each frame.
+        let mut physics = PhysicsWorld::new(); // default gravity (0, -9.81, 0)
 
         // Create ship and interactables
         let (ship, interaction, ids) =
@@ -738,12 +741,8 @@ impl ApplicationHandler for App {
                         player.update(&mut self.physics, &self.input, dt);
                     }
 
-                    // Simulated mag-boot gravity: ~1g on a ~80kg player = ~785 N downward
-                    if let Some(player) = &self.player
-                        && let Some(body) = self.physics.get_body_mut(player.body_handle)
-                    {
-                        body.add_force(nalgebra::Vector3::new(0.0, -785.0, 0.0), true);
-                    }
+                    // Gravity handled by PhysicsWorld (0, -9.81, 0).
+                    // Ship body has gravity_scale(0.0), player has default (1.0).
 
                     let physics_dt = dt.min(1.0 / 30.0);
                     if physics_dt > 0.0 {
