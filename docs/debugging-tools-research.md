@@ -66,11 +66,13 @@ fn update(&mut self) {
 
 ## Recommended Implementation Plan
 
-### Phase 1: Built-in debug overlay (NOW)
-Extend our existing debug system (`/tmp/spaceaway_debug.json` + window title):
-- Add per-system timing to the debug file (physics_ms, render_ms, ui_ms, stars_ms)
-- Show in window title: `physics:0.5ms render:2.1ms ui:0.8ms stars:12ms`
-- This tells us WHICH system is the bottleneck without any new dependencies
+### Phase 1: Built-in debug overlay (DONE)
+Implemented in `/tmp/spaceaway_debug.json` + window title:
+- Per-system timing: phys_step, query_pipeline, move_shape, render, total, fps
+- Player/ship positions, velocities, player-ship offset
+- Interaction state (hovered, dragging, ray debug)
+- Physics stats (body count, collider count)
+- VSync toggle (V key) for uncapped benchmarking
 
 ### Phase 2: Puffin integration (WHEN NEEDED)
 Add `puffin` for detailed CPU profiling:
@@ -102,11 +104,16 @@ wgpu-profiler = "0.18"
 
 ## For AI Agent Debugging
 
-The most useful tool for Claude Code is the **debug JSON file** we already have. Enhancements:
-- Add per-frame timing breakdown
+The debug JSON file at `/tmp/spaceaway_debug.json` is the primary tool for AI-assisted debugging. Currently includes:
+- Per-frame timing breakdown (phys_step, query_pipeline, move_shape, render, fps)
+- Player and ship positions, velocities, grounded state
+- Player-to-ship offset (should be constant when standing still)
+- Interaction raycast debug (origin, direction, hit info)
+- Physics world stats (body count, collider count)
+
+### Remaining enhancements:
 - Add collider positions dump (on keypress)
 - Add ship rotation as euler angles (more readable than quaternion)
-- Add player-to-ship relative position (should be constant when standing still)
 
 ## Sources
 

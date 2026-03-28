@@ -120,6 +120,7 @@ See `docs/modular-ship-standards.md` Section 8 and `docs/interior-standards.md` 
 | `6` | Cycle through individual ship parts (mesh inspection) |
 | `7` | Load full assembled ship mesh |
 | `F` | Toggle fly mode (free-camera, galaxy-scale movement) |
+| `V` | Toggle VSync (benchmark mode — uncapped FPS) |
 | `+` / `=` | Double fly speed |
 | `-` | Halve fly speed (min 1 ly/s) |
 | `W/A/S/D` | Move in fly mode |
@@ -149,3 +150,4 @@ Primary target: macOS (Metal via wgpu). Secondary: Windows (DX12/Vulkan via wgpu
 - `docs/modular-ship-standards.md` — complete hex hull construction rules, connection point spec, validation functions, two-sided rendering rules
 - `docs/interior-standards.md` — interior dimensions, bulkhead system, color palette, validation rules
 - `docs/ship-design-guide.md` — ship layout reference (bow→stern sections), color palette, part assembly guide
+- `docs/performance-techniques.md` — all performance optimizations with rationale, files, and benchmarks
