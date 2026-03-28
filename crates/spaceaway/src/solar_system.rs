@@ -225,21 +225,21 @@ impl ActiveSystem {
         let mut positions: Vec<WorldPos> = Vec::with_capacity(self.bodies.len());
 
         for body in &self.bodies {
-            if body.orbital_period_s <= 0.0 {
-                // Star: at the system's galactic position.
+            if body.parent_index < 0 {
+                // Star, corona, or other top-level body: at the star's galactic position.
                 positions.push(self.star_galactic_pos);
+            } else if body.orbital_period_s <= 0.0 {
+                // Co-located child (atmosphere, ring): at parent's position.
+                positions.push(positions[body.parent_index as usize]);
             } else {
+                // Orbiting child (planet or moon): compute orbital position.
                 let theta = body.initial_phase
                     + (std::f64::consts::TAU * self.game_time_s * TIME_SCALE)
                         / body.orbital_period_s;
                 let x_m = body.orbital_radius_m * theta.cos();
                 let z_m = body.orbital_radius_m * theta.sin();
 
-                let parent_pos = if body.parent_index < 0 {
-                    self.star_galactic_pos
-                } else {
-                    positions[body.parent_index as usize]
-                };
+                let parent_pos = positions[body.parent_index as usize];
 
                 positions.push(WorldPos::new(
                     parent_pos.x + x_m * meters_to_ly,
