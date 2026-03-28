@@ -982,7 +982,10 @@ impl ApplicationHandler for App {
                         }
                     }
 
-                    // Step 5: Update query pipeline
+                    // Step 5: Sync collider positions + update query pipeline.
+                    // Manual integration uses set_position() which doesn't sync
+                    // child colliders (interactables). Must call this explicitly.
+                    self.physics.sync_collider_positions();
                     let t_qp = Instant::now();
                     self.physics.update_query_pipeline();
                     let qp_us = t_qp.elapsed().as_micros();

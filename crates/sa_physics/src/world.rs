@@ -101,7 +101,16 @@ impl PhysicsWorld {
         self.gravity = nalgebra::Vector3::new(x, y, z);
     }
 
-    /// Updates the query pipeline for raycasting. Call after `step()`.
+    /// Sync child collider world positions after manually moving bodies
+    /// with `set_position()` without calling `step()`. Required when
+    /// skipping the physics step (e.g., manual ship integration in walk mode).
+    pub fn sync_collider_positions(&mut self) {
+        self.rigid_body_set
+            .propagate_modified_body_positions_to_colliders(&mut self.collider_set);
+    }
+
+    /// Updates the query pipeline for raycasting. Call after `step()` or
+    /// after `sync_collider_positions()`.
     pub fn update_query_pipeline(&mut self) {
         self.query_pipeline.update(&self.collider_set);
     }
