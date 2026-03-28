@@ -11,6 +11,7 @@ members = [
     "crates/sa_universe",
     "crates/sa_meshgen",
     "crates/sa_ship",
+    "crates/sa_survival",
     "crates/spaceaway",
 ]
 
@@ -55,5 +56,6 @@ csgrs = { version = "0.20", default-features = false, features = ["f32", "earcut
 nalgebra = "0.33"
 sa_meshgen = { path = "crates/sa_meshgen" }
 sa_ship = { path = "crates/sa_ship" }
+sa_survival = { path = "crates/sa_survival" }
 egui = "0.31"
 egui-wgpu = { version = "0.31", default-features = false }

@@ -2248,6 +2248,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sa_survival"
+version = "0.1.0"
+
+[[package]]
 name = "sa_universe"
 version = "0.1.0"
 dependencies = [
@@ -2450,6 +2454,7 @@ dependencies = [
  "sa_player",
  "sa_render",
  "sa_ship",
+ "sa_survival",
  "sa_universe",
  "wgpu",
  "winit",

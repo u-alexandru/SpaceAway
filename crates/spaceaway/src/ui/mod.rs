@@ -2,10 +2,12 @@
 
 pub mod helm_screen;
 pub mod hud;
+pub mod sensors_screen;
 
 use egui_wgpu::ScreenDescriptor;
 use helm_screen::HelmData;
 use sa_ship::InteractableKind;
+use sensors_screen::SensorsData;
 
 /// Monitor texture resolution (square).
 const MONITOR_SIZE: u32 = 256;
@@ -17,6 +19,12 @@ pub struct HudState {
     /// Screen dimensions in physical pixels.
     pub screen_width: u32,
     pub screen_height: u32,
+    /// Current fuel level (0.0 to 1.0).
+    pub fuel: f32,
+    /// Current oxygen level (0.0 to 1.0).
+    pub oxygen: f32,
+    /// Whether a gatherable deposit is within range.
+    pub gather_available: bool,
 }
 
 /// Manages egui context, egui-wgpu renderer, and all UI rendering.
@@ -27,13 +35,20 @@ pub struct UiSystem {
     screen_width: u32,
     screen_height: u32,
 
-    // --- Monitor (offscreen) ---
+    // --- Helm Monitor (offscreen) ---
     monitor_ctx: egui::Context,
     monitor_renderer: egui_wgpu::Renderer,
     /// Kept alive so the texture_view remains valid.
     #[allow(dead_code)]
     monitor_texture: wgpu::Texture,
     monitor_texture_view: wgpu::TextureView,
+
+    // --- Sensors Monitor (offscreen) ---
+    sensors_ctx: egui::Context,
+    sensors_renderer: egui_wgpu::Renderer,
+    #[allow(dead_code)]
+    sensors_texture: wgpu::Texture,
+    sensors_texture_view: wgpu::TextureView,
 }
 
 impl UiSystem {
@@ -63,7 +78,18 @@ impl UiSystem {
             false,
         );
 
-        let (monitor_texture, monitor_texture_view) = Self::create_monitor_texture(device);
+        let (monitor_texture, monitor_texture_view) = Self::create_monitor_texture(device, "Helm Monitor Texture");
+
+        // Sensors monitor: separate context, renderer, and texture
+        let sensors_ctx = egui::Context::default();
+        let sensors_renderer = egui_wgpu::Renderer::new(
+            device,
+            monitor_format,
+            None,
+            1,
+            false,
+        );
+        let (sensors_texture, sensors_texture_view) = Self::create_monitor_texture(device, "Sensors Monitor Texture");
 
         Self {
             egui_ctx,
@@ -74,12 +100,16 @@ impl UiSystem {
             monitor_renderer,
             monitor_texture,
             monitor_texture_view,
+            sensors_ctx,
+            sensors_renderer,
+            sensors_texture,
+            sensors_texture_view,
         }
     }
 
-    fn create_monitor_texture(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
+    fn create_monitor_texture(device: &wgpu::Device, label: &str) -> (wgpu::Texture, wgpu::TextureView) {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Helm Monitor Texture"),
+            label: Some(label),
             size: wgpu::Extent3d {
                 width: MONITOR_SIZE,
                 height: MONITOR_SIZE,
@@ -101,9 +131,14 @@ impl UiSystem {
         self.screen_height = height;
     }
 
-    /// Get the monitor texture view for binding in the screen pipeline.
+    /// Get the helm monitor texture view for binding in the screen pipeline.
     pub fn helm_texture_view(&self) -> &wgpu::TextureView {
         &self.monitor_texture_view
+    }
+
+    /// Get the sensors monitor texture view for binding in the screen pipeline.
+    pub fn sensors_texture_view(&self) -> &wgpu::TextureView {
+        &self.sensors_texture_view
     }
 
     /// Render the helm monitor UI to the offscreen texture.
@@ -181,6 +216,81 @@ impl UiSystem {
 
         for id in &full_output.textures_delta.free {
             self.monitor_renderer.free_texture(id);
+        }
+    }
+
+    /// Render the sensors monitor UI to the offscreen texture.
+    pub fn render_sensors_monitor(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        sensors_data: &SensorsData,
+    ) {
+        let screen_descriptor = ScreenDescriptor {
+            size_in_pixels: [MONITOR_SIZE, MONITOR_SIZE],
+            pixels_per_point: 1.0,
+        };
+
+        let raw_input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(MONITOR_SIZE as f32, MONITOR_SIZE as f32),
+            )),
+            ..Default::default()
+        };
+
+        let full_output = self.sensors_ctx.run(raw_input, |ctx| {
+            sensors_screen::draw_sensors_screen(ctx, sensors_data);
+        });
+
+        let paint_jobs = self
+            .sensors_ctx
+            .tessellate(full_output.shapes, full_output.pixels_per_point);
+
+        for (id, delta) in &full_output.textures_delta.set {
+            self.sensors_renderer
+                .update_texture(device, queue, *id, delta);
+        }
+
+        let cmd_buffers = self.sensors_renderer.update_buffers(
+            device,
+            queue,
+            encoder,
+            &paint_jobs,
+            &screen_descriptor,
+        );
+
+        {
+            let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Sensors Monitor Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.sensors_texture_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.05,
+                            g: 0.03,
+                            b: 0.08,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                ..Default::default()
+            });
+            let mut pass = pass.forget_lifetime();
+            self.sensors_renderer
+                .render(&mut pass, &paint_jobs, &screen_descriptor);
+        }
+
+        if !cmd_buffers.is_empty() {
+            queue.submit(cmd_buffers);
+        }
+
+        for id in &full_output.textures_delta.free {
+            self.sensors_renderer.free_texture(id);
         }
     }
 

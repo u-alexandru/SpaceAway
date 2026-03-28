@@ -1,0 +1,6 @@
+[package]
+name = "sa_survival"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]

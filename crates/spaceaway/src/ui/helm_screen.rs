@@ -11,6 +11,7 @@ pub struct HelmData {
     pub speed: f32,
     pub throttle: f32,
     pub engine_on: bool,
+    pub fuel: f32,
 }
 
 /// Draw the helm monitor UI. Called within an egui context that targets
@@ -106,6 +107,43 @@ pub fn draw_helm_screen(ctx: &egui::Context, data: &HelmData) {
                     .size(16.0)
                     .strong(),
             );
+
+            ui.add_space(12.0);
+
+            // Fuel gauge
+            let fuel_color = if data.fuel < 0.2 {
+                egui::Color32::from_rgb(220, 50, 30)
+            } else if data.fuel < 0.5 {
+                egui::Color32::from_rgb(220, 160, 30)
+            } else {
+                HELM_BLUE
+            };
+            ui.label(
+                egui::RichText::new(format!("FUEL  {:.0}%", data.fuel * 100.0))
+                    .color(fuel_color)
+                    .size(14.0),
+            );
+
+            // Fuel bar
+            let bar_width = 120.0;
+            let bar_height = 6.0;
+            let (fuel_rect, _) = ui.allocate_exact_size(
+                egui::vec2(bar_width, bar_height),
+                egui::Sense::hover(),
+            );
+            ui.painter().rect_filled(
+                fuel_rect,
+                2.0,
+                egui::Color32::from_rgb(30, 30, 40),
+            );
+            let fill_width = bar_width * data.fuel;
+            if fill_width > 0.5 {
+                let fill_rect = egui::Rect::from_min_size(
+                    fuel_rect.left_top(),
+                    egui::vec2(fill_width, bar_height),
+                );
+                ui.painter().rect_filled(fill_rect, 2.0, fuel_color);
+            }
         });
     });
 }

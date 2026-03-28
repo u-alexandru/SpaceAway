@@ -16,7 +16,9 @@ use sa_render::{
 use sa_ship::helm::HelmController;
 use sa_ship::interaction::InteractionSystem;
 use sa_ship::ship::Ship;
+use sa_survival::{ResourceDeposit, ShipResources, generate_deposits};
 use sa_universe::{MasterSeed, Universe, VisibleStar};
+use std::collections::HashSet;
 use std::io::Write;
 use std::sync::Arc;
 use std::time::Instant;
@@ -214,6 +216,18 @@ struct App {
     screen_quad: Option<ScreenQuad>,
     /// Bind group for the helm monitor texture.
     screen_bind_group: Option<wgpu::BindGroup>,
+    /// Screen quad mesh for the sensors monitor.
+    sensors_quad: Option<ScreenQuad>,
+    /// Bind group for the sensors monitor texture.
+    sensors_bind_group: Option<wgpu::BindGroup>,
+    /// Ship survival resources (fuel, oxygen, power).
+    ship_resources: ShipResources,
+    /// Resource deposits in the game world.
+    deposits: Vec<ResourceDeposit>,
+    /// IDs of deposits that have been gathered.
+    gathered: HashSet<u64>,
+    /// Index of the nearest gatherable deposit (within range), if any.
+    nearest_gatherable: Option<usize>,
 }
 
 impl App {
@@ -276,6 +290,12 @@ impl App {
             ui_system: None,
             screen_quad: None,
             screen_bind_group: None,
+            sensors_quad: None,
+            sensors_bind_group: None,
+            ship_resources: ShipResources::new(),
+            deposits: generate_deposits(42),
+            gathered: HashSet::new(),
+            nearest_gatherable: None,
         }
     }
 
@@ -328,13 +348,23 @@ impl App {
         let screen_quad = ScreenQuad::new(&gpu.device, 0.6, 0.4);
         self.screen_quad = Some(screen_quad);
 
-        // Create initial bind group for the monitor texture
+        // Create sensors screen quad (same size as helm)
+        let sensors_quad = ScreenQuad::new(&gpu.device, 0.6, 0.4);
+        self.sensors_quad = Some(sensors_quad);
+
+        // Create initial bind groups for the monitor textures
         if let Some(ui_sys) = &self.ui_system {
             let bind_group = renderer.screen_pipeline.create_texture_bind_group(
                 &gpu.device,
                 ui_sys.helm_texture_view(),
             );
             self.screen_bind_group = Some(bind_group);
+
+            let sensors_bg = renderer.screen_pipeline.create_texture_bind_group(
+                &gpu.device,
+                ui_sys.sensors_texture_view(),
+            );
+            self.sensors_bind_group = Some(sensors_bg);
         }
     }
 
@@ -1070,6 +1100,73 @@ impl ApplicationHandler for App {
                     }
                 }
 
+                // --- Survival resources update ---
+                {
+                    let throttle = self.ship.as_ref().map(|s| s.throttle).unwrap_or(0.0);
+                    let engine_on = self.ship.as_ref().map(|s| s.engine_on).unwrap_or(false);
+                    self.ship_resources.update(dt, throttle, engine_on);
+
+                    // Low fuel consequence: reduce max thrust linearly below 20%
+                    if let Some(ship) = &mut self.ship {
+                        if self.ship_resources.fuel < 0.2 {
+                            ship.max_thrust = self.ship_resources.fuel * 5.0 * Ship::DEFAULT_MAX_THRUST;
+                        } else {
+                            ship.max_thrust = Ship::DEFAULT_MAX_THRUST;
+                        }
+                    }
+                }
+
+                // --- Gathering: check proximity to deposits ---
+                {
+                    let ship_pos = self.ship.as_ref()
+                        .and_then(|s| s.position(&self.physics))
+                        .unwrap_or((0.0, 0.0, 0.0));
+
+                    let mut nearest: Option<(usize, f32)> = None;
+                    for (i, dep) in self.deposits.iter().enumerate() {
+                        if self.gathered.contains(&dep.id) {
+                            continue;
+                        }
+                        let dx = dep.position[0] - ship_pos.0;
+                        let dy = dep.position[1] - ship_pos.1;
+                        let dz = dep.position[2] - ship_pos.2;
+                        let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+                        if dist < 500.0
+                            && (nearest.is_none() || dist < nearest.unwrap().1)
+                        {
+                            nearest = Some((i, dist));
+                        }
+                    }
+                    self.nearest_gatherable = nearest.map(|(i, _)| i);
+
+                    // Gather on click when in range (and not interacting with ship controls)
+                    if let Some(idx) = self.nearest_gatherable
+                        && self.input.mouse.left_just_pressed()
+                    {
+                        let dep = &self.deposits[idx];
+                        match dep.kind {
+                            sa_survival::ResourceKind::FuelAsteroid => {
+                                self.ship_resources.add_fuel(dep.amount);
+                            }
+                            sa_survival::ResourceKind::SupplyCache => {
+                                self.ship_resources.add_oxygen(dep.amount);
+                            }
+                            sa_survival::ResourceKind::Derelict => {
+                                self.ship_resources.add_fuel(dep.amount);
+                                self.ship_resources.add_oxygen(dep.amount);
+                            }
+                        }
+                        log::info!(
+                            "Gathered {} (+{:.0}%) at [{:.0}, {:.0}, {:.0}]",
+                            dep.kind.label(),
+                            dep.amount * 100.0,
+                            dep.position[0], dep.position[1], dep.position[2],
+                        );
+                        self.gathered.insert(dep.id);
+                        self.nearest_gatherable = None;
+                    }
+                }
+
                 // Update speed screen text
                 if let (Some(interaction), Some(ship)) = (&mut self.interaction, &self.ship)
                     && let Some(ids) = &self.ship_ids
@@ -1107,6 +1204,7 @@ impl ApplicationHandler for App {
                             engine_on: self.ship.as_ref()
                                 .map(|s| s.engine_on)
                                 .unwrap_or(false),
+                            fuel: self.ship_resources.fuel,
                         };
                         let mut monitor_encoder = gpu.device.create_command_encoder(
                             &wgpu::CommandEncoderDescriptor {
@@ -1120,6 +1218,41 @@ impl ApplicationHandler for App {
                             &helm_data,
                         );
                         gpu.queue.submit(std::iter::once(monitor_encoder.finish()));
+
+                        // Render sensors monitor
+                        let ship_pos = self.ship.as_ref()
+                            .and_then(|s| s.position(&self.physics))
+                            .unwrap_or((0.0, 0.0, 0.0));
+                        let contacts: Vec<ui::sensors_screen::SensorContact> = self.deposits.iter()
+                            .map(|dep| {
+                                let dx = dep.position[0] - ship_pos.0;
+                                let dy = dep.position[1] - ship_pos.1;
+                                let dz = dep.position[2] - ship_pos.2;
+                                let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+                                ui::sensors_screen::SensorContact {
+                                    label: dep.kind.label().to_string(),
+                                    icon: dep.kind.icon().to_string(),
+                                    distance: dist,
+                                    gathered: self.gathered.contains(&dep.id),
+                                }
+                            })
+                            .collect();
+                        let sensors_data = ui::sensors_screen::SensorsData {
+                            contacts,
+                            ship_fuel: self.ship_resources.fuel,
+                        };
+                        let mut sensors_encoder = gpu.device.create_command_encoder(
+                            &wgpu::CommandEncoderDescriptor {
+                                label: Some("Sensors Encoder"),
+                            },
+                        );
+                        ui_sys.render_sensors_monitor(
+                            &gpu.device,
+                            &gpu.queue,
+                            &mut sensors_encoder,
+                            &sensors_data,
+                        );
+                        gpu.queue.submit(std::iter::once(sensors_encoder.finish()));
                     }
 
                     // 2. Build draw commands
@@ -1160,8 +1293,10 @@ impl ApplicationHandler for App {
                         // Skip the Speed Display mesh (id=3) — replaced by the egui monitor quad.
                         let layout = sa_ship::station::cockpit_layout();
                         for (i, handle) in self.interactable_meshes.iter().enumerate() {
-                            if let Some(ids) = &self.ship_ids {
-                                if i == ids.speed_screen { continue; }
+                            if let Some(ids) = &self.ship_ids
+                                && i == ids.speed_screen
+                            {
+                                continue;
                             }
                             if let Some(placement) = layout.interactables.get(i) {
                                 let pos = placement.position;
@@ -1188,19 +1323,30 @@ impl ApplicationHandler for App {
                                 } else { Mat4::IDENTITY }
                             } else { Mat4::IDENTITY };
 
+                            let mut draws = Vec::new();
+                            // Helm monitor at Speed Display position
                             if let (Some(quad), Some(bind_group)) =
                                 (&self.screen_quad, &self.screen_bind_group)
                             {
-                                // Speed Display position from cockpit layout: (0.0, 0.3, 0.8)
                                 let screen_pos = Vec3::new(0.0, 0.3, 0.8);
-                                vec![ScreenDrawCommand {
+                                draws.push(ScreenDrawCommand {
                                     quad,
                                     model_matrix: ship_transform * Mat4::from_translation(screen_pos),
                                     texture_bind_group: bind_group,
-                                }]
-                            } else {
-                                vec![]
+                                });
                             }
+                            // Sensors monitor to the right of the helm
+                            if let (Some(quad), Some(bind_group)) =
+                                (&self.sensors_quad, &self.sensors_bind_group)
+                            {
+                                let screen_pos = Vec3::new(0.8, 0.3, 0.8);
+                                draws.push(ScreenDrawCommand {
+                                    quad,
+                                    model_matrix: ship_transform * Mat4::from_translation(screen_pos),
+                                    texture_bind_group: bind_group,
+                                });
+                            }
+                            draws
                         } else {
                             vec![]
                         };
@@ -1227,6 +1373,9 @@ impl ApplicationHandler for App {
                                 hovered_kind,
                                 screen_width: gpu.config.width,
                                 screen_height: gpu.config.height,
+                                fuel: self.ship_resources.fuel,
+                                oxygen: self.ship_resources.oxygen,
+                                gather_available: self.nearest_gatherable.is_some(),
                             };
                             ui_sys.render_hud(
                                 &gpu.device,
