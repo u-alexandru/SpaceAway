@@ -10,5 +10,6 @@ sa_core.workspace = true
 sa_math.workspace = true
 sa_physics.workspace = true
 sa_input.workspace = true
+nalgebra.workspace = true
 rapier3d.workspace = true
 winit.workspace = true

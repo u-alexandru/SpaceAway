@@ -2128,6 +2128,7 @@ version = "0.1.0"
 dependencies = [
  "glam",
  "log",
+ "nalgebra",
  "rapier3d 0.22.0",
  "sa_core",
  "sa_input",

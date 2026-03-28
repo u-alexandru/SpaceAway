@@ -1,4 +1,7 @@
 use glam::Vec3;
+use rapier3d::control::{
+    CharacterAutostep, CharacterLength, KinematicCharacterController,
+};
 use rapier3d::prelude::*;
 use sa_input::InputState;
 use sa_math::WorldPos;
@@ -8,53 +11,84 @@ use winit::keyboard::KeyCode;
 const PLAYER_RADIUS: f32 = 0.3;
 const PLAYER_HALF_HEIGHT: f32 = 0.6;
 const MOVE_SPEED: f32 = 5.0;
-const JUMP_IMPULSE: f32 = 5.0;
+const JUMP_SPEED: f32 = 5.0;
 const MOUSE_SENSITIVITY: f32 = 0.003;
+const GRAVITY: f32 = 9.81;
+
+/// Eye height above the rigid body origin (top of capsule).
+const EYE_HEIGHT: f32 = PLAYER_HALF_HEIGHT + PLAYER_RADIUS;
 
 pub struct PlayerController {
     pub body_handle: RigidBodyHandle,
+    pub collider_handle: ColliderHandle,
     pub yaw: f32,
     pub pitch: f32,
     pub grounded: bool,
     prev_space_pressed: bool,
+    char_controller: KinematicCharacterController,
+    /// Vertical velocity tracked manually (kinematic bodies have no physics velocity).
+    vertical_velocity: f32,
+    /// The capsule shape used for sweep tests in `move_shape`.
+    character_shape: SharedShape,
 }
 
 impl PlayerController {
     /// Spawns a player capsule rigid body at the given position.
-    /// The body has locked rotations and linear damping for responsive movement.
+    /// Uses a kinematic-position-based body so the player exerts zero reaction
+    /// forces on the environment (no more 785 N gravity counterforce on the ship).
     pub fn spawn(physics: &mut PhysicsWorld, x: f32, y: f32, z: f32) -> Self {
-        let body = RigidBodyBuilder::dynamic()
+        let body = RigidBodyBuilder::kinematic_position_based()
             .translation(nalgebra::Vector3::new(x, y, z))
-            .lock_rotations()
-            .linear_damping(0.0)
-            .ccd_enabled(true)
-            .can_sleep(false) // Player must never sleep — always responsive to input
             .build();
         let body_handle = physics.add_rigid_body(body);
 
         let collider = ColliderBuilder::capsule_y(PLAYER_HALF_HEIGHT, PLAYER_RADIUS)
-            .friction(1.0) // High friction — player grips the floor and moves with the ship.
-                           // At accelerations > ~1g the player slides (realistic).
+            .friction(0.0) // Kinematic body — friction is irrelevant
             .restitution(0.0)
-            .mass(80.0) // 80 kg player — must match the mag-boot gravity force (785 N ≈ 80kg × 9.81)
             .build();
-        physics.add_collider(collider, body_handle);
+        let collider_handle = physics.add_collider(collider, body_handle);
+
+        let char_controller = KinematicCharacterController {
+            up: nalgebra::UnitVector3::new_normalize(nalgebra::Vector3::y()),
+            offset: CharacterLength::Absolute(0.02),
+            autostep: Some(CharacterAutostep {
+                max_height: CharacterLength::Absolute(0.3),
+                min_width: CharacterLength::Absolute(0.2),
+                include_dynamic_bodies: true,
+            }),
+            snap_to_ground: Some(CharacterLength::Absolute(0.2)),
+            max_slope_climb_angle: 50_f32.to_radians(),
+            min_slope_slide_angle: 30_f32.to_radians(),
+            ..Default::default()
+        };
+
+        let character_shape = SharedShape::capsule_y(PLAYER_HALF_HEIGHT, PLAYER_RADIUS);
 
         Self {
             body_handle,
+            collider_handle,
             yaw: 0.0,
             pitch: 0.0,
             grounded: true,
             prev_space_pressed: false,
+            char_controller,
+            vertical_velocity: 0.0,
+            character_shape,
         }
     }
 
     /// Updates the player based on input: mouse look, WASD movement, and jumping.
     ///
     /// `base_velocity`: the velocity of the platform the player stands on (e.g. ship).
-    /// All player movement is relative to this base. When idle, the player matches
-    /// the base velocity exactly — no sliding, no friction-correction needed.
-    pub fn update(&mut self, physics: &mut PhysicsWorld, input: &InputState, _dt: f32, base_velocity: [f32; 3]) {
+    /// All player movement is relative to this base. The kinematic character controller
+    /// computes a swept movement that handles walls, slopes, and steps automatically.
+    pub fn update(
+        &mut self,
+        physics: &mut PhysicsWorld,
+        input: &InputState,
+        dt: f32,
+        base_velocity: [f32; 3],
+    ) {
         // Mouse look
         let (dx, dy) = input.mouse.delta();
         self.yaw += dx * MOUSE_SENSITIVITY;
@@ -83,56 +117,66 @@ impl PlayerController {
             move_dir = move_dir.normalize();
         }
 
-        // Force-based movement instead of set_linvel.
-        //
-        // set_linvel injects velocity every frame, creating 24,000 N impulses
-        // when the player hits a wall (F = m * Δv / dt = 80 * 5 / 0.016).
-        // Force-based movement caps the force at a realistic level (~400 N),
-        // so even pushing against a wall only applies human-scale force to
-        // the ship (imperceptible on a 50,000 kg vessel).
-        //
-        // The target velocity is base_velocity (ship) + walk_direction * MOVE_SPEED.
-        // A PD controller drives the player toward this target with capped force.
-        if let Some(body) = physics.get_body_mut(self.body_handle) {
-            let current_vel = *body.linvel();
-
-            // Target velocity: match the ship + player walking intent
-            let target = nalgebra::Vector3::new(
-                base_velocity[0] + move_dir.x * MOVE_SPEED,
-                current_vel.y, // vertical handled by gravity
-                base_velocity[2] + move_dir.z * MOVE_SPEED,
-            );
-
-            // Velocity error (what we need to correct)
-            let error = target - current_vel;
-            let error_horizontal = nalgebra::Vector3::new(error.x, 0.0, error.z);
-
-            // Apply force proportional to error, capped at MAX_WALK_FORCE.
-            // This acts like a spring pulling the player toward the target velocity.
-            // Cap at 400 N — realistic human walking/pushing force.
-            const MAX_WALK_FORCE: f32 = 400.0;
-            const GAIN: f32 = 80.0; // N per (m/s) of error — critically damped for 80 kg
-
-            let force_magnitude = (error_horizontal.magnitude() * GAIN).min(MAX_WALK_FORCE);
-            if error_horizontal.magnitude() > 0.01 {
-                let force_dir = error_horizontal.normalize();
-                let force = force_dir * force_magnitude;
-                body.add_force(force, true);
-            }
-
-            self.grounded = current_vel.y.abs() < 0.5;
-        }
-
         // Rising-edge jump detection: only jump on the frame Space is first pressed
         let space_pressed = input.keyboard.is_pressed(KeyCode::Space);
         let jump_requested = space_pressed && !self.prev_space_pressed;
         self.prev_space_pressed = space_pressed;
 
-        if jump_requested
-            && self.grounded
-            && let Some(body) = physics.get_body_mut(self.body_handle)
-        {
-            body.apply_impulse(nalgebra::Vector3::new(0.0, JUMP_IMPULSE, 0.0), true);
+        // Vertical velocity: gravity when airborne, jump impulse, reset when grounded
+        if self.grounded {
+            // Snap vertical velocity to zero when on the ground.
+            // Gravity is handled by snap_to_ground in the character controller.
+            self.vertical_velocity = 0.0;
+            if jump_requested {
+                self.vertical_velocity = JUMP_SPEED;
+            }
+        } else {
+            self.vertical_velocity -= GRAVITY * dt;
+        }
+
+        // Desired translation = (base_velocity + walk + vertical) * dt
+        let walk_vel = move_dir * MOVE_SPEED;
+        let desired = nalgebra::Vector3::new(
+            (base_velocity[0] + walk_vel.x) * dt,
+            (base_velocity[1] + self.vertical_velocity) * dt,
+            (base_velocity[2] + walk_vel.z) * dt,
+        );
+
+        // Get current character position from the kinematic body
+        let char_pos = physics
+            .get_body(self.body_handle)
+            .map(|b| *b.position())
+            .unwrap_or(Isometry::identity());
+
+        // Call move_shape — sweep test that handles walls, slopes, steps.
+        // Exclude the player's own rigid body from the query.
+        let filter = QueryFilter::default().exclude_rigid_body(self.body_handle);
+
+        let output = self.char_controller.move_shape(
+            dt,
+            &physics.rigid_body_set,
+            &physics.collider_set,
+            &physics.query_pipeline,
+            self.character_shape.as_ref(),
+            &char_pos,
+            desired,
+            filter,
+            |_collision| { /* collisions ignored for now */ },
+        );
+
+        // Apply corrected movement to the kinematic body
+        let new_translation = char_pos.translation.vector + output.translation;
+        if let Some(body) = physics.get_body_mut(self.body_handle) {
+            body.set_next_kinematic_translation(new_translation);
+        }
+
+        // Update grounded state from controller output
+        let was_grounded = self.grounded;
+        self.grounded = output.grounded;
+
+        // If we just landed, kill vertical velocity
+        if self.grounded && !was_grounded {
+            self.vertical_velocity = 0.0;
         }
     }
 
@@ -150,11 +194,7 @@ impl PlayerController {
     pub fn position(&self, physics: &PhysicsWorld) -> WorldPos {
         if let Some(body) = physics.get_body(self.body_handle) {
             let t = body.translation();
-            WorldPos::new(
-                t.x as f64,
-                (t.y + PLAYER_HALF_HEIGHT + PLAYER_RADIUS) as f64,
-                t.z as f64,
-            )
+            WorldPos::new(t.x as f64, (t.y + EYE_HEIGHT) as f64, t.z as f64)
         } else {
             WorldPos::ORIGIN
         }
@@ -176,15 +216,13 @@ mod tests {
     }
 
     #[test]
-    fn player_does_not_tip_over() {
+    fn player_body_is_kinematic() {
         let mut physics = PhysicsWorld::new();
         let player = PlayerController::spawn(&mut physics, 0.0, 5.0, 0.0);
         let body = physics.get_body(player.body_handle).unwrap();
-        // lock_rotations() locks all rotation axes
-        let locked = body.is_rotation_locked();
         assert!(
-            locked == [true, true, true],
-            "all rotations should be locked, got {locked:?}"
+            body.is_kinematic(),
+            "player body should be kinematic, not dynamic"
         );
     }
 

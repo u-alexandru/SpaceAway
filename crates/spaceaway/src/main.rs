@@ -781,7 +781,11 @@ impl ApplicationHandler for App {
                         self.camera.position = WorldPos::new(cx as f64, cy as f64, cz as f64);
                     }
                 } else {
-                    // --- Walk mode: physics-driven ---
+                    // --- Walk mode: kinematic character controller ---
+                    // Update query pipeline BEFORE player.update() so move_shape
+                    // has up-to-date collision data from last physics step.
+                    self.physics.update_query_pipeline();
+
                     // Pass ship velocity as base so player moves WITH the ship.
                     let ship_vel = self.ship.as_ref()
                         .and_then(|s| self.physics.get_body(s.body_handle))
@@ -791,17 +795,11 @@ impl ApplicationHandler for App {
                         player.update(&mut self.physics, &self.input, dt, [ship_vel[0], 0.0, ship_vel[2]]);
                     }
 
-                    // Apply thrust + counteract player gravity on ship.
-                    // The player's weight (80kg × 9.81 = 785N) pushes the ship down
-                    // via contact forces. Counteract with an equal upward force so
-                    // the ship doesn't drift downward from the player standing on it.
+                    // Apply thrust. No gravity counterforce needed — the kinematic
+                    // player exerts zero reaction forces on the ship.
                     if let Some(ship) = &self.ship {
                         ship.reset_forces(&mut self.physics);
                         ship.apply_thrust(&mut self.physics);
-                        // Counteract player weight on ship
-                        if let Some(body) = self.physics.get_body_mut(ship.body_handle) {
-                            body.add_force(nalgebra::Vector3::new(0.0, 785.0, 0.0), true);
-                        }
                     }
 
                     let physics_dt = dt.min(1.0 / 30.0);

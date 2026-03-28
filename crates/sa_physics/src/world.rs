@@ -13,7 +13,7 @@ pub struct PhysicsWorld {
     impulse_joint_set: ImpulseJointSet,
     multibody_joint_set: MultibodyJointSet,
     ccd_solver: CCDSolver,
-    query_pipeline: QueryPipeline,
+    pub query_pipeline: QueryPipeline,
 }
 
 impl PhysicsWorld {
