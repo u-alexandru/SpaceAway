@@ -218,6 +218,10 @@ struct App {
     nearest_gatherable: Option<usize>,
     /// Navigation: nearby stars, lock-on, gravity well detection.
     navigation: navigation::Navigation,
+    /// Audio manager (engine, music, SFX, voice).
+    audio: sa_audio::AudioManager,
+    /// Prevents spamming the low-fuel voice announcement.
+    fuel_low_announced: bool,
 }
 
 impl App {
@@ -292,6 +296,8 @@ impl App {
             gathered: HashSet::new(),
             nearest_gatherable: None,
             navigation: navigation::Navigation::new(seed),
+            audio: sa_audio::AudioManager::new("resources/sounds".into()),
+            fuel_low_announced: false,
         }
     }
 
@@ -1013,6 +1019,7 @@ impl ApplicationHandler for App {
                             if self.ship_resources.exotic_fuel > 0.0 {
                                 if self.drive.request_engage(sa_ship::DriveMode::Warp) {
                                     log::info!("Drive: WARP spooling...");
+                                    self.audio.announce(sa_audio::VoiceId::EngagingWarp);
                                     // Unload active system when entering warp
                                     if self.active_system.is_some() {
                                         self.active_system = None;
@@ -1142,6 +1149,7 @@ impl ApplicationHandler for App {
                                         &gpu.device,
                                     );
                                     log::info!("System loaded: {} bodies ({})", system.body_count(), nav_name);
+                                    self.audio.announce(sa_audio::VoiceId::AllSystemsReady);
                                     self.active_system = Some(system);
                                 }
                             }
@@ -1418,6 +1426,15 @@ impl ApplicationHandler for App {
                         &self.physics,
                     );
 
+                    // SFX: lever drag start
+                    if self.input.mouse.left_just_pressed() {
+                        if let Some(ids) = &self.ship_ids {
+                            if interaction.hovered() == Some(ids.throttle_lever) {
+                                self.audio.play_sfx(sa_audio::SfxId::LeverMove, None);
+                            }
+                        }
+                    }
+
                     // Update debug ray visualization
                     let debug = interaction.debug_ray();
                     let max_range = 2.0_f32;
@@ -1491,6 +1508,10 @@ impl ApplicationHandler for App {
                     if let Some(button) = interaction.get(ids.engine_button) {
                         if self.input.mouse.left_just_released() && interaction.hovered() == Some(ids.engine_button) {
                             let pressed = button.is_button_pressed().unwrap_or(false);
+                            self.audio.play_sfx(sa_audio::SfxId::ButtonClick, None);
+                            if pressed {
+                                self.audio.announce(sa_audio::VoiceId::EnginesIgniting);
+                            }
                             let mesh = sa_meshgen::interactables::button_mesh(pressed);
                             let mesh_data = meshgen_to_render(&mesh);
                             let handle = renderer.mesh_store.upload(&gpu.device, &mesh_data);
@@ -1530,6 +1551,7 @@ impl ApplicationHandler for App {
                     {
                         self.drive.request_disengage();
                         log::warn!("WARP DRIVE FAILED — exotic fuel exhausted!");
+                        self.audio.announce(sa_audio::VoiceId::Danger);
                     }
 
                     // Low fuel consequence: reduce max thrust linearly below 20%
@@ -1632,6 +1654,75 @@ impl ApplicationHandler for App {
                     [0.0, 0.0, -1.0]
                 };
                 self.drive_visuals.update(&self.drive, drive_dir, dt);
+
+                // --- Audio update ---
+                {
+                    let fwd = self.camera.forward();
+                    let right = self.camera.right();
+                    let up = fwd.cross(right).normalize_or_zero();
+                    let cam_pos = self.camera.position;
+                    self.audio.set_listener(sa_audio::Listener {
+                        position: glam::Vec3::new(
+                            cam_pos.x as f32,
+                            cam_pos.y as f32,
+                            cam_pos.z as f32,
+                        ),
+                        forward: fwd,
+                        up: if up.length() > 0.5 { up } else { glam::Vec3::Y },
+                    });
+
+                    // Engine state
+                    let engine_state = if let Some(ship) = &self.ship {
+                        if !ship.engine_on {
+                            sa_audio::EngineState::Off
+                        } else if self.drive.mode() == sa_ship::DriveMode::Warp {
+                            if matches!(self.drive.status(), sa_ship::DriveStatus::Engaged) {
+                                sa_audio::EngineState::WarpEngaged
+                            } else {
+                                sa_audio::EngineState::WarpSpool
+                            }
+                        } else if self.drive.mode() == sa_ship::DriveMode::Cruise {
+                            sa_audio::EngineState::Cruise
+                        } else if ship.throttle > 0.01 {
+                            sa_audio::EngineState::Impulse
+                        } else {
+                            sa_audio::EngineState::Idle
+                        }
+                    } else {
+                        sa_audio::EngineState::Off
+                    };
+                    self.audio.set_engine_state(engine_state);
+
+                    // Music context
+                    let music_ctx = if self.drive.mode() == sa_ship::DriveMode::Warp
+                        && matches!(self.drive.status(), sa_ship::DriveStatus::Engaged)
+                    {
+                        sa_audio::MusicContext::Warp
+                    } else if self.ship_resources.fuel < 0.2
+                        || self.ship_resources.exotic_fuel < 0.1
+                    {
+                        sa_audio::MusicContext::Tension
+                    } else if self.active_system.is_some() {
+                        sa_audio::MusicContext::Exploration
+                    } else {
+                        sa_audio::MusicContext::Idle
+                    };
+                    self.audio.set_music_context(music_ctx);
+
+                    // Power state
+                    self.audio.set_power(self.ship_resources.power > 0.0);
+
+                    // Fuel warnings
+                    if self.ship_resources.fuel < 0.2 && !self.fuel_low_announced {
+                        self.audio.announce(sa_audio::VoiceId::EnergyLow);
+                        self.fuel_low_announced = true;
+                    }
+                    if self.ship_resources.fuel >= 0.3 {
+                        self.fuel_low_announced = false; // reset when fuel recovers
+                    }
+
+                    self.audio.update(dt);
+                }
 
                 // --- Render ---
                 let t3 = Instant::now();

@@ -23,6 +23,7 @@ pollster.workspace = true
 sa_meshgen.workspace = true
 sa_ship.workspace = true
 sa_survival.workspace = true
+sa_audio.workspace = true
 nalgebra.workspace = true
 egui.workspace = true
 egui-wgpu.workspace = true
