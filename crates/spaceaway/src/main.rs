@@ -206,9 +206,10 @@ struct App {
     ship_resources: ShipResources,
     /// Active solar system (set when the player enters one).
     active_system: Option<solar_system::ActiveSystem>,
-    /// Previous frame's ship yaw/pitch for computing rotation delta (helm camera tracking).
-    prev_ship_yaw: f32,
-    prev_ship_pitch: f32,
+    /// Mouse look offset while seated at helm (yaw/pitch in ship-local frame).
+    /// Separate from camera.yaw/pitch which belong to walk mode.
+    helm_look_yaw: f32,
+    helm_look_pitch: f32,
     /// Resource deposits in the game world.
     deposits: Vec<ResourceDeposit>,
     /// IDs of deposits that have been gathered.
@@ -285,8 +286,8 @@ impl App {
             drive_visuals: drive_integration::DriveVisualState::new(),
             ship_resources: ShipResources::new(),
             active_system: None,
-            prev_ship_yaw: 0.0,
-            prev_ship_pitch: 0.0,
+            helm_look_yaw: 0.0,
+            helm_look_pitch: 0.0,
             deposits: generate_deposits(42),
             gathered: HashSet::new(),
             nearest_gatherable: None,
@@ -1040,7 +1041,19 @@ impl ApplicationHandler for App {
                             && let Some(helm) = &mut self.helm
                         {
                             self.drive.request_disengage();
-                            self.camera.orientation_override = None; // exit quaternion mode
+                            self.camera.orientation_override = None;
+                            // Restore walk-mode camera direction from ship's current heading
+                            if let Some(body) = self.physics.get_body(ship.body_handle) {
+                                let rot = body.rotation();
+                                let fwd = rot * nalgebra::Vector3::new(0.0, 0.0, -1.0);
+                                let yaw = fwd.x.atan2(-fwd.z);
+                                let pitch = fwd.y.asin();
+                                // Set player yaw/pitch so walk mode camera matches ship direction
+                                if let Some(player) = &mut self.player {
+                                    player.yaw = yaw;
+                                    player.pitch = pitch;
+                                }
+                            }
                             helm.stand_up();
                             // Re-enable player and teleport to ship's current position
                             // (ship may have moved while seated)
@@ -1139,35 +1152,27 @@ impl ApplicationHandler for App {
                     // Interior colliders stay at LOCAL origin — ship-local collision
                     // handles the coordinate transform in PlayerController::update().
 
-                    // Camera: ship quaternion + mouse look offset.
-                    // The ship's full rotation (including roll) drives the camera.
-                    // Mouse adds yaw/pitch offset for looking around the cockpit.
+                    // Camera: ship quaternion + helm mouse look offset.
+                    // Uses separate helm_look_yaw/pitch (not camera.yaw/pitch which
+                    // belong to walk mode). Ship rotation (including roll) drives the
+                    // base orientation. Mouse adds ship-local look-around offset.
                     let (dx, dy) = self.input.mouse.delta();
-                    self.camera.rotate(dx * 0.003, -dy * 0.003);
+                    self.helm_look_yaw += dx * 0.003;
+                    self.helm_look_pitch -= dy * 0.003;
+                    let max_p = std::f32::consts::FRAC_PI_2 - 0.01;
+                    self.helm_look_pitch = self.helm_look_pitch.clamp(-max_p, max_p);
 
                     if let Some(ship) = &self.ship {
                         if let Some(body) = self.physics.get_body(ship.body_handle) {
                             let r = body.rotation();
                             let ship_quat = glam::Quat::from_xyzw(r.i, r.j, r.k, r.w);
 
-                            // Build camera orientation: ship rotation + mouse yaw/pitch offset
-                            // Negate yaw: in ship-local frame, positive euler Y rotation
-                            // goes left (right-hand rule), but mouse-right should look right.
-                            let mouse_offset = glam::Quat::from_euler(
-                                glam::EulerRot::YXZ,
-                                -self.camera.yaw,
-                                -self.camera.pitch,
-                                0.0,
-                            );
-                            // Remove the ship's yaw/pitch from the mouse offset so only
-                            // the RELATIVE offset remains. Actually simpler: just compose
-                            // ship_quat * mouse_offset_local where mouse_offset is relative
-                            // to the ship frame.
-                            //
-                            // When mouse hasn't moved (yaw=pitch=0 from sit-down reset),
-                            // camera = ship_quat → looks where ship points.
-                            // Mouse yaw/pitch adds local look-around on top.
-                            self.camera.orientation_override = Some(ship_quat * mouse_offset);
+                            // Mouse offset as ship-local rotation
+                            let look_offset = glam::Quat::from_rotation_y(-self.helm_look_yaw)
+                                * glam::Quat::from_rotation_x(-self.helm_look_pitch);
+
+                            // Final camera = ship rotation * local mouse offset
+                            self.camera.orientation_override = Some(ship_quat * look_offset);
                         }
                     }
 
@@ -1378,9 +1383,9 @@ impl ApplicationHandler for App {
                         && let Some(helm) = &mut self.helm
                     {
                         helm.sit_down();
-                        // Reset camera to face forward (-Z = toward cockpit nose)
-                        self.camera.yaw = 0.0;
-                        self.camera.pitch = 0.0;
+                        // Reset helm look offset (face ship forward direction)
+                        self.helm_look_yaw = 0.0;
+                        self.helm_look_pitch = 0.0;
                         // Disable player physics body while seated
                         if let Some(body) = self.physics.get_body_mut(player.body_handle) {
                             body.set_enabled(false);
