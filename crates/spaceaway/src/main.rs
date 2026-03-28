@@ -1192,7 +1192,8 @@ impl ApplicationHandler for App {
                 // --- Render ---
                 let t3 = Instant::now();
                 if let (Some(gpu), Some(renderer)) = (&self.gpu, &self.renderer) {
-                    // 1. Render helm monitor to offscreen texture (before the main frame)
+                    // 1. Render BOTH monitors to offscreen textures in ONE encoder
+                    // (avoids multiple queue.submit() calls per frame)
                     if let Some(ui_sys) = &mut self.ui_system {
                         let helm_data = ui::helm_screen::HelmData {
                             speed: self.ship.as_ref()
@@ -1206,20 +1207,7 @@ impl ApplicationHandler for App {
                                 .unwrap_or(false),
                             fuel: self.ship_resources.fuel,
                         };
-                        let mut monitor_encoder = gpu.device.create_command_encoder(
-                            &wgpu::CommandEncoderDescriptor {
-                                label: Some("Monitor Encoder"),
-                            },
-                        );
-                        ui_sys.render_helm_monitor(
-                            &gpu.device,
-                            &gpu.queue,
-                            &mut monitor_encoder,
-                            &helm_data,
-                        );
-                        gpu.queue.submit(std::iter::once(monitor_encoder.finish()));
 
-                        // Render sensors monitor
                         let ship_pos = self.ship.as_ref()
                             .and_then(|s| s.position(&self.physics))
                             .unwrap_or((0.0, 0.0, 0.0));
@@ -1241,18 +1229,14 @@ impl ApplicationHandler for App {
                             contacts,
                             ship_fuel: self.ship_resources.fuel,
                         };
-                        let mut sensors_encoder = gpu.device.create_command_encoder(
-                            &wgpu::CommandEncoderDescriptor {
-                                label: Some("Sensors Encoder"),
-                            },
+
+                        // Single encoder for both monitors
+                        let mut monitor_encoder = gpu.device.create_command_encoder(
+                            &wgpu::CommandEncoderDescriptor { label: Some("Monitor Encoder") },
                         );
-                        ui_sys.render_sensors_monitor(
-                            &gpu.device,
-                            &gpu.queue,
-                            &mut sensors_encoder,
-                            &sensors_data,
-                        );
-                        gpu.queue.submit(std::iter::once(sensors_encoder.finish()));
+                        ui_sys.render_helm_monitor(&gpu.device, &gpu.queue, &mut monitor_encoder, &helm_data);
+                        ui_sys.render_sensors_monitor(&gpu.device, &gpu.queue, &mut monitor_encoder, &sensors_data);
+                        gpu.queue.submit(std::iter::once(monitor_encoder.finish()));
                     }
 
                     // 2. Build draw commands
