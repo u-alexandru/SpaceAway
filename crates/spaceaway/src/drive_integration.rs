@@ -1,6 +1,130 @@
-//! Maps DriveController state to galactic_position deltas.
+//! Maps DriveController state to galactic_position deltas and visual parameters.
 
-use sa_ship::drive::DriveController;
+use sa_ship::drive::{DriveController, DriveMode, DriveStatus};
+
+/// Visual parameters derived from drive state. Passed to the renderer
+/// as continuous floats — shaders have no knowledge of drive modes.
+#[derive(Debug, Clone, Copy)]
+pub struct DriveVisuals {
+    /// Velocity direction (normalized, world space).
+    pub velocity_dir: [f32; 3],
+    /// Speed as fraction of c for relativistic aberration (0.0–0.99).
+    pub beta: f32,
+    /// Star streak length in pixels (0.0 = point, 300.0 = full warp).
+    pub streak_factor: f32,
+    /// Sky tunnel/vignette intensity (0.0–1.0).
+    pub warp_intensity: f32,
+    /// Additive white flash for drive transitions (0.0–1.0).
+    pub flash_intensity: f32,
+}
+
+impl Default for DriveVisuals {
+    fn default() -> Self {
+        Self {
+            velocity_dir: [0.0, 0.0, -1.0],
+            beta: 0.0,
+            streak_factor: 0.0,
+            warp_intensity: 0.0,
+            flash_intensity: 0.0,
+        }
+    }
+}
+
+/// Persistent state for smooth visual transitions.
+pub struct DriveVisualState {
+    pub visuals: DriveVisuals,
+    prev_mode: DriveMode,
+    flash_timer: f32,
+}
+
+impl DriveVisualState {
+    pub fn new() -> Self {
+        Self {
+            visuals: DriveVisuals::default(),
+            prev_mode: DriveMode::Impulse,
+            flash_timer: 0.0,
+        }
+    }
+
+    /// Update visual parameters from current drive state. Call every frame.
+    pub fn update(
+        &mut self,
+        drive: &DriveController,
+        direction: [f32; 3],
+        dt: f32,
+    ) {
+        let mode = drive.mode();
+        let speed_c = drive.current_speed_c();
+
+        // Detect mode transitions for flash
+        if mode != self.prev_mode {
+            // Flash on warp engage (Spooling→Engaged handled below)
+            if mode == DriveMode::Warp && matches!(drive.status(), DriveStatus::Engaged) {
+                self.flash_timer = 0.3;
+            }
+            // Flash on warp disengage
+            if self.prev_mode == DriveMode::Warp && mode == DriveMode::Impulse {
+                self.flash_timer = 0.15;
+            }
+            self.prev_mode = mode;
+        }
+
+        // Detect spool completion (Spooling→Engaged within warp)
+        if mode == DriveMode::Warp
+            && matches!(drive.status(), DriveStatus::Engaged)
+            && self.visuals.warp_intensity < 0.01
+        {
+            // Just engaged warp — big flash
+            self.flash_timer = 0.3;
+        }
+
+        // Flash decay
+        self.flash_timer = (self.flash_timer - dt).max(0.0);
+        self.visuals.flash_intensity = self.flash_timer / 0.3;
+
+        // Direction
+        self.visuals.velocity_dir = direction;
+
+        // Target values based on speed
+        let target_beta: f32;
+        let target_streak: f32;
+        let target_warp: f32;
+
+        if speed_c < 0.001 {
+            // Impulse or spooling — no effects
+            target_beta = 0.0;
+            target_streak = 0.0;
+            target_warp = 0.0;
+        } else if speed_c <= 500.0 {
+            // Cruise range (1c–500c)
+            target_beta = 0.99;
+            // Logarithmic streak: 0 at 1c, ~80 at 500c
+            let t = (speed_c.max(1.0) as f32).log2() / (500.0_f32).log2();
+            target_streak = t * 80.0;
+            target_warp = 0.0;
+        } else {
+            // Warp range (100,000c–5,000,000c)
+            target_beta = 0.99;
+            // Streak: 150 at 100kc, 300 at 5Mc
+            let t = ((speed_c / 100_000.0).max(1.0) as f32).log2()
+                / (50.0_f32).log2(); // 5M/100k = 50
+            target_streak = 150.0 + t.min(1.0) * 150.0;
+            // Warp intensity: 0.3 at 100kc, 1.0 at 5Mc
+            target_warp = 0.3 + t.min(1.0) * 0.7;
+        }
+
+        // Smooth transitions (lerp toward targets)
+        let ramp_speed = 4.0 * dt; // ~0.25s to reach target
+        self.visuals.beta += (target_beta - self.visuals.beta) * ramp_speed.min(1.0);
+        self.visuals.streak_factor += (target_streak - self.visuals.streak_factor) * ramp_speed.min(1.0);
+        self.visuals.warp_intensity += (target_warp - self.visuals.warp_intensity) * ramp_speed.min(1.0);
+
+        // Snap small values to zero to avoid perpetual drift
+        if self.visuals.beta < 0.001 { self.visuals.beta = 0.0; }
+        if self.visuals.streak_factor < 0.1 { self.visuals.streak_factor = 0.0; }
+        if self.visuals.warp_intensity < 0.005 { self.visuals.warp_intensity = 0.0; }
+    }
+}
 
 /// Compute the galactic position delta for this frame.
 ///

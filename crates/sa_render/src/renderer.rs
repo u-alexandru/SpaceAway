@@ -31,6 +31,17 @@ pub struct FrameContext {
     pub view: wgpu::TextureView,
 }
 
+/// Drive visual parameters for shader effects. Passed as plain floats
+/// so the renderer has no dependency on the drive system.
+#[derive(Default)]
+pub struct DriveRenderParams {
+    pub velocity_dir: [f32; 3],
+    pub beta: f32,
+    pub streak_factor: f32,
+    pub warp_intensity: f32,
+    pub flash_intensity: f32,
+}
+
 pub struct Renderer {
     pub geometry_pipeline: GeometryPipeline,
     pub screen_pipeline: ScreenPipeline,
@@ -95,11 +106,13 @@ impl Renderer {
         draw_commands: &[DrawCommand],
         screen_draws: &[ScreenDrawCommand<'_>],
         light_dir: Vec3,
+        galactic_pos: sa_math::WorldPos,
+        drive_params: &DriveRenderParams,
     ) -> Option<FrameContext> {
         let aspect = gpu.aspect_ratio();
         let view_proj = camera.view_projection_matrix(aspect);
 
-        // Camera world position for origin rebasing
+        // Camera world position for origin rebasing (physics meters)
         let cam_pos = camera.position;
 
         let uniforms = Uniforms {
@@ -117,13 +130,14 @@ impl Renderer {
             bytemuck::bytes_of(&uniforms),
         );
 
-        // Sky uniforms: inverse view-projection for reconstructing view direction
+        // Sky uniforms: inverse view-projection for reconstructing view direction.
+        // Uses galactic_pos (light-years) for galaxy density ray-marching,
+        // NOT cam_pos (which is in physics meters).
         let inv_view_proj = view_proj.inverse();
-        // Galactic center direction from camera: center is at origin, so direction is -cam_pos
         let gc_dir = Vec3::new(
-            -(cam_pos.x as f32),
-            -(cam_pos.y as f32),
-            -(cam_pos.z as f32),
+            -(galactic_pos.x as f32),
+            -(galactic_pos.y as f32),
+            -(galactic_pos.z as f32),
         );
         let gc_dir = if gc_dir.length_squared() > 0.0 {
             gc_dir.normalize()
@@ -134,8 +148,10 @@ impl Renderer {
             inv_view_proj: inv_view_proj.to_cols_array_2d(),
             galactic_center_dir: gc_dir.to_array(),
             core_brightness: 0.35,
-            observer_pos: [cam_pos.x as f32, cam_pos.y as f32, cam_pos.z as f32],
-            _pad: 0.0,
+            observer_pos: [galactic_pos.x as f32, galactic_pos.y as f32, galactic_pos.z as f32],
+            warp_intensity: drive_params.warp_intensity,
+            warp_dir: drive_params.velocity_dir,
+            flash_intensity: drive_params.flash_intensity,
         };
         gpu.queue.write_buffer(
             &self.sky_renderer.uniform_buffer,
@@ -149,8 +165,10 @@ impl Renderer {
             view_proj: star_vp.to_cols_array_2d(),
             screen_height: gpu.config.height as f32,
             screen_width: gpu.config.width as f32,
-            _pad1: 0.0,
-            _pad2: 0.0,
+            beta: drive_params.beta,
+            streak_factor: drive_params.streak_factor,
+            velocity_dir: drive_params.velocity_dir,
+            flash_intensity: drive_params.flash_intensity,
         };
         gpu.queue.write_buffer(
             &self.star_field.uniform_buffer,

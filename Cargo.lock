@@ -2250,6 +2250,9 @@ dependencies = [
 [[package]]
 name = "sa_survival"
 version = "0.1.0"
+dependencies = [
+ "sa_ship",
+]
 
 [[package]]
 name = "sa_universe"

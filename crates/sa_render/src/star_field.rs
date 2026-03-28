@@ -16,8 +16,14 @@ pub struct StarUniforms {
     pub view_proj: [[f32; 4]; 4],
     pub screen_height: f32,
     pub screen_width: f32,
-    pub _pad1: f32,
-    pub _pad2: f32,
+    /// Speed as fraction of c (0.0–0.99) for relativistic aberration.
+    pub beta: f32,
+    /// Star streak length in pixels (0 = point, 300 = full warp).
+    pub streak_factor: f32,
+    /// Normalized velocity direction (world space).
+    pub velocity_dir: [f32; 3],
+    /// Additive white flash for transitions (0.0–1.0).
+    pub flash_intensity: f32,
 }
 
 pub struct StarField {

@@ -198,6 +198,8 @@ struct App {
     sensors_bind_group: Option<wgpu::BindGroup>,
     /// Drive controller (impulse/cruise/warp).
     drive: sa_ship::DriveController,
+    /// Drive visual state for smooth shader transitions.
+    drive_visuals: drive_integration::DriveVisualState,
     /// Ship survival resources (fuel, oxygen, power).
     ship_resources: ShipResources,
     /// Resource deposits in the game world.
@@ -271,6 +273,7 @@ impl App {
             sensors_quad: None,
             sensors_bind_group: None,
             drive: sa_ship::DriveController::new(),
+            drive_visuals: drive_integration::DriveVisualState::new(),
             ship_resources: ShipResources::new(),
             deposits: generate_deposits(42),
             gathered: HashSet::new(),
@@ -1264,6 +1267,20 @@ impl ApplicationHandler for App {
                 self.maybe_regenerate_stars();
                 self.perf.stars_us = t2.elapsed().as_micros() as u64;
 
+                // --- Drive visuals update (smooth shader parameter transitions) ---
+                let drive_dir = if let Some(ship) = &self.ship {
+                    if let Some(body) = self.physics.get_body(ship.body_handle) {
+                        let rot = body.rotation();
+                        let fwd = rot * nalgebra::Vector3::new(0.0, 0.0, -1.0);
+                        [fwd.x, fwd.y, fwd.z]
+                    } else {
+                        [0.0, 0.0, -1.0]
+                    }
+                } else {
+                    [0.0, 0.0, -1.0]
+                };
+                self.drive_visuals.update(&self.drive, drive_dir, dt);
+
                 // --- Render ---
                 let t3 = Instant::now();
                 if let (Some(gpu), Some(renderer)) = (&self.gpu, &self.renderer) {
@@ -1418,6 +1435,13 @@ impl ApplicationHandler for App {
                     self.perf.star_count = renderer.star_field.star_count;
 
                     // 4. Render 3D scene + screen quads
+                    let drive_render = sa_render::DriveRenderParams {
+                        velocity_dir: self.drive_visuals.visuals.velocity_dir,
+                        beta: self.drive_visuals.visuals.beta,
+                        streak_factor: self.drive_visuals.visuals.streak_factor,
+                        warp_intensity: self.drive_visuals.visuals.warp_intensity,
+                        flash_intensity: self.drive_visuals.visuals.flash_intensity,
+                    };
                     if let Some(mut frame_ctx) = renderer.render_frame(
                         gpu,
                         &self.camera,
@@ -1425,6 +1449,7 @@ impl ApplicationHandler for App {
                         &screen_draws,
                         Vec3::new(0.5, -0.8, -0.3),
                         self.galactic_position,
+                        &drive_render,
                     ) {
                         // 5. Render HUD overlay via egui
                         if let Some(ui_sys) = &mut self.ui_system {

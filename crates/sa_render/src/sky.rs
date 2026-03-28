@@ -8,7 +8,12 @@ pub struct SkyUniforms {
     pub galactic_center_dir: [f32; 3],
     pub core_brightness: f32,
     pub observer_pos: [f32; 3],
-    pub _pad: f32,
+    /// Warp tunnel/vignette intensity (0.0–1.0).
+    pub warp_intensity: f32,
+    /// Warp travel direction (normalized).
+    pub warp_dir: [f32; 3],
+    /// Additive white flash (0.0–1.0).
+    pub flash_intensity: f32,
 }
 
 /// Renderer for the sky layers (analytical Milky Way + galactic core glow).
