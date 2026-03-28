@@ -55,7 +55,11 @@ impl PlayerController {
         let char_controller = KinematicCharacterController {
             up: nalgebra::UnitVector3::new_normalize(nalgebra::Vector3::y()),
             offset: CharacterLength::Absolute(0.05), // larger offset reduces ground oscillation
-            autostep: None, // disabled — catches on rotated door frame edges
+            autostep: Some(CharacterAutostep {
+                max_height: CharacterLength::Absolute(0.15), // small steps only
+                min_width: CharacterLength::Absolute(0.2),
+                include_dynamic_bodies: true,
+            }),
             snap_to_ground: Some(CharacterLength::Absolute(0.5)), // generous snap prevents ground oscillation
             max_slope_climb_angle: 50_f32.to_radians(),
             min_slope_slide_angle: 30_f32.to_radians(),

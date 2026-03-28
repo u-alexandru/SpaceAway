@@ -167,11 +167,8 @@ fn ship_sections() -> Vec<Section> {
 const FLOOR_Y: f32 = -1.0;
 const CEILING_Y: f32 = 1.2;
 const WALL_THICKNESS: f32 = 0.15;
-// Collision door opening is wider/taller than the visual door (1.4x2.1m mesh).
-// Extra clearance prevents the character controller's autostep and slope
-// detection from catching on rotated door frame edges.
-const DOOR_W: f32 = 1.8;
-const DOOR_H: f32 = 2.3;
+const DOOR_W: f32 = 1.4;
+const DOOR_H: f32 = 2.1;
 
 /// Add a collider as a child of the ship body.
 /// This makes interior colliders move with the ship — essential for
@@ -310,7 +307,11 @@ fn bulkhead_colliders(physics: &mut PhysicsWorld, width: f32, z: f32, ship_body:
     let hw = width / 2.0;
     let door_bottom = FLOOR_Y;
     let door_top = FLOOR_Y + DOOR_H;
-    let bulkhead_thickness = 0.1;
+    // Thickness matches the visual v2 thick bulkhead (BULKHEAD_DEPTH = 0.3m).
+    // Thin colliders (0.1m) cause edge-hit instability when rotated — the
+    // capsule catches edges instead of sliding along faces. 0.3m gives
+    // the character controller enough face area for clean collision at any angle.
+    let bulkhead_thickness = 0.3;
     let ht = bulkhead_thickness / 2.0;
 
     // Left of door: from -hw to -hdw, floor to ceiling
