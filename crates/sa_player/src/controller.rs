@@ -145,18 +145,18 @@ impl PlayerController {
             self.vertical_velocity -= GRAVITY * dt;
         }
 
-        // SHIP-LOCAL COLLISION DETECTION
+        // COLLISION AT WORLD ORIGIN
         //
-        // All interior colliders are at fixed positions in the ship's local
-        // coordinate system. They NEVER move. The query pipeline is built
-        // once and never needs updating.
+        // Interior colliders are on a FIXED body at world origin, UNROTATED.
+        // They represent the ship interior as if the ship were at (0,0,0) with
+        // identity rotation. We translate the player to this origin frame
+        // (subtract ship position), sweep there, then translate back.
         //
-        // We transform the player to local space, sweep there (tiny distance,
-        // stationary colliders), then transform back to world space.
+        // NO rotation transform — colliders are world-aligned, not ship-rotated.
+        // This means gravity is world -Y (matching collider floor at y=-1).
+        // Player.yaw is WORLD space — walk direction is world-space.
         //
-        // This gives O(1) performance regardless of ship speed or collider count.
-
-        let ship_rot_inv = ship_rotation.inverse();
+        // Performance: O(1) regardless of ship speed (colliders never move).
 
         // Player's current WORLD position
         let player_world = physics
@@ -164,23 +164,19 @@ impl PlayerController {
             .map(|b| b.translation().clone_owned())
             .unwrap_or(nalgebra::Vector3::zeros());
 
-        // Transform player position to ship-local space
-        let player_local = ship_rot_inv * (player_world - ship_position);
+        // Translate player to collider-origin frame (NO rotation)
+        let player_at_origin = player_world - ship_position;
 
-        // Walk direction + gravity directly in SHIP-LOCAL space.
-        // Player yaw is ship-local (yaw=0 = ship nose), so move_dir is already
-        // a local direction. No world→local transform needed — using ship_rot_inv
-        // would double-rotate and misalign collision after ship rotation.
-        // Gravity in local-Y = always toward ship's floor regardless of roll.
+        // Walk direction + gravity in WORLD space (matching collider orientation)
         let walk_vel = move_dir * MOVE_SPEED;
-        let walk_local = nalgebra::Vector3::new(
+        let walk_desired = nalgebra::Vector3::new(
             walk_vel.x * dt,
             self.vertical_velocity * dt,
             walk_vel.z * dt,
         );
 
-        // Sweep in LOCAL space — colliders are stationary here
-        let local_isometry = Isometry::new(player_local, nalgebra::Vector3::zeros());
+        // Sweep at origin (colliders are world-aligned here)
+        let origin_isometry = Isometry::new(player_at_origin, nalgebra::Vector3::zeros());
 
         let filter = QueryFilter::default()
             .exclude_rigid_body(self.body_handle)
@@ -195,15 +191,15 @@ impl PlayerController {
             &physics.collider_set,
             &physics.query_pipeline,
             self.character_shape.as_ref(),
-            &local_isometry,
-            walk_local,
+            &origin_isometry,
+            walk_desired,
             filter,
             |_collision| {},
         );
 
-        // Transform result back to world space
-        let new_local = player_local + output.translation;
-        let new_world = ship_position + ship_rotation * new_local;
+        // Translate result back to world space (add ship position, NO rotation)
+        let new_at_origin = player_at_origin + output.translation;
+        let new_world = ship_position + new_at_origin;
 
         if let Some(body) = physics.get_body_mut(self.body_handle) {
             body.set_translation(new_world, true);
