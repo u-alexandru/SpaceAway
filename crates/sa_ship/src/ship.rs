@@ -26,7 +26,7 @@ impl Ship {
     pub const MASS: f32 = 50_000.0;
     pub const DEFAULT_MAX_THRUST: f32 = 500_000.0;
     pub const DEFAULT_MAX_RCS: f32 = 50_000.0;
-    pub const DEFAULT_MAX_TORQUE: f32 = 100_000.0;
+    pub const DEFAULT_MAX_TORQUE: f32 = 5_000_000.0;
 
     /// Create a new ship and register its rigid body in the physics world.
     /// The ship spawns at the given position with zero velocity.
@@ -166,13 +166,13 @@ impl Ship {
             Some(body) => *body.rotation(),
             None => return,
         };
-        // Torque axes in ship local space:
-        // pitch = rotation around local X
-        // yaw = rotation around local Y
-        // roll = rotation around local Z
+        // Torque axes in ship local space (right-handed, ship faces -Z):
+        // pitch +1 = nose up = NEGATIVE X torque (right-hand rule)
+        // yaw +1 = nose right = NEGATIVE Y torque (right-hand rule)
+        // roll +1 = roll right = POSITIVE Z torque
         let local_torque = nalgebra::Vector3::new(
-            p * self.max_torque,
-            y * self.max_torque,
+            -p * self.max_torque,
+            -y * self.max_torque,
             r * self.max_torque,
         );
         let world_torque = rotation * local_torque;

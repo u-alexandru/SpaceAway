@@ -109,16 +109,16 @@ See `docs/modular-ship-standards.md` Section 8 and `docs/interior-standards.md` 
 
 ## Key Bindings (current game)
 
+### General (standing, not seated)
+
 | Key | Action |
 |-----|--------|
 | `0` | Return to normal scene view |
-| `1` | Teleport — mid galactic disc |
-| `2` | Teleport — above galaxy |
-| `3` | Teleport — galaxy edge |
-| `4` | Teleport — near galactic center |
-| `5` | Teleport — near a nebula |
+| `1-5` | Teleport to galaxy viewpoints (mid-disc, above, edge, center, nebula) |
 | `6` | Cycle through individual ship parts (mesh inspection) |
 | `7` | Load full assembled ship mesh |
+| `8` | Debug: jump to nearest star system (teleport next to first planet) |
+| `Tab` | Lock nearest star for navigation |
 | `F` | Toggle fly mode (free-camera, galaxy-scale movement) |
 | `V` | Toggle VSync (benchmark mode — uncapped FPS) |
 | `+` / `=` | Double fly speed |
@@ -126,7 +126,41 @@ See `docs/modular-ship-standards.md` Section 8 and `docs/interior-standards.md` 
 | `W/A/S/D` | Move in fly mode |
 | `Space` | Move up in fly mode |
 | `Shift` | Move down in fly mode |
-| `Escape` | Quit |
+| `Escape` | Release cursor / quit |
+
+### Seated at Helm
+
+| Key | Action |
+|-----|--------|
+| `W/S` | Pitch (nose up/down) |
+| `A/D` | Yaw (turn left/right) |
+| `Q` | Roll left |
+| `E` | Stand up (exit seat) |
+| `1` | Select Impulse drive |
+| `2` | Select Cruise drive (1c–500c) |
+| `3` | Select Warp drive (100,000c–5,000,000c, 5s spool) |
+| `Tab` | Lock nearest star for navigation |
+
+Throttle and engine controlled by clicking cockpit lever/button.
+
+### Drive System
+
+Three tiers of travel with increasing speed and fuel cost:
+
+- **Impulse** (default): Newtonian physics, 0–1000 m/s. Uses hydrogen fuel.
+- **Cruise** (key 2): 1c–500c, for planet-to-planet within a system. Uses hydrogen at 10x rate.
+- **Warp** (key 3): 100,000c–5,000,000c, for star-to-star travel. Uses exotic fuel. 5-second spool time.
+
+Throttle lever controls speed within each tier (logarithmic mapping).
+
+### Rendering: Reversed-Z Infinite Depth Buffer
+
+The renderer uses reversed-Z with infinite far plane for all depth testing:
+- Near plane: 0.1m, far plane: infinity
+- Depth clear: 0.0 (infinity), depth compare: GreaterEqual
+- Provides sub-millimeter precision near camera AND renders planets at millions of km
+- All new pipelines MUST use `CompareFunction::GreaterEqual` and clear depth to `0.0`
+- Sky/background shaders output depth near 0.0 (far), not near 1.0
 
 Fly mode bypasses physics and moves the camera directly in light-years per second.
 

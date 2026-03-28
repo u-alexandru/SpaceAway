@@ -111,6 +111,43 @@ Press **V** to toggle between VSync (60 FPS cap, Fifo) and uncapped (Immediate).
 - `crates/spaceaway/src/main.rs` — `write_debug_state()`, key handler
 - `crates/sa_render/src/gpu.rs` — `toggle_vsync()`
 
+## Reversed-Z Infinite Depth Buffer
+
+**Problem:** 1:1 scale planets are at AU distances (millions to billions of meters). Standard depth buffers with finite far plane clip distant objects. Extending the far plane (e.g., 100km → 100M km) destroys near-plane precision — ship interior Z-fights.
+
+**Solution:** Reversed-Z with infinite far projection. Depth 1.0 at the near plane (0.1m), depth 0.0 at infinity. No far clip plane exists.
+
+**Why it works:** IEEE 754 floating point has more precision near 0.0 than near 1.0. Standard Z maps near→0.0 (wasting precision) and far→1.0 (where precision is concentrated but not needed). Reversing puts the precision where it matters — near the camera.
+
+**Precision at various distances:**
+- 0.1m: ~0.001mm (ship interior screws and buttons)
+- 10m: ~0.01mm (ship corridors, character detail)
+- 1km: ~0.1m (ship exterior from nearby)
+- 100km: ~10m (planet surface features)
+- 1M km: ~10km (planet-to-planet visual separation)
+- 1 AU: ~100km (still renders — no clip!)
+
+**Implementation:**
+- Projection matrix: custom reversed infinite projection (not glam's `perspective_rh`)
+- All pipelines: `CompareFunction::GreaterEqual` (instead of Less)
+- Depth clear: `0.0` (instead of 1.0)
+- Sky/background shaders: depth output near 0.0 (far), not near 1.0
+- Depth format: `Depth32Float` (unchanged)
+
+**Rule for new pipelines:** Any new render pipeline MUST use `GreaterEqual` depth compare and understand that 0.0 = far, 1.0 = near. This is the opposite of the default convention.
+
+**Files:**
+- `crates/sa_render/src/camera.rs` — reversed infinite projection matrix
+- `crates/sa_render/src/pipeline.rs` — geometry depth compare
+- `crates/sa_render/src/screen_pipeline.rs` — screen quad depth compare
+- `crates/sa_render/src/nebula.rs` — nebula depth compare
+- `crates/sa_render/src/star_field.rs` — star depth compare
+- `crates/sa_render/src/renderer.rs` — depth clear value
+- `crates/sa_render/src/shaders/sky.wgsl` — sky depth output
+- `crates/sa_render/src/shaders/sky_blit.wgsl` — sky blit depth output
+
+**Industry precedent:** Unreal Engine 4/5, Unity HDRP, Space Engine, Outerra, most modern AAA engines.
+
 ## Key Performance Numbers (March 2026)
 
 | Metric | Before | After | Technique |
