@@ -833,6 +833,59 @@ impl ApplicationHandler for App {
                                         star.catalog_name, star.distance_ly);
                                 }
                             }
+                            KeyCode::Backquote => {
+                                // Debug: find and teleport to a planet with rings or atmosphere
+                                log::info!("Searching for interesting planet...");
+                                self.navigation.update_nearby(self.galactic_position);
+                                let mut found = false;
+                                'search: for star_nav in self.navigation.nearby_stars.iter().cloned().collect::<Vec<_>>() {
+                                    let sc = sa_universe::SectorCoord::new(
+                                        star_nav.id.sector_x().into(),
+                                        star_nav.id.sector_y().into(),
+                                        star_nav.id.sector_z().into(),
+                                    );
+                                    let sector = sa_universe::sector::generate_sector(MasterSeed(42), sc);
+                                    if let Some(placed) = sector.stars.iter().find(|s| s.id == star_nav.id) {
+                                        let sys = sa_universe::generate_system(&placed.star, star_nav.id.0);
+                                        for (pi, planet) in sys.planets.iter().enumerate() {
+                                            let has_feature = planet.has_rings || planet.atmosphere.is_some();
+                                            if !has_feature { continue; }
+
+                                            let au_in_ly = 1.581e-5_f64;
+                                            let meters_in_ly = 1.0 / 9.461e15_f64;
+                                            let r_m = planet.radius_earth as f64 * 6_371_000.0;
+                                            let view_m = r_m * 1.5;
+                                            let orb_ly = planet.orbital_radius_au as f64 * au_in_ly;
+
+                                            self.galactic_position = WorldPos::new(
+                                                star_nav.galactic_pos.x + orb_ly + view_m * meters_in_ly,
+                                                star_nav.galactic_pos.y,
+                                                star_nav.galactic_pos.z,
+                                            );
+                                            self.camera.position = self.galactic_position;
+                                            self.drive.request_disengage();
+                                            self.star_streaming.force_load(self.galactic_position);
+                                            if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
+                                                let verts = self.star_streaming.build_vertices(self.galactic_position);
+                                                renderer.star_field.update_star_buffer(&gpu.device, &verts);
+                                                let loaded = solar_system::ActiveSystem::load(
+                                                    star_nav.id, placed, &mut renderer.mesh_store, &gpu.device);
+                                                log::info!("Found! {} — Planet {}: {:?} {:.0}km rings={} atmo={}",
+                                                    star_nav.catalog_name, pi + 1, planet.sub_type,
+                                                    planet.radius_earth * 6371.0,
+                                                    planet.has_rings, planet.atmosphere.is_some());
+                                                log::info!("System: {} bodies total", loaded.body_count());
+                                                for line in loaded.body_summary() { log::info!("  {}", line); }
+                                                self.active_system = Some(loaded);
+                                            }
+                                            self.navigation.clear_target();
+                                            found = true;
+                                            break 'search;
+                                        }
+                                    }
+                                }
+                                if !found { log::warn!("No planets with rings/atmosphere found nearby"); }
+                            }
                             KeyCode::Equal => { self.fly_speed *= 2.0; log::info!("Fly speed: {:.0} ly/s", self.fly_speed); }
                             KeyCode::Minus => { self.fly_speed = (self.fly_speed / 2.0).max(1.0); log::info!("Fly speed: {:.0} ly/s", self.fly_speed); }
                             _ => {}
