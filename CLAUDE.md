@@ -185,3 +185,19 @@ Primary target: macOS (Metal via wgpu). Secondary: Windows (DX12/Vulkan via wgpu
 - `docs/interior-standards.md` — interior dimensions, bulkhead system, color palette, validation rules
 - `docs/ship-design-guide.md` — ship layout reference (bow→stern sections), color palette, part assembly guide
 - `docs/performance-techniques.md` — all performance optimizations with rationale, files, and benchmarks
+- `docs/collision-system-standards.md` — 3-tier collision system, collision groups
+
+## Design Specs (in docs/superpowers/specs/)
+
+- `2026-03-28-travel-system-design.md` — three-tier drive system (Impulse/Cruise/Warp), fuel economy, visual effects
+- `2026-03-28-solar-system-from-space-design.md` — procedural solar systems, planet rendering, navigation, 1:1 scale
+- `2026-03-28-main-menu-design.md` — main menu with random celestial background scenes
+
+## Upcoming Features (prioritized)
+
+1. **Audio (`sa_audio` crate)** — 3100 WAV sci-fi sounds available. Engine states, drive transitions, UI clicks, space ambience, silence. Uses `rodio` crate for WAV playback.
+2. **Main menu** — random celestial background, minimal text UI, atmospheric quotes
+3. **Planet LOD** — distance-based icosphere subdivision switching (point → disk → sphere → detailed)
+4. **CDLOD terrain + landing** — cube-sphere quadtree, OpenSimplex2 fBm, walk on planet surfaces (`sa_terrain` crate)
+5. **Resource gathering** — asteroid mining, gas giant scooping, exotic matter deposits
+6. **Navigation console** — full 3D star map, route planning, ship database with bookmarks
