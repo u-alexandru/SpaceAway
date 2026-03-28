@@ -204,6 +204,7 @@ struct App {
     /// Debug ray mesh (thin line from camera to hit point).
     debug_ray_mesh: Option<sa_core::Handle<sa_render::MeshMarker>>,
     /// Debug ray endpoint and color for rendering.
+    #[allow(clippy::type_complexity)]
     debug_ray_data: Option<([f32; 3], [f32; 3], [f32; 3], bool)>, // origin, end, color, visible
 }
 
@@ -868,11 +869,9 @@ impl ApplicationHandler for App {
                     // Update debug ray visualization
                     let debug = interaction.debug_ray();
                     let max_range = 2.0_f32;
-                    let end_dist = if debug.hit.is_some() {
-                        debug.hit.unwrap().1.min(max_range)
-                    } else {
-                        max_range
-                    };
+                    let end_dist = debug.hit
+                        .map(|(_, toi)| toi.min(max_range))
+                        .unwrap_or(max_range);
                     let end = [
                         ray_origin[0] + ray_dir[0] * end_dist,
                         ray_origin[1] + ray_dir[1] * end_dist,
@@ -894,7 +893,7 @@ impl ApplicationHandler for App {
                         let dz = end[2] - ray_origin[2];
                         let len = (dx*dx + dy*dy + dz*dz).sqrt();
                         if len > 0.01 {
-                            let mid = [
+                            let _mid = [
                                 (ray_origin[0] + end[0]) / 2.0,
                                 (ray_origin[1] + end[1]) / 2.0,
                                 (ray_origin[2] + end[2]) / 2.0,
@@ -978,8 +977,6 @@ impl ApplicationHandler for App {
                 if let (Some(interaction), Some(gpu), Some(renderer), Some(ids)) =
                     (&self.interaction, &self.gpu, &mut self.renderer, &self.ship_ids)
                 {
-                    let layout = sa_ship::station::cockpit_layout();
-
                     // Update lever mesh based on current position
                     if let Some(lever) = interaction.get(ids.throttle_lever) {
                         let pos = lever.lever_position().unwrap_or(0.0);
