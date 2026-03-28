@@ -14,6 +14,15 @@ pub struct DrawCommand {
     pub model_matrix: Mat4,
 }
 
+/// Holds the in-progress frame state between render_frame and submit_frame.
+/// This allows the caller to run additional render passes (e.g. egui HUD)
+/// before submitting.
+pub struct FrameContext {
+    pub encoder: wgpu::CommandEncoder,
+    pub frame: wgpu::SurfaceTexture,
+    pub view: wgpu::TextureView,
+}
+
 pub struct Renderer {
     pub geometry_pipeline: GeometryPipeline,
     pub sky_renderer: SkyRenderer,
@@ -51,13 +60,19 @@ impl Renderer {
             .resize(&gpu.device, gpu.config.width, gpu.config.height);
     }
 
+    /// Submit a frame after all render passes are complete.
+    pub fn submit_frame(gpu: &GpuContext, ctx: FrameContext) {
+        gpu.queue.submit(std::iter::once(ctx.encoder.finish()));
+        ctx.frame.present();
+    }
+
     pub fn render_frame(
         &self,
         gpu: &GpuContext,
         camera: &Camera,
         draw_commands: &[DrawCommand],
         light_dir: Vec3,
-    ) {
+    ) -> Option<FrameContext> {
         let aspect = gpu.aspect_ratio();
         let view_proj = camera.view_projection_matrix(aspect);
 
@@ -148,11 +163,11 @@ impl Renderer {
             Ok(frame) => frame,
             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
                 gpu.surface.configure(&gpu.device, &gpu.config);
-                return;
+                return None;
             }
             Err(e) => {
                 log::error!("Surface error: {e:?}");
-                return;
+                return None;
             }
         };
 
@@ -261,7 +276,10 @@ impl Renderer {
             self.galaxy_renderer.render(&mut pass);
         }
 
-        gpu.queue.submit(std::iter::once(encoder.finish()));
-        frame.present();
+        Some(FrameContext {
+            encoder,
+            frame,
+            view,
+        })
     }
 }

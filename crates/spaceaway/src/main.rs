@@ -1,5 +1,6 @@
 mod ship_colliders;
 mod ship_setup;
+mod ui;
 
 use glam::{Mat4, Vec3};
 use sa_core::{EventBus, FrameTime};
@@ -206,6 +207,8 @@ struct App {
     /// Debug ray endpoint and color for rendering.
     #[allow(clippy::type_complexity)]
     debug_ray_data: Option<([f32; 3], [f32; 3], [f32; 3], bool)>, // origin, end, color, visible
+    /// UI system (egui HUD overlay and monitors).
+    ui_system: Option<ui::UiSystem>,
 }
 
 impl App {
@@ -265,6 +268,7 @@ impl App {
             interactable_meshes: Vec::new(),
             debug_ray_mesh: None,
             debug_ray_data: None,
+            ui_system: None,
         }
     }
 
@@ -576,8 +580,15 @@ impl ApplicationHandler for App {
             let window = Arc::new(event_loop.create_window(attrs).unwrap());
             let gpu = GpuContext::new(window.clone());
             let renderer = Renderer::new(&gpu);
+            let ui_sys = ui::UiSystem::new(
+                &gpu.device,
+                gpu.config.format,
+                gpu.config.width,
+                gpu.config.height,
+            );
             self.gpu = Some(gpu);
             self.renderer = Some(renderer);
+            self.ui_system = Some(ui_sys);
             self.window = Some(window);
             self.last_frame = Instant::now();
             self.setup_scene();
@@ -674,6 +685,9 @@ impl ApplicationHandler for App {
                     gpu.resize(new_size.width, new_size.height);
                     if let Some(renderer) = &mut self.renderer {
                         renderer.resize(gpu);
+                    }
+                    if let Some(ui_sys) = &mut self.ui_system {
+                        ui_sys.resize(new_size.width, new_size.height);
                     }
                 }
             }
@@ -1118,12 +1132,35 @@ impl ApplicationHandler for App {
                     };
                     self.perf.draw_calls = commands.len() as u32;
                     self.perf.star_count = renderer.star_field.star_count;
-                    renderer.render_frame(
+                    if let Some(mut frame_ctx) = renderer.render_frame(
                         gpu,
                         &self.camera,
                         &commands,
                         Vec3::new(0.5, -0.8, -0.3),
-                    );
+                    ) {
+                        // Render HUD overlay via egui
+                        if let Some(ui_sys) = &mut self.ui_system {
+                            // Build HUD state from interaction system
+                            let hovered_kind = self.interaction.as_ref()
+                                .and_then(|inter| {
+                                    let id = inter.hovered()?;
+                                    Some(inter.get(id)?.kind.clone())
+                                });
+                            let hud_state = ui::HudState {
+                                hovered_kind,
+                                screen_width: gpu.config.width,
+                                screen_height: gpu.config.height,
+                            };
+                            ui_sys.render_hud(
+                                &gpu.device,
+                                &gpu.queue,
+                                &mut frame_ctx.encoder,
+                                &frame_ctx.view,
+                                &hud_state,
+                            );
+                        }
+                        Renderer::submit_frame(gpu, frame_ctx);
+                    }
                 }
                 self.perf.render_us = t3.elapsed().as_micros() as u64;
                 self.perf.total_us = frame_start.elapsed().as_micros() as u64;
