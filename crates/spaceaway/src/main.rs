@@ -1266,9 +1266,29 @@ impl ApplicationHandler for App {
                         }
                     }
 
-                    // Step 5: Sync collider positions + update query pipeline.
-                    // Manual integration uses set_position() which doesn't sync
-                    // child colliders (interactables). Must call this explicitly.
+                    // Step 5: Sync interior collider ROTATION to match ship.
+                    // Interior colliders are on a fixed body at world origin.
+                    // We sync rotation (not position) so collision geometry matches
+                    // the ship's visual orientation after roll/pitch/yaw.
+                    // Position stays at origin — high-speed translation is handled by
+                    // the player controller's origin-offset transform.
+                    if let (Some(ship), Some(ih)) = (&self.ship, crate::ship_colliders::interior_body_handle()) {
+                        // Read ship rotation first (immutable borrow)
+                        let ship_rot = self.physics.get_body(ship.body_handle)
+                            .map(|b| *b.rotation());
+                        // Then set interior rotation (mutable borrow)
+                        if let (Some(rot), Some(ib)) = (ship_rot, self.physics.get_body_mut(ih)) {
+                            ib.set_position(
+                                nalgebra::Isometry3::from_parts(
+                                    nalgebra::Translation3::identity(),
+                                    rot,
+                                ),
+                                true,
+                            );
+                        }
+                    }
+
+                    // Sync child collider world positions + update query pipeline.
                     self.physics.sync_collider_positions();
                     let t_qp = Instant::now();
                     self.physics.update_query_pipeline();
