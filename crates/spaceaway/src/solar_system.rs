@@ -161,10 +161,14 @@ impl ActiveSystem {
     ) -> Vec<DrawCommand> {
         self.game_time_s += dt_real;
 
-        // Compute world positions for all bodies (in light-years).
         let world_positions = self.compute_positions_ly();
 
-        // Generate pre-rebased DrawCommands (camera-relative meters).
+        // Minimum screen size: bodies always render at least MIN_PIXELS across.
+        // Distant planets appear as bright colored dots that grow into spheres.
+        const MIN_PIXELS: f32 = 4.0;
+        const SCREEN_HEIGHT: f32 = 1080.0; // approximate
+        const FOV: f32 = std::f32::consts::FRAC_PI_4; // 45° vertical FOV
+
         let mut commands = Vec::with_capacity(self.bodies.len());
         for (i, body) in self.bodies.iter().enumerate() {
             let pos = world_positions[i];
@@ -172,7 +176,31 @@ impl ActiveSystem {
             let dy_m = ((pos.y - camera_galactic_pos.y) * LY_TO_METERS) as f32;
             let dz_m = ((pos.z - camera_galactic_pos.z) * LY_TO_METERS) as f32;
 
-            let model = Mat4::from_translation(Vec3::new(dx_m, dy_m, dz_m));
+            let distance_m = (dx_m as f64 * dx_m as f64
+                + dy_m as f64 * dy_m as f64
+                + dz_m as f64 * dz_m as f64)
+                .sqrt();
+
+            // Angular size in pixels
+            let angular_pixels = if distance_m > 1.0 {
+                2.0 * (body.radius_m / distance_m).atan() as f32
+                    * SCREEN_HEIGHT / FOV
+            } else {
+                1000.0 // very close, no scaling needed
+            };
+
+            // Scale up if too small to see (minimum 4 pixels on screen)
+            let scale = if angular_pixels < MIN_PIXELS && angular_pixels > 0.001 {
+                (MIN_PIXELS / angular_pixels) as f32
+            } else {
+                1.0
+            };
+
+            let model = Mat4::from_scale_rotation_translation(
+                Vec3::splat(scale),
+                glam::Quat::IDENTITY,
+                Vec3::new(dx_m, dy_m, dz_m),
+            );
             commands.push(DrawCommand {
                 mesh: body.mesh_handle,
                 model_matrix: model,
