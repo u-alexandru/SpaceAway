@@ -30,6 +30,8 @@ pub struct UiSystem {
     // --- Monitor (offscreen) ---
     monitor_ctx: egui::Context,
     monitor_renderer: egui_wgpu::Renderer,
+    /// Kept alive so the texture_view remains valid.
+    #[allow(dead_code)]
     monitor_texture: wgpu::Texture,
     monitor_texture_view: wgpu::TextureView,
 }

@@ -14,7 +14,7 @@ pub use gpu::GpuContext;
 pub use mesh::{MeshData, MeshMarker, MeshStore};
 pub use nebula::{NebulaInstance, NebulaRenderer, NebulaUniforms};
 pub use pipeline::{GeometryPipeline, InstanceRaw, Uniforms};
-pub use renderer::{DrawCommand, FrameContext, Renderer};
+pub use renderer::{DrawCommand, FrameContext, Renderer, ScreenDrawCommand};
 pub use screen_pipeline::{ScreenInstanceRaw, ScreenPipeline, ScreenQuad, ScreenVertex};
 pub use sky::{SkyRenderer, SkyUniforms};
 pub use star_field::{generate_stars, StarField, StarVertex};

@@ -10,7 +10,8 @@ use sa_math::WorldPos;
 use sa_physics::PhysicsWorld;
 use sa_player::PlayerController;
 use sa_render::{
-    Camera, DrawCommand, GpuContext, MeshData, NebulaInstance, Renderer, StarVertex, Vertex,
+    Camera, DrawCommand, GpuContext, MeshData, NebulaInstance, Renderer, ScreenDrawCommand,
+    ScreenQuad, StarVertex, Vertex,
 };
 use sa_ship::helm::HelmController;
 use sa_ship::interaction::InteractionSystem;
@@ -209,6 +210,10 @@ struct App {
     debug_ray_data: Option<([f32; 3], [f32; 3], [f32; 3], bool)>, // origin, end, color, visible
     /// UI system (egui HUD overlay and monitors).
     ui_system: Option<ui::UiSystem>,
+    /// Screen quad mesh for the helm monitor.
+    screen_quad: Option<ScreenQuad>,
+    /// Bind group for the helm monitor texture.
+    screen_bind_group: Option<wgpu::BindGroup>,
 }
 
 impl App {
@@ -269,6 +274,8 @@ impl App {
             debug_ray_mesh: None,
             debug_ray_data: None,
             ui_system: None,
+            screen_quad: None,
+            screen_bind_group: None,
         }
     }
 
@@ -316,6 +323,19 @@ impl App {
             "Uploaded ship hull + {} interactable meshes",
             self.interactable_meshes.len(),
         );
+
+        // Create screen quad for the helm monitor (0.4 x 0.25, matching Speed Display size)
+        let screen_quad = ScreenQuad::new(&gpu.device, 0.4, 0.25);
+        self.screen_quad = Some(screen_quad);
+
+        // Create initial bind group for the monitor texture
+        if let Some(ui_sys) = &self.ui_system {
+            let bind_group = renderer.screen_pipeline.create_texture_bind_group(
+                &gpu.device,
+                ui_sys.helm_texture_view(),
+            );
+            self.screen_bind_group = Some(bind_group);
+        }
     }
 
     /// Rebuild the GPU star buffer from the procedural universe if the observer
@@ -1075,6 +1095,34 @@ impl ApplicationHandler for App {
                 // --- Render ---
                 let t3 = Instant::now();
                 if let (Some(gpu), Some(renderer)) = (&self.gpu, &self.renderer) {
+                    // 1. Render helm monitor to offscreen texture (before the main frame)
+                    if let Some(ui_sys) = &mut self.ui_system {
+                        let helm_data = ui::helm_screen::HelmData {
+                            speed: self.ship.as_ref()
+                                .map(|s| s.speed(&self.physics))
+                                .unwrap_or(0.0),
+                            throttle: self.ship.as_ref()
+                                .map(|s| s.throttle)
+                                .unwrap_or(0.0),
+                            engine_on: self.ship.as_ref()
+                                .map(|s| s.engine_on)
+                                .unwrap_or(false),
+                        };
+                        let mut monitor_encoder = gpu.device.create_command_encoder(
+                            &wgpu::CommandEncoderDescriptor {
+                                label: Some("Monitor Encoder"),
+                            },
+                        );
+                        ui_sys.render_helm_monitor(
+                            &gpu.device,
+                            &gpu.queue,
+                            &mut monitor_encoder,
+                            &helm_data,
+                        );
+                        gpu.queue.submit(std::iter::once(monitor_encoder.finish()));
+                    }
+
+                    // 2. Build draw commands
                     let commands = if self.view_mode == 6 || self.view_mode == 7 {
                         // Debug: ship part viewing at origin
                         if let Some(ship_mesh) = self.ship_part_mesh {
@@ -1130,17 +1178,50 @@ impl ApplicationHandler for App {
 
                         cmds
                     };
-                    self.perf.draw_calls = commands.len() as u32;
+
+                    // 3. Build screen draw commands for in-world monitors
+                    let screen_draws: Vec<ScreenDrawCommand<'_>> =
+                        if self.view_mode == 0 {
+                            // In normal gameplay, place the screen at the Speed Display position
+                            let ship_transform = if let Some(ship) = &self.ship {
+                                if let Some(body) = self.physics.get_body(ship.body_handle) {
+                                    let p = body.translation();
+                                    let r = body.rotation();
+                                    let rot = glam::Quat::from_xyzw(r.i, r.j, r.k, r.w);
+                                    Mat4::from_rotation_translation(rot, Vec3::new(p.x, p.y, p.z))
+                                } else { Mat4::IDENTITY }
+                            } else { Mat4::IDENTITY };
+
+                            if let (Some(quad), Some(bind_group)) =
+                                (&self.screen_quad, &self.screen_bind_group)
+                            {
+                                // Speed Display position from cockpit layout: (0.0, 0.3, 0.8)
+                                let screen_pos = Vec3::new(0.0, 0.3, 0.8);
+                                vec![ScreenDrawCommand {
+                                    quad,
+                                    model_matrix: ship_transform * Mat4::from_translation(screen_pos),
+                                    texture_bind_group: bind_group,
+                                }]
+                            } else {
+                                vec![]
+                            }
+                        } else {
+                            vec![]
+                        };
+
+                    self.perf.draw_calls = commands.len() as u32 + screen_draws.len() as u32;
                     self.perf.star_count = renderer.star_field.star_count;
+
+                    // 4. Render 3D scene + screen quads
                     if let Some(mut frame_ctx) = renderer.render_frame(
                         gpu,
                         &self.camera,
                         &commands,
+                        &screen_draws,
                         Vec3::new(0.5, -0.8, -0.3),
                     ) {
-                        // Render HUD overlay via egui
+                        // 5. Render HUD overlay via egui
                         if let Some(ui_sys) = &mut self.ui_system {
-                            // Build HUD state from interaction system
                             let hovered_kind = self.interaction.as_ref()
                                 .and_then(|inter| {
                                     let id = inter.hovered()?;
@@ -1159,6 +1240,7 @@ impl ApplicationHandler for App {
                                 &hud_state,
                             );
                         }
+                        // 6. Submit and present
                         Renderer::submit_frame(gpu, frame_ctx);
                     }
                 }

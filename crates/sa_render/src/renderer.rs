@@ -3,6 +3,7 @@ use crate::gpu::GpuContext;
 use crate::mesh::{MeshMarker, MeshStore};
 use crate::nebula::{NebulaRenderer, NebulaUniforms};
 use crate::pipeline::{GeometryPipeline, InstanceRaw, Uniforms};
+use crate::screen_pipeline::{ScreenInstanceRaw, ScreenPipeline, ScreenQuad};
 use crate::sky::{SkyRenderer, SkyUniforms};
 use crate::star_field::{StarField, StarUniforms};
 use glam::{Mat4, Vec3};
@@ -12,6 +13,13 @@ use wgpu::util::DeviceExt;
 pub struct DrawCommand {
     pub mesh: Handle<MeshMarker>,
     pub model_matrix: Mat4,
+}
+
+/// A draw command for a textured screen quad.
+pub struct ScreenDrawCommand<'a> {
+    pub quad: &'a ScreenQuad,
+    pub model_matrix: Mat4,
+    pub texture_bind_group: &'a wgpu::BindGroup,
 }
 
 /// Holds the in-progress frame state between render_frame and submit_frame.
@@ -25,6 +33,7 @@ pub struct FrameContext {
 
 pub struct Renderer {
     pub geometry_pipeline: GeometryPipeline,
+    pub screen_pipeline: ScreenPipeline,
     pub sky_renderer: SkyRenderer,
     pub star_field: StarField,
     pub nebula_renderer: NebulaRenderer,
@@ -43,10 +52,16 @@ impl Renderer {
         let sky_renderer = SkyRenderer::new(&gpu.device, gpu.config.format);
         let stars = crate::star_field::generate_stars(4000, 42);
         let star_field = StarField::new(&gpu.device, gpu.config.format, &stars);
+        let screen_pipeline = ScreenPipeline::new(
+            &gpu.device,
+            gpu.config.format,
+            &geometry_pipeline.bind_group_layout,
+        );
         let nebula_renderer = NebulaRenderer::new(&gpu.device, gpu.config.format);
         let galaxy_renderer = NebulaRenderer::new(&gpu.device, gpu.config.format);
         Self {
             geometry_pipeline,
+            screen_pipeline,
             sky_renderer,
             star_field,
             nebula_renderer,
@@ -71,6 +86,7 @@ impl Renderer {
         gpu: &GpuContext,
         camera: &Camera,
         draw_commands: &[DrawCommand],
+        screen_draws: &[ScreenDrawCommand<'_>],
         light_dir: Vec3,
     ) -> Option<FrameContext> {
         let aspect = gpu.aspect_ratio();
@@ -259,6 +275,50 @@ impl Renderer {
                         pass.draw_indexed(0..mesh.index_count, 0, 0..1);
                         buf_idx += 1;
                     }
+                }
+            }
+
+            // Draw screen quads (textured monitors, after geometry, same depth buffer)
+            // Pre-create instance buffers so they outlive the render pass.
+            let screen_instance_buffers: Vec<wgpu::Buffer> = screen_draws
+                .iter()
+                .map(|screen_cmd| {
+                    let col3 = screen_cmd.model_matrix.col(3);
+                    let rebased_translation = Vec3::new(
+                        (col3.x as f64 - cam_pos.x) as f32,
+                        (col3.y as f64 - cam_pos.y) as f32,
+                        (col3.z as f64 - cam_pos.z) as f32,
+                    );
+                    let mut rebased_model = screen_cmd.model_matrix;
+                    rebased_model.col_mut(3).x = rebased_translation.x;
+                    rebased_model.col_mut(3).y = rebased_translation.y;
+                    rebased_model.col_mut(3).z = rebased_translation.z;
+
+                    let instance = ScreenInstanceRaw {
+                        model: rebased_model.to_cols_array_2d(),
+                    };
+                    gpu.device
+                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("Screen Instance Buffer"),
+                            contents: bytemuck::bytes_of(&instance),
+                            usage: wgpu::BufferUsages::VERTEX,
+                        })
+                })
+                .collect();
+
+            if !screen_draws.is_empty() {
+                pass.set_pipeline(&self.screen_pipeline.pipeline);
+                pass.set_bind_group(0, &self.geometry_pipeline.uniform_bind_group, &[]);
+
+                for (i, screen_cmd) in screen_draws.iter().enumerate() {
+                    pass.set_bind_group(1, screen_cmd.texture_bind_group, &[]);
+                    pass.set_vertex_buffer(0, screen_cmd.quad.vertex_buffer.slice(..));
+                    pass.set_vertex_buffer(1, screen_instance_buffers[i].slice(..));
+                    pass.set_index_buffer(
+                        screen_cmd.quad.index_buffer.slice(..),
+                        wgpu::IndexFormat::Uint32,
+                    );
+                    pass.draw_indexed(0..screen_cmd.quad.index_count, 0, 0..1);
                 }
             }
 
