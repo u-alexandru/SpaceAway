@@ -1056,15 +1056,20 @@ impl ApplicationHandler for App {
                                 // Get ship state before mutable borrow
                                 let ship_pos = ship.position(&self.physics);
                                 let ship_vel = ship.speed_vector(&self.physics);
+                                // Compute rotated stand-up offset before mutable borrow
+                                let ship_rot = self.physics.get_body(ship.body_handle)
+                                    .map(|b| *b.rotation())
+                                    .unwrap_or(nalgebra::UnitQuaternion::identity());
+                                let local_offset = nalgebra::Vector3::new(0.0, -0.1, 2.8);
+                                let world_offset = ship_rot * local_offset;
+
                                 if let (Some((sx, sy, sz)), Some(body)) = (
                                     ship_pos,
                                     self.physics.get_body_mut(player.body_handle),
                                 ) {
                                     body.set_enabled(true);
-                                    // Stand up behind the helm seat in v2 cockpit
-                                    // Close enough to interactables (max_range 2.5m)
                                     body.set_translation(
-                                        nalgebra::Vector3::new(sx, sy - 0.1, sz + 2.8),
+                                        nalgebra::Vector3::new(sx + world_offset.x, sy + world_offset.y, sz + world_offset.z),
                                         true,
                                     );
                                     // Match ship velocity so player doesn't slide on stand-up
