@@ -167,8 +167,11 @@ fn ship_sections() -> Vec<Section> {
 const FLOOR_Y: f32 = -1.0;
 const CEILING_Y: f32 = 1.2;
 const WALL_THICKNESS: f32 = 0.15;
-const DOOR_W: f32 = 1.4;
-const DOOR_H: f32 = 2.1;
+// Collision door opening is wider/taller than the visual door (1.4x2.1m mesh).
+// Extra clearance prevents the character controller's autostep and slope
+// detection from catching on rotated door frame edges.
+const DOOR_W: f32 = 1.8;
+const DOOR_H: f32 = 2.3;
 
 /// Add a collider as a child of the ship body.
 /// This makes interior colliders move with the ship — essential for
