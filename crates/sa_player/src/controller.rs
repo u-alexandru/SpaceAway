@@ -138,28 +138,46 @@ impl PlayerController {
             self.vertical_velocity -= GRAVITY * dt;
         }
 
-        // Desired translation = (base_velocity + walk + vertical) * dt
-        let walk_vel = move_dir * MOVE_SPEED;
-        let desired = nalgebra::Vector3::new(
-            (base_velocity[0] + walk_vel.x) * dt,
-            (base_velocity[1] + self.vertical_velocity) * dt,
-            (base_velocity[2] + walk_vel.z) * dt,
+        // SPLIT: ship displacement (direct teleport) + walk displacement (sweep test).
+        //
+        // The ship displacement can be hundreds of meters per frame at high speed.
+        // Sweeping the capsule that far is extremely expensive (O(n) colliders × distance).
+        // Instead: teleport the player by the ship displacement first (it's safe —
+        // the ship colliders moved by the same amount), then sweep only the tiny
+        // walk component (0-0.08m per frame). This keeps move_shape cost constant
+        // regardless of ship speed.
+        let ship_displacement = nalgebra::Vector3::new(
+            base_velocity[0] * dt,
+            base_velocity[1] * dt,
+            base_velocity[2] * dt,
         );
 
-        // Get current character position from the kinematic body
+        // Walk + gravity (what the player actually does relative to the ship)
+        let walk_vel = move_dir * MOVE_SPEED;
+        let walk_desired = nalgebra::Vector3::new(
+            walk_vel.x * dt,
+            self.vertical_velocity * dt,
+            walk_vel.z * dt,
+        );
+
+        // Step 1: Teleport player by ship displacement (no sweep needed —
+        // ship colliders moved by the same amount during physics step)
         let char_pos = physics
             .get_body(self.body_handle)
             .map(|b| *b.position())
             .unwrap_or(Isometry::identity());
 
-        // Call move_shape — sweep test that handles walls, slopes, steps.
-        // Exclude player's own body. Use PLAYER→SHIP_INTERIOR group filter
-        // so the sweep only hits interior colliders (floor, walls, bulkheads).
+        let teleported_pos = Isometry::new(
+            char_pos.translation.vector + ship_displacement,
+            char_pos.rotation.scaled_axis(),
+        );
+
+        // Step 2: Sweep only the walk component (tiny distance, fast)
         let filter = QueryFilter::default()
             .exclude_rigid_body(self.body_handle)
             .groups(InteractionGroups::new(
-                Group::GROUP_3, // sweep is from PLAYER
-                Group::GROUP_2, // sweep hits SHIP_INTERIOR
+                Group::GROUP_3,
+                Group::GROUP_2,
             ));
 
         let output = self.char_controller.move_shape(
@@ -168,16 +186,14 @@ impl PlayerController {
             &physics.collider_set,
             &physics.query_pipeline,
             self.character_shape.as_ref(),
-            &char_pos,
-            desired,
+            &teleported_pos,
+            walk_desired,
             filter,
-            |_collision| { /* collisions ignored for now */ },
+            |_collision| {},
         );
 
-        // Apply corrected movement IMMEDIATELY (not deferred to next step).
-        // set_translation is instant — no one-frame delay. move_shape already
-        // handled collision detection, so direct positioning is safe.
-        let new_translation = char_pos.translation.vector + output.translation;
+        // Apply: teleported position + sweep-corrected walk
+        let new_translation = teleported_pos.translation.vector + output.translation;
         if let Some(body) = physics.get_body_mut(self.body_handle) {
             body.set_translation(new_translation, true);
         }
