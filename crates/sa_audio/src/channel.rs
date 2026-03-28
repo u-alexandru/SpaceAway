@@ -145,7 +145,7 @@ impl Channels {
         if let Some(current) = self.music_sink.take() {
             self.music_fading_out = Some(current);
         }
-        self.music_gap_timer = 3.0; // short gap before new context track
+        self.music_gap_timer = 0.5; // brief gap — new track starts almost immediately
         self.music_playing = false;
         self.music_volume = 0.0; // new track will fade in
         self.music_target_volume = 1.0;
