@@ -369,4 +369,78 @@ impl UiSystem {
             self.egui_renderer.free_texture(id);
         }
     }
+
+    /// Render the main menu overlay. Returns true if "Continue" was clicked.
+    pub fn render_menu(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        menu: &crate::menu::MainMenu,
+    ) -> bool {
+        let screen_descriptor = ScreenDescriptor {
+            size_in_pixels: [self.screen_width, self.screen_height],
+            pixels_per_point: 1.0,
+        };
+
+        let raw_input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(self.screen_width as f32, self.screen_height as f32),
+            )),
+            ..Default::default()
+        };
+
+        let mut start_game = false;
+        let full_output = self.egui_ctx.run(raw_input, |ctx| {
+            start_game = menu.render_egui(ctx);
+        });
+
+        let paint_jobs = self
+            .egui_ctx
+            .tessellate(full_output.shapes, full_output.pixels_per_point);
+
+        for (id, delta) in &full_output.textures_delta.set {
+            self.egui_renderer
+                .update_texture(device, queue, *id, delta);
+        }
+
+        let cmd_buffers = self.egui_renderer.update_buffers(
+            device,
+            queue,
+            encoder,
+            &paint_jobs,
+            &screen_descriptor,
+        );
+
+        {
+            let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("egui Menu Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                ..Default::default()
+            });
+            let mut pass = pass.forget_lifetime();
+            self.egui_renderer
+                .render(&mut pass, &paint_jobs, &screen_descriptor);
+        }
+
+        if !cmd_buffers.is_empty() {
+            queue.submit(cmd_buffers);
+        }
+
+        for id in &full_output.textures_delta.free {
+            self.egui_renderer.free_texture(id);
+        }
+
+        start_game
+    }
 }

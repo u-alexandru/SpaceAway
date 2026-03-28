@@ -1,4 +1,5 @@
 mod drive_integration;
+mod menu;
 mod navigation;
 mod ship_colliders;
 mod ship_setup;
@@ -31,6 +32,12 @@ use winit::event::{DeviceEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::KeyCode;
 use winit::window::{CursorGrabMode, Window, WindowId};
+
+#[derive(PartialEq)]
+enum GamePhase {
+    Menu,
+    Playing,
+}
 
 /// Convert visible stars from the universe query into GPU-ready vertices.
 ///
@@ -222,6 +229,10 @@ struct App {
     audio: sa_audio::AudioManager,
     /// Prevents spamming the low-fuel voice announcement.
     fuel_low_announced: bool,
+    /// Current game phase (Menu or Playing).
+    phase: GamePhase,
+    /// Main menu state (only present during Menu phase).
+    menu: Option<menu::MainMenu>,
 }
 
 impl App {
@@ -298,6 +309,8 @@ impl App {
             navigation: navigation::Navigation::new(seed),
             audio: sa_audio::AudioManager::new("resources/sounds".into()),
             fuel_low_announced: false,
+            phase: GamePhase::Menu,
+            menu: None,
         }
     }
 
@@ -649,9 +662,34 @@ impl ApplicationHandler for App {
             self.gpu = Some(gpu);
             self.renderer = Some(renderer);
             self.ui_system = Some(ui_sys);
-            self.window = Some(window);
+            self.window = Some(window.clone());
             self.last_frame = Instant::now();
             self.setup_scene();
+
+            // Create main menu scene after GPU is ready
+            if self.menu.is_none() && self.phase == GamePhase::Menu {
+                if let (Some(gpu_ref), Some(renderer_ref)) = (&self.gpu, &mut self.renderer) {
+                    self.menu = Some(menu::MainMenu::new(
+                        &mut renderer_ref.mesh_store,
+                        &gpu_ref.device,
+                    ));
+                }
+                // Load stars for the menu's galactic position
+                if let Some(menu_ref) = &self.menu {
+                    let menu_pos = menu_ref.galactic_position();
+                    self.star_streaming.force_load(menu_pos);
+                    if let (Some(gpu_ref), Some(renderer_ref)) = (&self.gpu, &mut self.renderer) {
+                        let verts = self.star_streaming.build_vertices(menu_pos);
+                        renderer_ref.star_field.update_star_buffer(&gpu_ref.device, &verts);
+                    }
+                }
+                self.audio.set_music_context(sa_audio::MusicContext::Idle);
+                // Make sure cursor is free during menu
+                window.set_cursor_visible(true);
+                let _ = window.set_cursor_grab(CursorGrabMode::None);
+                self.cursor_grabbed = false;
+                log::info!("Main menu created");
+            }
         }
     }
 
@@ -678,8 +716,9 @@ impl ApplicationHandler for App {
                     }
 
                     // Teleport keys: only when NOT seated at helm (1/2/3 are drive keys when seated)
+                    // Skip all game-specific keys during Menu phase
                     let is_seated = self.helm.as_ref().map(|h| h.is_seated()).unwrap_or(false);
-                    if event.state.is_pressed() && !is_seated {
+                    if event.state.is_pressed() && !is_seated && self.phase == GamePhase::Playing {
                         match code {
                             KeyCode::Digit1 => self.teleport_to(0), // mid-disc
                             KeyCode::Digit2 => self.teleport_to(1), // above galaxy
@@ -918,7 +957,8 @@ impl ApplicationHandler for App {
                 if button == winit::event::MouseButton::Left {
                     self.input.mouse.set_left_pressed(state.is_pressed());
                 }
-                if state.is_pressed() && !self.cursor_grabbed {
+                // Only grab cursor during Playing phase
+                if state.is_pressed() && !self.cursor_grabbed && self.phase == GamePhase::Playing {
                     self.grab_cursor();
                 }
             }
@@ -938,12 +978,86 @@ impl ApplicationHandler for App {
                 let now = frame_start;
                 self.time.advance(now - self.last_frame);
                 self.last_frame = now;
+
+                let dt = self.time.delta_seconds() as f32;
+
+                // --- MENU PHASE ---
+                if self.phase == GamePhase::Menu {
+                    if let Some(menu_ref) = &mut self.menu {
+                        menu_ref.update(dt);
+                    }
+                    self.audio.update(dt);
+
+                    if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
+                        // Update star field for menu position
+                        let menu_pos = self.menu.as_ref()
+                            .map(|m| m.galactic_position())
+                            .unwrap_or(WorldPos::ORIGIN);
+                        let needs_rebuild = self.star_streaming.update(menu_pos, dt);
+                        if needs_rebuild {
+                            let verts = self.star_streaming.build_vertices(menu_pos);
+                            renderer.star_field.update_star_buffer(&gpu.device, &verts);
+                        }
+
+                        // Get menu draw commands
+                        let commands = self.menu.as_ref()
+                            .map(|m| m.draw_commands())
+                            .unwrap_or_default();
+                        let screen_draws: Vec<ScreenDrawCommand<'_>> = vec![];
+                        let drive_params = sa_render::DriveRenderParams::default();
+
+                        let default_cam = Camera::new();
+                        let menu_camera = self.menu.as_ref()
+                            .map(|m| m.camera())
+                            .unwrap_or(&default_cam);
+
+                        if let Some(mut frame_ctx) = renderer.render_frame(
+                            gpu,
+                            menu_camera,
+                            &commands,
+                            &screen_draws,
+                            Vec3::new(0.5, -0.8, -0.3),
+                            menu_pos,
+                            &drive_params,
+                        ) {
+                            // Render menu egui overlay
+                            if let Some(ui_sys) = &mut self.ui_system {
+                                let start_game = ui_sys.render_menu(
+                                    &gpu.device,
+                                    &gpu.queue,
+                                    &mut frame_ctx.encoder,
+                                    &frame_ctx.view,
+                                    self.menu.as_ref().unwrap(),
+                                );
+                                if start_game {
+                                    self.phase = GamePhase::Playing;
+                                    self.menu = None;
+                                    // Reload stars for game starting position
+                                    self.star_streaming.force_load(self.galactic_position);
+                                    let verts = self.star_streaming.build_vertices(self.galactic_position);
+                                    renderer.star_field.update_star_buffer(&gpu.device, &verts);
+                                    self.audio.set_power(true);
+                                    log::info!("Starting game -- entering ship");
+                                }
+                            }
+
+                            Renderer::submit_frame(gpu, frame_ctx);
+                        }
+                    }
+
+                    self.input.end_frame();
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                    return;
+                }
+
+                // --- PLAYING PHASE ---
                 self.schedule
                     .run(&mut self.world, &mut self.events, &self.time);
 
                 // --- Player + Physics + Helm ---
                 let t0 = Instant::now();
-                let dt = self.time.delta_seconds() as f32;
 
                 if self.fly_mode {
                     // Fly mode: move galactic position in light-years, bypass physics.
