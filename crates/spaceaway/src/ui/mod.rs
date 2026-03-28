@@ -134,12 +134,11 @@ impl UiSystem {
         self.screen_height = height;
     }
 
-    /// UI scale factor based on screen height. Designed at 1080p.
-    /// Multiplied by 1.5 base to ensure readability on HiDPI/Retina.
-    /// At 720 logical (1440 physical): 1.5 * 1440/1080 = 2.0x.
-    /// At 1080 physical: 1.5x. At 4K: 1.5 * 2160/1080 = 3.0x.
-    fn ui_scale(&self) -> f32 {
-        (self.screen_height as f32 / REFERENCE_HEIGHT * 1.5).max(1.0)
+    /// UI scale factor for font sizes. Designed at 1080p physical pixels.
+    /// On Retina (2560×1440 physical for 1280×720 logical): 1440/1080 = 1.33.
+    /// Fonts are multiplied by this, keeping pixels_per_point=1.0 for sharpness.
+    pub fn font_scale(&self) -> f32 {
+        (self.screen_height as f32 / REFERENCE_HEIGHT).max(0.5)
     }
 
     /// Get the helm monitor texture view for binding in the screen pipeline.
@@ -314,16 +313,15 @@ impl UiSystem {
         view: &wgpu::TextureView,
         hud_state: &HudState,
     ) {
-        let scale = self.ui_scale();
         let screen_descriptor = ScreenDescriptor {
             size_in_pixels: [self.screen_width, self.screen_height],
-            pixels_per_point: scale,
+            pixels_per_point: 1.0, // render at physical pixels for sharpness
         };
 
         let raw_input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
-                egui::vec2(self.screen_width as f32 / scale, self.screen_height as f32 / scale),
+                egui::vec2(self.screen_width as f32, self.screen_height as f32),
             )),
             ..Default::default()
         };
@@ -390,24 +388,47 @@ impl UiSystem {
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         menu: &crate::menu::MainMenu,
+        mouse_pos: Option<[f32; 2]>,
+        mouse_clicked: bool,
     ) -> bool {
-        let scale = self.ui_scale();
         let screen_descriptor = ScreenDescriptor {
             size_in_pixels: [self.screen_width, self.screen_height],
-            pixels_per_point: scale,
+            pixels_per_point: 1.0,
         };
 
-        let raw_input = egui::RawInput {
+        let mut raw_input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
-                egui::vec2(self.screen_width as f32 / scale, self.screen_height as f32 / scale),
+                egui::vec2(self.screen_width as f32, self.screen_height as f32),
             )),
             ..Default::default()
         };
 
+        // Pass mouse position and clicks to egui for menu interaction
+        if let Some([mx, my]) = mouse_pos {
+            raw_input.events.push(egui::Event::PointerMoved(egui::pos2(mx, my)));
+        }
+        if mouse_clicked {
+            if let Some([mx, my]) = mouse_pos {
+                raw_input.events.push(egui::Event::PointerButton {
+                    pos: egui::pos2(mx, my),
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                });
+                // Also send release immediately for click detection
+                raw_input.events.push(egui::Event::PointerButton {
+                    pos: egui::pos2(mx, my),
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Default::default(),
+                });
+            }
+        }
+
         let mut start_game = false;
         let full_output = self.egui_ctx.run(raw_input, |ctx| {
-            start_game = menu.render_egui(ctx);
+            start_game = menu.render_egui(ctx, self.font_scale());
         });
 
         let paint_jobs = self

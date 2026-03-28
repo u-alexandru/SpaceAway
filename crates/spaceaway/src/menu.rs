@@ -235,9 +235,10 @@ impl MainMenu {
     }
 
     /// Render the menu overlay via egui. Returns true if "Continue" clicked.
-    pub fn render_egui(&self, ctx: &egui::Context) -> bool {
+    pub fn render_egui(&self, ctx: &egui::Context, font_scale: f32) -> bool {
         let mut start_game = false;
         let a = |frac: f32| -> u8 { ((self.time * 0.5).min(1.0) * 255.0 * frac) as u8 };
+        let s = font_scale; // scale all sizes
 
         // Semi-transparent dark overlay
         egui::Area::new(egui::Id::new("menu_bg"))
@@ -256,27 +257,27 @@ impl MainMenu {
                     ui.add_space(ui.available_height() * 0.25);
                     ui.label(egui::RichText::new("S  P  A  C  E  A  W  A  Y")
                         .color(egui::Color32::from_rgba_unmultiplied(200, 205, 215, a(1.0)))
-                        .size(42.0).strong());
-                    ui.add_space(60.0);
+                        .size(42.0 * s).strong());
+                    ui.add_space(60.0 * s);
 
                     let btn = egui::RichText::new("▸  Continue")
-                        .color(egui::Color32::from_rgba_unmultiplied(160, 165, 180, a(1.0)))
-                        .size(22.0);
+                        .color(egui::Color32::from_rgba_unmultiplied(180, 185, 200, a(1.0)))
+                        .size(24.0 * s);
                     if ui.add(egui::Label::new(btn).sense(egui::Sense::click())).clicked() {
                         start_game = true;
                     }
-                    ui.add_space(15.0);
+                    ui.add_space(15.0 * s);
                     ui.label(egui::RichText::new("▸  New Game")
                         .color(egui::Color32::from_rgba_unmultiplied(80, 80, 90, a(0.35)))
-                        .size(22.0));
-                    ui.add_space(15.0);
+                        .size(24.0 * s));
+                    ui.add_space(15.0 * s);
                     ui.label(egui::RichText::new("▸  Settings")
                         .color(egui::Color32::from_rgba_unmultiplied(80, 80, 90, a(0.35)))
-                        .size(22.0));
-                    ui.add_space(60.0);
+                        .size(24.0 * s));
+                    ui.add_space(60.0 * s);
                     ui.label(egui::RichText::new(self.quote)
-                        .color(egui::Color32::from_rgba_unmultiplied(100, 105, 120, a(0.47)))
-                        .size(14.0).italics());
+                        .color(egui::Color32::from_rgba_unmultiplied(120, 125, 140, a(0.6)))
+                        .size(16.0 * s).italics());
                 });
             });
         start_game

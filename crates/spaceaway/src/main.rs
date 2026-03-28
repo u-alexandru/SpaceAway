@@ -953,6 +953,9 @@ impl ApplicationHandler for App {
                     }
                 }
             }
+            WindowEvent::CursorMoved { position, .. } => {
+                self.input.mouse.set_cursor_position(position.x as f32, position.y as f32);
+            }
             WindowEvent::MouseInput { state, button, .. } => {
                 if button == winit::event::MouseButton::Left {
                     self.input.mouse.set_left_pressed(state.is_pressed());
@@ -1022,12 +1025,18 @@ impl ApplicationHandler for App {
                         ) {
                             // Render menu egui overlay
                             if let Some(ui_sys) = &mut self.ui_system {
+                                // Pass mouse position (physical pixels) and click state to egui
+                                let mouse_pos = self.input.mouse.position()
+                                    .map(|(x, y)| [x, y]);
+                                let mouse_clicked = self.input.mouse.left_just_pressed();
                                 let start_game = ui_sys.render_menu(
                                     &gpu.device,
                                     &gpu.queue,
                                     &mut frame_ctx.encoder,
                                     &frame_ctx.view,
                                     self.menu.as_ref().unwrap(),
+                                    mouse_pos,
+                                    mouse_clicked,
                                 );
                                 if start_game {
                                     self.phase = GamePhase::Playing;

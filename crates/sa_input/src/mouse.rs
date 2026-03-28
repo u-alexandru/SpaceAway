@@ -4,6 +4,10 @@ pub struct MouseState {
     left_pressed: bool,
     left_just_pressed: bool,
     left_just_released: bool,
+    /// Cursor position in physical pixels (None if cursor is outside window).
+    cursor_x: f32,
+    cursor_y: f32,
+    cursor_valid: bool,
 }
 
 impl MouseState {
@@ -14,7 +18,20 @@ impl MouseState {
             left_pressed: false,
             left_just_pressed: false,
             left_just_released: false,
+            cursor_x: 0.0,
+            cursor_y: 0.0,
+            cursor_valid: false,
         }
+    }
+
+    pub fn set_cursor_position(&mut self, x: f32, y: f32) {
+        self.cursor_x = x;
+        self.cursor_y = y;
+        self.cursor_valid = true;
+    }
+
+    pub fn position(&self) -> Option<(f32, f32)> {
+        if self.cursor_valid { Some((self.cursor_x, self.cursor_y)) } else { None }
     }
 
     pub fn accumulate_delta(&mut self, dx: f32, dy: f32) {
