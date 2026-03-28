@@ -253,18 +253,21 @@ impl Channels {
     }
 
     fn start_ambience(&mut self, sounds_root: &Path) {
+        // Very subtle ambience — felt more than heard.
+        // Ship hum barely perceptible, life support even quieter.
+        // Music carries the atmosphere, not ambient drones.
         if self.ambience_hum.is_none()
             && let Ok(sink) =
                 self.load_looping(&sounds_root.join(ambience_hum_path()))
         {
-            sink.set_volume(0.2);
+            sink.set_volume(0.03); // barely perceptible
             self.ambience_hum = Some(sink);
         }
         if self.ambience_life.is_none()
             && let Ok(sink) =
                 self.load_looping(&sounds_root.join(ambience_life_support_path()))
         {
-            sink.set_volume(0.1);
+            sink.set_volume(0.02); // even quieter
             self.ambience_life = Some(sink);
         }
     }
@@ -298,7 +301,7 @@ impl Channels {
                         && let Ok(source) = Decoder::new(BufReader::new(file))
                         && let Ok(sink) = Sink::try_new(&self.stream_handle)
                     {
-                        sink.set_volume(0.25 * master_volume);
+                        sink.set_volume(0.4 * master_volume); // music is primary atmosphere
                         sink.append(source);
                         self.music_sink = Some(sink);
                         self.music_playing = true;
