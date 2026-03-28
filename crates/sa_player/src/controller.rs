@@ -167,18 +167,16 @@ impl PlayerController {
         // Transform player position to ship-local space
         let player_local = ship_rot_inv * (player_world - ship_position);
 
-        // Walk direction + gravity in SHIP-LOCAL space.
-        // Player yaw drives walk direction. We transform the horizontal walk
-        // from world to local, but apply gravity directly in local-Y so that
-        // "down" is always toward the ship's floor regardless of ship roll.
+        // Walk direction + gravity directly in SHIP-LOCAL space.
+        // Player yaw is ship-local (yaw=0 = ship nose), so move_dir is already
+        // a local direction. No world→local transform needed — using ship_rot_inv
+        // would double-rotate and misalign collision after ship rotation.
+        // Gravity in local-Y = always toward ship's floor regardless of roll.
         let walk_vel = move_dir * MOVE_SPEED;
-        let walk_horizontal_world = nalgebra::Vector3::new(walk_vel.x * dt, 0.0, walk_vel.z * dt);
-        let walk_horizontal_local = ship_rot_inv * walk_horizontal_world;
-        // Gravity in ship-local Y (always toward ship floor, not world down)
         let walk_local = nalgebra::Vector3::new(
-            walk_horizontal_local.x,
-            walk_horizontal_local.y + self.vertical_velocity * dt,
-            walk_horizontal_local.z,
+            walk_vel.x * dt,
+            self.vertical_velocity * dt,
+            walk_vel.z * dt,
         );
 
         // Sweep in LOCAL space — colliders are stationary here
