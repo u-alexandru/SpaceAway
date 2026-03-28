@@ -821,6 +821,11 @@ impl ApplicationHandler for App {
                             if self.ship_resources.exotic_fuel > 0.0 {
                                 if self.drive.request_engage(sa_ship::DriveMode::Warp) {
                                     log::info!("Drive: WARP spooling...");
+                                    // Unload active system when entering warp
+                                    if self.active_system.is_some() {
+                                        self.active_system = None;
+                                        log::info!("Left solar system — entering warp");
+                                    }
                                 }
                             } else {
                                 log::warn!("Cannot engage warp: no exotic fuel");
@@ -897,6 +902,46 @@ impl ApplicationHandler for App {
                         self.galactic_position.x += delta[0];
                         self.galactic_position.y += delta[1];
                         self.galactic_position.z += delta[2];
+                    }
+
+                    // Gravity well auto-drop: only check during warp when no system is loaded
+                    if self.drive.mode() == sa_ship::DriveMode::Warp
+                        && matches!(self.drive.status(), sa_ship::DriveStatus::Engaged)
+                        && self.active_system.is_none()
+                    {
+                        if let Some(nav_star) = self.navigation.check_gravity_well(self.galactic_position) {
+                            // Drop out of warp
+                            self.drive.request_disengage();
+                            log::info!("GRAVITY WELL — entering system: {}", nav_star.catalog_name);
+
+                            // Load the solar system
+                            let nav_id = nav_star.id;
+                            let nav_name = nav_star.catalog_name.clone();
+                            if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
+                                let sector_coord = sa_universe::SectorCoord::new(
+                                    nav_id.sector_x().into(),
+                                    nav_id.sector_y().into(),
+                                    nav_id.sector_z().into(),
+                                );
+                                let sector = sa_universe::sector::generate_sector(
+                                    MasterSeed(42),
+                                    sector_coord,
+                                );
+                                if let Some(placed) = sector.stars.iter().find(|s| s.id == nav_id) {
+                                    let system = solar_system::ActiveSystem::load(
+                                        nav_id,
+                                        placed,
+                                        &mut renderer.mesh_store,
+                                        &gpu.device,
+                                    );
+                                    log::info!("System loaded: {} bodies ({})", system.body_count(), nav_name);
+                                    self.active_system = Some(system);
+                                }
+                            }
+
+                            // Clear navigation lock (prevent re-triggering)
+                            self.navigation.clear_target();
+                        }
                     }
 
                     // Interior colliders stay at LOCAL origin — ship-local collision
@@ -1285,6 +1330,9 @@ impl ApplicationHandler for App {
                 self.maybe_regenerate_stars();
                 self.perf.stars_us = t2.elapsed().as_micros() as u64;
 
+                // Update navigation (nearby stars for window markers + gravity well)
+                self.navigation.update_nearby(self.galactic_position);
+
                 // --- Drive visuals update (smooth shader parameter transitions) ---
                 let drive_dir = if let Some(ship) = &self.ship {
                     if let Some(body) = self.physics.get_body(ship.body_handle) {
@@ -1305,6 +1353,15 @@ impl ApplicationHandler for App {
                     // 1. Render BOTH monitors to offscreen textures in ONE encoder
                     // (avoids multiple queue.submit() calls per frame)
                     if let Some(ui_sys) = &mut self.ui_system {
+                        let system_info = self.active_system.as_ref()
+                            .map(|sys| sys.body_summary());
+                        let target_info = self.navigation.locked_target.as_ref().map(|t| {
+                            let speed_ly_s = self.drive.current_speed_ly_s();
+                            let (dist, eta) = self.navigation
+                                .target_eta(self.galactic_position, speed_ly_s)
+                                .unwrap_or((0.0, f64::INFINITY));
+                            (t.catalog_name.clone(), dist, eta)
+                        });
                         let helm_data = ui::helm_screen::HelmData {
                             speed: self.ship.as_ref()
                                 .map(|s| s.speed(&self.physics))
@@ -1320,6 +1377,8 @@ impl ApplicationHandler for App {
                             drive_status: self.drive.status(),
                             drive_speed_c: self.drive.current_speed_c(),
                             exotic_fuel: self.ship_resources.exotic_fuel,
+                            system_info,
+                            target_info,
                         };
 
                         let ship_pos = self.ship.as_ref()
@@ -1354,7 +1413,7 @@ impl ApplicationHandler for App {
                     }
 
                     // 2. Build draw commands
-                    let commands = if self.view_mode == 6 || self.view_mode == 7 {
+                    let mut commands = if self.view_mode == 6 || self.view_mode == 7 {
                         // Debug: ship part viewing at origin
                         if let Some(ship_mesh) = self.ship_part_mesh {
                             vec![DrawCommand {
@@ -1410,6 +1469,25 @@ impl ApplicationHandler for App {
 
                         cmds
                     };
+
+                    // Append solar system bodies (planets, moons, star) if in a system
+                    if let Some(system) = &mut self.active_system {
+                        let system_commands = system.update(
+                            dt as f64,
+                            self.galactic_position,
+                        );
+                        commands.extend(system_commands);
+                    }
+
+                    // Unload system if player has cruised far away (> 100 AU from star)
+                    if let Some(system) = &self.active_system {
+                        let dist = self.galactic_position.distance_to(system.star_galactic_pos);
+                        let au_in_ly = 1.581e-5_f64;
+                        if dist > 100.0 * au_in_ly {
+                            log::info!("Left system boundary — unloading");
+                            self.active_system = None;
+                        }
+                    }
 
                     // 3. Build screen draw commands for in-world monitors
                     let screen_draws: Vec<ScreenDrawCommand<'_>> =

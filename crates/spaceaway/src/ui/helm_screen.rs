@@ -16,6 +16,10 @@ pub struct HelmData {
     pub drive_status: sa_ship::DriveStatus,
     pub drive_speed_c: f64,
     pub exotic_fuel: f32,
+    /// Solar system overview lines (if in a system).
+    pub system_info: Option<Vec<String>>,
+    /// Navigation target: (name, distance_ly, eta_seconds).
+    pub target_info: Option<(String, f64, f64)>,
 }
 
 /// Draw the helm monitor UI. Called within an egui context that targets
@@ -206,6 +210,59 @@ pub fn draw_helm_screen(ctx: &egui::Context, data: &HelmData) {
                         exotic_rect.left_top(), egui::vec2(ew, bar_height),
                     );
                     ui.painter().rect_filled(fill, 2.0, exotic_color);
+                }
+            }
+
+            // --- Navigation target ---
+            if let Some((ref name, dist, eta)) = data.target_info {
+                ui.add_space(8.0);
+                let eta_str = if eta.is_infinite() {
+                    "---".to_string()
+                } else if eta > 3600.0 {
+                    format!("{:.1}h", eta / 3600.0)
+                } else if eta > 60.0 {
+                    format!("{:.0}m", eta / 60.0)
+                } else {
+                    format!("{:.0}s", eta)
+                };
+                ui.label(
+                    egui::RichText::new(format!("TGT {name}"))
+                        .color(egui::Color32::from_rgb(40, 200, 220))
+                        .size(11.0),
+                );
+                ui.label(
+                    egui::RichText::new(format!("{:.2} ly  ETA {eta_str}", dist))
+                        .color(egui::Color32::from_rgb(40, 200, 220))
+                        .size(11.0),
+                );
+            }
+
+            // --- Solar system overview ---
+            if let Some(ref bodies) = data.system_info {
+                ui.add_space(8.0);
+                // Separator
+                let rect = ui.available_rect_before_wrap();
+                let y = rect.top();
+                ui.painter().line_segment(
+                    [
+                        egui::pos2(rect.left() + 10.0, y),
+                        egui::pos2(rect.right() - 10.0, y),
+                    ],
+                    egui::Stroke::new(1.0, HELM_BLUE),
+                );
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new("SYSTEM")
+                        .color(HELM_BLUE)
+                        .size(14.0)
+                        .strong(),
+                );
+                for line in bodies {
+                    ui.label(
+                        egui::RichText::new(line)
+                            .color(egui::Color32::from_white_alpha(180))
+                            .size(10.0),
+                    );
                 }
             }
         });
