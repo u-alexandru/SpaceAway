@@ -949,6 +949,35 @@ impl ApplicationHandler for App {
                         ship.engine_on = button.is_button_pressed().unwrap_or(false);
                     }
                 }
+                // Update interactable meshes when state changes (visual feedback)
+                if let (Some(interaction), Some(gpu), Some(renderer), Some(ids)) =
+                    (&self.interaction, &self.gpu, &mut self.renderer, &self.ship_ids)
+                {
+                    let layout = sa_ship::station::cockpit_layout();
+
+                    // Update lever mesh based on current position
+                    if let Some(lever) = interaction.get(ids.throttle_lever) {
+                        let pos = lever.lever_position().unwrap_or(0.0);
+                        let mesh = sa_meshgen::interactables::lever_mesh(pos);
+                        let mesh_data = meshgen_to_render(&mesh);
+                        let handle = renderer.mesh_store.upload(&gpu.device, &mesh_data);
+                        if let Some(slot) = self.interactable_meshes.get_mut(ids.throttle_lever) {
+                            *slot = handle;
+                        }
+                    }
+
+                    // Update button mesh based on pressed state
+                    if let Some(button) = interaction.get(ids.engine_button) {
+                        let pressed = button.is_button_pressed().unwrap_or(false);
+                        let mesh = sa_meshgen::interactables::button_mesh(pressed);
+                        let mesh_data = meshgen_to_render(&mesh);
+                        let handle = renderer.mesh_store.upload(&gpu.device, &mesh_data);
+                        if let Some(slot) = self.interactable_meshes.get_mut(ids.engine_button) {
+                            *slot = handle;
+                        }
+                    }
+                }
+
                 // Update speed screen text
                 if let (Some(interaction), Some(ship)) = (&mut self.interaction, &self.ship)
                     && let Some(ids) = &self.ship_ids
