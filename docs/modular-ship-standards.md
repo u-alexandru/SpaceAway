@@ -583,6 +583,7 @@ viewing direction.
 | R-TS6 | For same-color surfaces viewed from both sides (floors, bulkheads), a SINGLE face is sufficient. Do NOT duplicate geometry with flipped normals for same-color surfaces. |
 | R-TS7 | When two faces MUST overlap at the same position (unavoidable), add a 0.02-0.05m offset between them to prevent Z-fighting. |
 | R-TS8 | The `ambient` lighting term in the shader prevents back-faces from being completely black even before the front_facing fix -- but the fix makes them properly lit. |
+| R-TS9 | When building composite geometry (e.g. thick bulkhead = two faces + frame), NEVER use `box_mesh` for structural elements that share edges with another mesh. The box vertices overlap with the parent mesh vertices, causing Z-fighting. Use **direct quads** (`push_quad`) with vertices placed exactly at the shared edge positions instead. |
 
 ### 8.2 Rationale
 
@@ -659,6 +660,7 @@ Vertex  X        Y        Z
 
 ## Appendix B: Constants Reference
 
+v1 constants (ship_parts.rs):
 ```rust
 const STD_WIDTH: f32    = 4.0;    // Standard corridor/passage width
 const ROOM_WIDTH: f32   = 5.0;    // Wide room width
@@ -670,4 +672,17 @@ const HULL_INSET: f32   = 0.05;   // Interior hull panel offset (Z-fighting)
 const DOOR_W: f32       = 1.2;    // Standard door width
 const DOOR_H: f32       = 2.0;    // Standard door height
 const FRAME_THICKNESS: f32 = 0.1; // Door frame thickness
+```
+
+v2 constants (ship_parts_v2.rs):
+```rust
+const STD_WIDTH: f32       = 5.0;   // Standard corridor/passage width (was 4.0)
+const ROOM_WIDTH: f32      = 6.5;   // Wide room width (was 5.0)
+const STD_HEIGHT: f32      = 3.0;   // Universal hex cross-section height
+const FLOOR_Y: f32         = -1.0;  // Interior floor Y position
+const CEILING_Y: f32       = 1.2;   // Interior ceiling Y position (2.2m headroom)
+const WALL_INSET: f32      = 0.15;  // Interior wall offset from hull edge
+const DOOR_W: f32          = 1.4;   // Standard door width (was 1.2)
+const DOOR_H: f32          = 2.1;   // Standard door height (was 2.0)
+const BULKHEAD_DEPTH: f32  = 0.3;   // Thick bulkhead depth along Z
 ```

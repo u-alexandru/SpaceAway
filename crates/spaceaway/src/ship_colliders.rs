@@ -61,91 +61,99 @@ struct Section {
     bulkhead_aft: bool,
 }
 
-/// The full ship layout matching assemble_ship() in main.rs:
-/// cockpit(4m) + corridor(3m) + transition(1m) + nav_room(5m)
-/// + transition(1m) + corridor(3m) + transition(1m) + eng_room(5m)
-/// + transition(1m) + engine(5m)
+/// v2 ship layout matching assemble_ship_v2():
+/// cockpit(7m) + corridor(4m) + transition(1m) + nav_room(6m)
+/// + transition(1m) + corridor(4m) + transition(1m) + eng_room(6m)
+/// + transition(1m) + engine(6m) = 37m
 fn ship_sections() -> Vec<Section> {
-    let h = 3.0; // STD_HEIGHT
+    let h = 3.0;
     let mut sections = Vec::new();
     let mut z = 0.0;
 
-    // Cockpit: 2.0 -> 4.0, length 4.0, bulkhead at aft only
+    // Cockpit v2: 3.5 -> 6.5, length 7.0, bulkhead at aft only
     sections.push(Section {
-        fore_width: 2.0, aft_width: 4.0, height: h,
-        z_start: z, length: 4.0,
+        fore_width: 3.5, aft_width: 6.5, height: h,
+        z_start: z, length: 7.0,
         bulkhead_fore: false, bulkhead_aft: true,
+    });
+    z += 7.0;
+
+    // Transition 0: 6.5 -> 5.0, length 1.0 (cockpit to corridor)
+    sections.push(Section {
+        fore_width: 6.5, aft_width: 5.0, height: h,
+        z_start: z, length: 1.0,
+        bulkhead_fore: false, bulkhead_aft: false,
+    });
+    z += 1.0;
+
+    // Corridor 1: 5.0 -> 5.0, length 4.0
+    sections.push(Section {
+        fore_width: 5.0, aft_width: 5.0, height: h,
+        z_start: z, length: 4.0,
+        bulkhead_fore: true, bulkhead_aft: true,
     });
     z += 4.0;
 
-    // Corridor 1: 4.0 -> 4.0, length 3.0
+    // Transition 1: 5.0 -> 6.5, length 1.0
     sections.push(Section {
-        fore_width: 4.0, aft_width: 4.0, height: h,
-        z_start: z, length: 3.0,
-        bulkhead_fore: true, bulkhead_aft: true,
-    });
-    z += 3.0;
-
-    // Transition 1: 4.0 -> 5.0, length 1.0
-    sections.push(Section {
-        fore_width: 4.0, aft_width: 5.0, height: h,
+        fore_width: 5.0, aft_width: 6.5, height: h,
         z_start: z, length: 1.0,
         bulkhead_fore: false, bulkhead_aft: false,
     });
     z += 1.0;
 
-    // Nav room: 5.0 -> 5.0, length 5.0
+    // Nav room: 6.5 -> 6.5, length 6.0
+    sections.push(Section {
+        fore_width: 6.5, aft_width: 6.5, height: h,
+        z_start: z, length: 6.0,
+        bulkhead_fore: true, bulkhead_aft: true,
+    });
+    z += 6.0;
+
+    // Transition 2: 6.5 -> 5.0, length 1.0
+    sections.push(Section {
+        fore_width: 6.5, aft_width: 5.0, height: h,
+        z_start: z, length: 1.0,
+        bulkhead_fore: false, bulkhead_aft: false,
+    });
+    z += 1.0;
+
+    // Corridor 2: 5.0 -> 5.0, length 4.0
     sections.push(Section {
         fore_width: 5.0, aft_width: 5.0, height: h,
-        z_start: z, length: 5.0,
+        z_start: z, length: 4.0,
         bulkhead_fore: true, bulkhead_aft: true,
     });
-    z += 5.0;
+    z += 4.0;
 
-    // Transition 2: 5.0 -> 4.0, length 1.0
+    // Transition 3: 5.0 -> 6.5, length 1.0
     sections.push(Section {
-        fore_width: 5.0, aft_width: 4.0, height: h,
+        fore_width: 5.0, aft_width: 6.5, height: h,
         z_start: z, length: 1.0,
         bulkhead_fore: false, bulkhead_aft: false,
     });
     z += 1.0;
 
-    // Corridor 2: 4.0 -> 4.0, length 3.0
+    // Engineering room: 6.5 -> 6.5, length 6.0
     sections.push(Section {
-        fore_width: 4.0, aft_width: 4.0, height: h,
-        z_start: z, length: 3.0,
+        fore_width: 6.5, aft_width: 6.5, height: h,
+        z_start: z, length: 6.0,
         bulkhead_fore: true, bulkhead_aft: true,
     });
-    z += 3.0;
+    z += 6.0;
 
-    // Transition 3: 4.0 -> 5.0, length 1.0
+    // Transition 4: 6.5 -> 4.0, length 1.0
     sections.push(Section {
-        fore_width: 4.0, aft_width: 5.0, height: h,
+        fore_width: 6.5, aft_width: 4.0, height: h,
         z_start: z, length: 1.0,
         bulkhead_fore: false, bulkhead_aft: false,
     });
     z += 1.0;
 
-    // Engineering room: 5.0 -> 5.0, length 5.0
+    // Engine section: 4.0 -> 2.5, length 6.0
     sections.push(Section {
-        fore_width: 5.0, aft_width: 5.0, height: h,
-        z_start: z, length: 5.0,
-        bulkhead_fore: true, bulkhead_aft: true,
-    });
-    z += 5.0;
-
-    // Transition 4: 5.0 -> 3.5, length 1.0
-    sections.push(Section {
-        fore_width: 5.0, aft_width: 3.5, height: h,
-        z_start: z, length: 1.0,
-        bulkhead_fore: false, bulkhead_aft: false,
-    });
-    z += 1.0;
-
-    // Engine section: 3.5 -> 2.0, length 5.0
-    sections.push(Section {
-        fore_width: 3.5, aft_width: 2.0, height: h,
-        z_start: z, length: 5.0,
+        fore_width: 4.0, aft_width: 2.5, height: h,
+        z_start: z, length: 6.0,
         bulkhead_fore: true, bulkhead_aft: false,
     });
 
@@ -159,8 +167,8 @@ fn ship_sections() -> Vec<Section> {
 const FLOOR_Y: f32 = -1.0;
 const CEILING_Y: f32 = 1.2;
 const WALL_THICKNESS: f32 = 0.15;
-const DOOR_W: f32 = 1.2;
-const DOOR_H: f32 = 2.0;
+const DOOR_W: f32 = 1.4;
+const DOOR_H: f32 = 2.1;
 
 /// Add a collider as a child of the ship body.
 /// This makes interior colliders move with the ship — essential for
@@ -505,11 +513,11 @@ mod tests {
     fn ship_sections_total_length() {
         let sections = ship_sections();
         let total: f32 = sections.iter().map(|s| s.length).sum();
-        // cockpit(4) + corr(3) + trans(1) + nav(5) + trans(1) + corr(3)
-        // + trans(1) + eng(5) + trans(1) + engine(5) = 29
+        // v2: cockpit(7) + trans(1) + corr(4) + trans(1) + nav(6) + trans(1)
+        // + corr(4) + trans(1) + eng(6) + trans(1) + engine(6) = 38
         assert!(
-            (total - 29.0).abs() < 0.01,
-            "total ship length should be 29m, got {total}"
+            (total - 38.0).abs() < 0.01,
+            "total ship length should be 38m, got {total}"
         );
     }
 

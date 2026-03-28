@@ -52,40 +52,58 @@ pub struct StationConfig {
 /// Floor is at y=-1.0. The helm seat is centered near the front.
 ///
 /// Positions are in ship local space (relative to ship body origin at (0,0,0)):
-/// - Helm seat: center of cockpit, slightly forward
-/// - Thrust lever: right side of helm
-/// - Engine button: left side of helm
-/// - Speed screen: above helm, slightly forward
+/// v2 cockpit layout: 7m long, 6.5m wide windowed bridge.
+///
+/// Two seats side by side (pilot port, copilot starboard).
+/// Center console between seats holds thrust lever + engine button.
+/// Speed display on console panel, angled down — doesn't block forward view.
+/// All controls are reachable from standing or seated.
+///
+/// Z layout (cockpit spans z=0 to z=7):
+///   z=1.0-1.5  Console shelf + controls
+///   z=2.0      Helm seats (side by side)
+///   z=3.5      Player spawn (standing room behind seats)
 pub fn cockpit_layout() -> StationConfig {
     StationConfig {
         station: Station::Cockpit,
         interactables: vec![
+            // Pilot seat (port side)
             InteractablePlacement {
                 kind: PlacementKind::HelmSeat,
-                position: Vec3::new(0.0, -0.5, 1.5),
+                position: Vec3::new(-0.8, -0.5, 2.0),
                 label: "Helm Seat".into(),
                 collider_half_extents: Vec3::new(0.3, 0.4, 0.3),
             },
+            // Copilot seat (starboard side)
+            InteractablePlacement {
+                kind: PlacementKind::HelmSeat,
+                position: Vec3::new(0.8, -0.5, 2.0),
+                label: "Copilot Seat".into(),
+                collider_half_extents: Vec3::new(0.3, 0.4, 0.3),
+            },
+            // Thrust lever (center console, between seats)
             InteractablePlacement {
                 kind: PlacementKind::Lever,
-                position: Vec3::new(0.6, -0.2, 1.2),
+                position: Vec3::new(0.0, -0.15, 1.5),
                 label: "Thrust Lever".into(),
                 collider_half_extents: Vec3::new(0.15, 0.25, 0.15),
             },
+            // Engine on/off (center console, aft of lever)
             InteractablePlacement {
                 kind: PlacementKind::ToggleButton,
-                position: Vec3::new(-0.6, -0.2, 1.2),
+                position: Vec3::new(0.0, -0.15, 1.8),
                 label: "Engine On/Off".into(),
                 collider_half_extents: Vec3::new(0.15, 0.15, 0.15),
             },
+            // Speed display (on console shelf, angled — not blocking window)
             InteractablePlacement {
                 kind: PlacementKind::Screen {
-                    width: 0.4,
-                    height: 0.25,
+                    width: 0.45,
+                    height: 0.28,
                 },
-                position: Vec3::new(0.0, 0.3, 0.8),
+                position: Vec3::new(0.0, -0.05, 1.2),
                 label: "Speed Display".into(),
-                collider_half_extents: Vec3::new(0.2, 0.125, 0.02),
+                collider_half_extents: Vec3::new(0.225, 0.14, 0.02),
             },
         ],
     }
@@ -96,9 +114,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cockpit_has_four_interactables() {
+    fn cockpit_has_five_interactables() {
         let layout = cockpit_layout();
-        assert_eq!(layout.interactables.len(), 4);
+        assert_eq!(layout.interactables.len(), 5);
     }
 
     #[test]

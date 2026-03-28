@@ -5,6 +5,7 @@ pub mod csg;
 pub mod assembly;
 pub mod hull;
 pub mod ship_parts;
+pub mod ship_parts_v2;
 pub mod validate;
 pub mod interactables;
 pub mod auto_collider;

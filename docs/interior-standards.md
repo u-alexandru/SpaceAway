@@ -76,7 +76,16 @@ The function builds three rectangular panels (each with front and back faces):
 The panels are 0.1m thick (centered on z=0). The caller translates the
 bulkhead to the correct Z position for each section boundary.
 
-### 3.2 Placement Rules
+### 3.2 Thick Bulkheads (v2)
+
+v2 uses thick bulkheads (0.3m depth) with visible door frame inner walls:
+- Two bulkhead faces (fore + aft) separated by BULKHEAD_DEPTH
+- **Centered on the section boundary** — extends half the depth each direction
+- Door frame jambs and lintel are **direct quads** connecting the fore/aft door opening edges
+
+See rule B-5 through B-8 below for the critical construction rules.
+
+### 3.3 Placement Rules
 
 | Rule  | Requirement |
 |-------|-------------|
@@ -84,8 +93,12 @@ bulkhead to the correct Z position for each section boundary.
 | B-2   | Bulkhead interior_width matches the part's interior width at that face |
 | B-3   | Terminal faces (cockpit nose, engine rear) use hex_cap, not bulkheads |
 | B-4   | Bulkhead is placed at z=0 for fore connections, z=length for aft connections |
+| B-5   | Thick bulkheads MUST be **centered** on the section boundary (±half depth), never extending entirely into one section |
+| B-6   | Door frame inner walls (jambs, lintel) MUST use **direct quads** between fore/aft door opening corners — NEVER use `box_mesh` which creates overlapping faces with the bulkhead and causes Z-fighting |
+| B-7   | No geometry from the door frame may be coplanar with the bulkhead hex face — all frame geometry must be perpendicular to the bulkhead plane |
+| B-8   | Bulkhead hex face width must match the hull width at that boundary, but frame inner walls sit at the door opening edges only |
 
-### 3.3 Why Bulkheads Replace Door Frames
+### 3.4 Why Bulkheads Replace Door Frames
 
 The previous `door_frame_mesh()` only produced the frame bars (left, right, top)
 as thin rectangles floating in space. There was no wall around the frame, so:
@@ -179,6 +192,7 @@ lighting from both viewing directions.
 | R-TS6 | For same-color surfaces viewed from both sides (floors, bulkheads), a SINGLE face is sufficient. Do NOT duplicate geometry with flipped normals for same-color surfaces. |
 | R-TS7 | When two faces MUST overlap at the same position (unavoidable), add a 0.02-0.05m offset between them to prevent Z-fighting. |
 | R-TS8 | The `ambient` lighting term in the shader prevents back-faces from being completely black even before the front_facing fix -- but the fix makes them properly lit. |
+| R-TS9 | When building composite geometry (e.g. thick bulkhead = two faces + frame), NEVER use `box_mesh` for structural elements that share edges with another mesh. The box vertices overlap with the parent mesh vertices, causing Z-fighting. Use **direct quads** (`push_quad`) with vertices placed exactly at the shared edge positions instead. |
 
 ### 8.2 Impact on Interior Geometry
 

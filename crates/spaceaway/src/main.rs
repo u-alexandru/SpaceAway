@@ -242,12 +242,11 @@ impl App {
         let (ship, interaction, ids) =
             ship_setup::create_ship_and_interactables(&mut physics);
 
-        // Helm controller: viewpoint is cockpit seat position + eye height
-        let helm = HelmController::new(glam::Vec3::new(0.0, 0.3, 1.5));
+        // Helm controller: viewpoint at pilot seat position (port side) + eye height
+        let helm = HelmController::new(glam::Vec3::new(-0.8, 0.3, 2.0));
 
-        // Spawn player inside the cockpit (near the helm seat)
-        // Player gets simulated gravity via force each frame
-        let player = PlayerController::spawn(&mut physics, 0.0, 0.0, 2.5);
+        // Spawn player behind the helm seats (standing room in v2 cockpit)
+        let player = PlayerController::spawn(&mut physics, 0.0, 0.0, 3.5);
 
         let camera = Camera::new();
         let universe = Universe::new(MasterSeed(42));
@@ -848,8 +847,9 @@ impl ApplicationHandler for App {
                                     self.physics.get_body_mut(player.body_handle),
                                 ) {
                                     body.set_enabled(true);
+                                    // Stand up behind the helm seat in v2 cockpit
                                     body.set_translation(
-                                        nalgebra::Vector3::new(sx, sy - 0.1, sz + 1.5),
+                                        nalgebra::Vector3::new(sx, sy - 0.1, sz + 3.5),
                                         true,
                                     );
                                     // Match ship velocity so player doesn't slide on stand-up
@@ -1500,18 +1500,17 @@ fn meshgen_to_render(mesh: &sa_meshgen::Mesh) -> MeshData {
     }
 }
 
-/// All ship parts for visual cycling.
+/// All ship parts (v2) for visual cycling.
 fn all_ship_parts() -> Vec<(&'static str, sa_meshgen::Mesh)> {
-    use sa_meshgen::ship_parts::*;
+    use sa_meshgen::ship_parts_v2::*;
     vec![
-        ("cockpit", hull_cockpit().mesh),
-        ("corridor", hull_corridor(3.0).mesh),
-        ("transition_4_5", hull_transition(4.0, 5.0, 1.0).mesh),
-        ("nav_room", hull_room("nav", sa_meshgen::colors::ACCENT_NAVIGATION, &[]).mesh),
-        ("eng_room", hull_room("eng", sa_meshgen::colors::ACCENT_ENGINEERING, &[]).mesh),
-        ("transition_5_35", hull_transition(5.0, 3.5, 1.0).mesh),
-        ("engine_section", hull_engine_section().mesh),
-        ("airlock", hull_airlock().mesh),
+        ("cockpit_v2", hull_cockpit_v2().mesh),
+        ("corridor_v2", hull_corridor_v2(4.0).mesh),
+        ("transition_5_6.5", hull_transition_v2(5.0, 6.5, 1.0).mesh),
+        ("nav_room_v2", hull_room_v2("nav", sa_meshgen::colors::ACCENT_NAVIGATION, &[]).mesh),
+        ("eng_room_v2", hull_room_v2("eng", sa_meshgen::colors::ACCENT_ENGINEERING, &[]).mesh),
+        ("transition_6.5_4", hull_transition_v2(6.5, 4.0, 1.0).mesh),
+        ("engine_v2", hull_engine_section_v2().mesh),
     ]
 }
 
@@ -1521,7 +1520,9 @@ fn all_ship_parts() -> Vec<(&'static str, sa_meshgen::Mesh)> {
 /// cockpit(4.0) -> corridor(4.0) -> transition(4.0->5.0) -> nav_room(5.0)
 /// -> transition(5.0->4.0) -> corridor(4.0) -> transition(4.0->5.0)
 /// -> eng_room(5.0) -> transition(5.0->3.5) -> engine(3.5)
-fn assemble_ship() -> sa_meshgen::Mesh {
+/// v1 ship assembly (preserved for reference).
+#[allow(dead_code)]
+fn assemble_ship_v1() -> sa_meshgen::Mesh {
     use sa_meshgen::assembly::attach;
     use sa_meshgen::ship_parts::*;
 
@@ -1547,6 +1548,11 @@ fn assemble_ship() -> sa_meshgen::Mesh {
     let ship = attach(&ship, "aft", &engine, "fore");
 
     ship.mesh
+}
+
+/// v2 ship assembly — larger, windowed cockpit, thick bulkheads.
+fn assemble_ship() -> sa_meshgen::Mesh {
+    sa_meshgen::ship_parts_v2::assemble_ship_v2()
 }
 
 fn make_cube() -> MeshData {

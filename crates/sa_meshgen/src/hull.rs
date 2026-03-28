@@ -76,6 +76,102 @@ pub fn hex_hull(
     Mesh { vertices, indices }
 }
 
+/// Build a single hex hull panel between front_ring[i] and front_ring[next].
+/// Used when different faces need different colors (e.g. glass vs solid hull).
+/// Includes the 0.05m-inset interior face per R-TS5.
+pub fn hex_hull_panel(
+    front_ring: &[[f32; 3]; 6],
+    back_ring: &[[f32; 3]; 6],
+    i: usize,
+    next: usize,
+    color: [f32; 3],
+) -> Mesh {
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+
+    let corners = [front_ring[i], back_ring[i], back_ring[next], front_ring[next]];
+    let normal = face_normal(corners[0], corners[1], corners[2]);
+    push_quad(&mut vertices, &mut indices, corners, normal, color);
+
+    // Interior-facing inset (R-TS5)
+    let inset = 0.05;
+    let interior_color: [f32; 3] = [0.52, 0.54, 0.56];
+    let inner_corners = [
+        [front_ring[next][0] - normal[0] * inset, front_ring[next][1] - normal[1] * inset, front_ring[next][2] - normal[2] * inset],
+        [back_ring[next][0] - normal[0] * inset, back_ring[next][1] - normal[1] * inset, back_ring[next][2] - normal[2] * inset],
+        [back_ring[i][0] - normal[0] * inset, back_ring[i][1] - normal[1] * inset, back_ring[i][2] - normal[2] * inset],
+        [front_ring[i][0] - normal[0] * inset, front_ring[i][1] - normal[1] * inset, front_ring[i][2] - normal[2] * inset],
+    ];
+    let inner_normal = [-normal[0], -normal[1], -normal[2]];
+    push_quad(&mut vertices, &mut indices, inner_corners, inner_normal, interior_color);
+
+    Mesh { vertices, indices }
+}
+
+/// Build thin frame edges along open window faces.
+/// Creates narrow quads (0.04m wide) along the fore and aft ring edges
+/// for each window face, plus vertical struts connecting them.
+/// Uses exact hex ring vertex positions so connection validation passes.
+pub fn window_frame_edges(
+    front_ring: &[[f32; 3]; 6],
+    back_ring: &[[f32; 3]; 6],
+    window_faces: &[(usize, usize)],
+    color: [f32; 3],
+) -> Mesh {
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    let w = 0.04; // frame width
+
+    for &(i, next) in window_faces {
+        // Fore edge: front_ring[i] to front_ring[next] (thin quad)
+        let fi = front_ring[i];
+        let fn_ = front_ring[next];
+        let bi = back_ring[i];
+        let bn = back_ring[next];
+
+        // Normal for the face (used to offset inward for the frame width)
+        let face_n = face_normal(fi, bi, bn);
+        let inward = [-face_n[0] * w, -face_n[1] * w, -face_n[2] * w];
+
+        // Fore edge strip (at front ring z)
+        let fore_outer = [fi, fn_];
+        let fore_inner = [
+            [fi[0] + inward[0], fi[1] + inward[1], fi[2] + inward[2]],
+            [fn_[0] + inward[0], fn_[1] + inward[1], fn_[2] + inward[2]],
+        ];
+        let n = [0.0, 0.0, -1.0];
+        push_quad(&mut vertices, &mut indices,
+            [fore_outer[0], fore_outer[1], fore_inner[1], fore_inner[0]], n, color);
+
+        // Aft edge strip (at back ring z)
+        let aft_outer = [bi, bn];
+        let aft_inner = [
+            [bi[0] + inward[0], bi[1] + inward[1], bi[2] + inward[2]],
+            [bn[0] + inward[0], bn[1] + inward[1], bn[2] + inward[2]],
+        ];
+        let n = [0.0, 0.0, 1.0];
+        push_quad(&mut vertices, &mut indices,
+            [aft_outer[1], aft_outer[0], aft_inner[0], aft_inner[1]], n, color);
+
+        // Vertical strut at vertex i (front_ring[i] to back_ring[i])
+        let n_strut = face_n;
+        push_quad(&mut vertices, &mut indices,
+            [fi, bi,
+             [bi[0] + inward[0], bi[1] + inward[1], bi[2] + inward[2]],
+             [fi[0] + inward[0], fi[1] + inward[1], fi[2] + inward[2]]],
+            n_strut, color);
+
+        // Vertical strut at vertex next
+        push_quad(&mut vertices, &mut indices,
+            [bn, fn_,
+             [fn_[0] + inward[0], fn_[1] + inward[1], fn_[2] + inward[2]],
+             [bn[0] + inward[0], bn[1] + inward[1], bn[2] + inward[2]]],
+            n_strut, color);
+    }
+
+    Mesh { vertices, indices }
+}
+
 /// Build a hex cap face (front or back) as a fan of triangles.
 /// `ring` is the 6 vertices. If `flip` is true, winding is reversed (for back cap).
 pub fn hex_cap(ring: &[[f32; 3]; 6], color: [f32; 3], flip: bool) -> Mesh {
