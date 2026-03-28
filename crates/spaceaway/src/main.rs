@@ -201,6 +201,10 @@ struct App {
     helm: Option<HelmController>,
     /// GPU mesh handles for interactable objects.
     interactable_meshes: Vec<sa_core::Handle<sa_render::MeshMarker>>,
+    /// Debug ray mesh (thin line from camera to hit point).
+    debug_ray_mesh: Option<sa_core::Handle<sa_render::MeshMarker>>,
+    /// Debug ray endpoint and color for rendering.
+    debug_ray_data: Option<([f32; 3], [f32; 3], [f32; 3], bool)>, // origin, end, color, visible
 }
 
 impl App {
@@ -258,6 +262,8 @@ impl App {
             ship_ids: Some(ids),
             helm: Some(helm),
             interactable_meshes: Vec::new(),
+            debug_ray_mesh: None,
+            debug_ray_data: None,
         }
     }
 
@@ -837,6 +843,85 @@ impl ApplicationHandler for App {
                         &self.physics,
                     );
 
+                    // Update debug ray visualization
+                    let debug = interaction.debug_ray();
+                    let max_range = 2.0_f32;
+                    let end_dist = if debug.hit.is_some() {
+                        debug.hit.unwrap().1.min(max_range)
+                    } else {
+                        max_range
+                    };
+                    let end = [
+                        ray_origin[0] + ray_dir[0] * end_dist,
+                        ray_origin[1] + ray_dir[1] * end_dist,
+                        ray_origin[2] + ray_dir[2] * end_dist,
+                    ];
+                    let color = if debug.hit_id.is_some() {
+                        [0.0, 1.0, 0.0] // green = hit interactable
+                    } else if debug.hit.is_some() {
+                        [1.0, 1.0, 0.0] // yellow = hit something but not interactable
+                    } else {
+                        [1.0, 0.0, 0.0] // red = miss
+                    };
+                    self.debug_ray_data = Some((ray_origin, end, color, true));
+
+                    // Build the ray line mesh (thin box from origin to end)
+                    if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
+                        let dx = end[0] - ray_origin[0];
+                        let dy = end[1] - ray_origin[1];
+                        let dz = end[2] - ray_origin[2];
+                        let len = (dx*dx + dy*dy + dz*dz).sqrt();
+                        if len > 0.01 {
+                            let mid = [
+                                (ray_origin[0] + end[0]) / 2.0,
+                                (ray_origin[1] + end[1]) / 2.0,
+                                (ray_origin[2] + end[2]) / 2.0,
+                            ];
+                            // Create a small marker at the end point
+                            let marker = sa_meshgen::primitives::box_mesh(0.05, 0.05, 0.05, color);
+                            let marker = marker.transform(Mat4::from_translation(Vec3::new(end[0], end[1], end[2])));
+                            // Create a thin line from origin to end
+                            let line_dir = Vec3::new(dx/len, dy/len, dz/len);
+                            let up = if line_dir.y.abs() > 0.9 { Vec3::X } else { Vec3::Y };
+                            let right = line_dir.cross(up).normalize() * 0.005;
+                            let up2 = line_dir.cross(right).normalize() * 0.005;
+
+                            let mut verts = Vec::new();
+                            let mut indices = Vec::new();
+                            // 4 vertices at origin, 4 at end → thin box
+                            let o = Vec3::new(ray_origin[0], ray_origin[1], ray_origin[2]);
+                            let e = Vec3::new(end[0], end[1], end[2]);
+                            for &offset in &[right + up2, right - up2, -right - up2, -right + up2] {
+                                verts.push(sa_meshgen::mesh::MeshVertex {
+                                    position: (o + offset).to_array(),
+                                    color,
+                                    normal: [0.0, 1.0, 0.0],
+                                });
+                            }
+                            for &offset in &[right + up2, right - up2, -right - up2, -right + up2] {
+                                verts.push(sa_meshgen::mesh::MeshVertex {
+                                    position: (e + offset).to_array(),
+                                    color,
+                                    normal: [0.0, 1.0, 0.0],
+                                });
+                            }
+                            // 6 faces of the thin box
+                            for &[a,b,c,d] in &[[0,1,5,4],[1,2,6,5],[2,3,7,6],[3,0,4,7],[0,1,2,3],[4,5,6,7]] {
+                                let base = indices.len() as u32;
+                                let _ = base;
+                                indices.extend_from_slice(&[a,b,c, a,c,d]);
+                            }
+
+                            let mut ray_mesh = sa_meshgen::Mesh { vertices: verts, indices };
+                            // Merge the marker cube
+                            ray_mesh = sa_meshgen::Mesh::merge(&[ray_mesh, marker]);
+
+                            let mesh_data = meshgen_to_render(&ray_mesh);
+                            let handle = renderer.mesh_store.upload(&gpu.device, &mesh_data);
+                            self.debug_ray_mesh = Some(handle);
+                        }
+                    }
+
                     // If helm seat was clicked while standing, enter seated mode
                     if !is_seated && helm_clicked.is_some()
                         && let Some(helm) = &mut self.helm
@@ -921,6 +1006,14 @@ impl ApplicationHandler for App {
                                     model_matrix: Mat4::from_translation(pos),
                                 });
                             }
+                        }
+
+                        // Debug ray visualization
+                        if let Some(ray_handle) = self.debug_ray_mesh {
+                            cmds.push(DrawCommand {
+                                mesh: ray_handle,
+                                model_matrix: Mat4::IDENTITY,
+                            });
                         }
 
                         cmds
