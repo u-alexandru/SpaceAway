@@ -595,6 +595,26 @@ impl App {
         lines.push("  },".to_string());
 
         // Physics world stats
+        // Per-system timing breakdown
+        lines.push("  \"timing_ms\": {".to_string());
+        lines.push(format!("    \"total\": {:.2},", self.perf.total_us as f64 / 1000.0));
+        lines.push(format!("    \"player\": {:.2},", self.perf.player_us as f64 / 1000.0));
+        lines.push(format!("    \"physics\": {:.2},", self.perf.physics_us as f64 / 1000.0));
+        lines.push(format!("    \"stars\": {:.2},", self.perf.stars_us as f64 / 1000.0));
+        lines.push(format!("    \"render\": {:.2},", self.perf.render_us as f64 / 1000.0));
+        lines.push(format!("    \"fps\": {:.0}", self.perf.fps));
+        lines.push("  },".to_string());
+
+        // Player-to-ship relative position (should be constant when standing still)
+        if let (Some(player), Some(ship)) = (&self.player, &self.ship) {
+            if let (Some(pb), Some(sb)) = (self.physics.get_body(player.body_handle), self.physics.get_body(ship.body_handle)) {
+                let pp = pb.translation();
+                let sp = sb.translation();
+                lines.push(format!("  \"player_ship_offset\": [{:.3}, {:.3}, {:.3}],",
+                    pp.x - sp.x, pp.y - sp.y, pp.z - sp.z));
+            }
+        }
+
         lines.push("  \"physics\": {".to_string());
         lines.push(format!("    \"bodies\": {},", self.physics.rigid_body_set.len()));
         lines.push(format!("    \"colliders\": {},", self.physics.collider_set.len()));
