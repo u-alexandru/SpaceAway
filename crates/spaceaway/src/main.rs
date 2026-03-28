@@ -720,6 +720,55 @@ impl ApplicationHandler for App {
                                 self.ship_part_mesh = None;
                                 log::info!("Returned to normal scene view");
                             }
+                            KeyCode::Digit8 => {
+                                // Debug: jump to nearest star system
+                                self.navigation.update_nearby(self.galactic_position);
+                                if let Some(star) = self.navigation.nearby_stars.first().cloned() {
+                                    log::info!("Jumping to nearest star: {} ({:.2} ly)", star.catalog_name, star.distance_ly);
+                                    // Teleport to 40 AU from the star (inside gravity well)
+                                    let au_in_ly = 1.581e-5_f64;
+                                    self.galactic_position = WorldPos::new(
+                                        star.galactic_pos.x + 40.0 * au_in_ly,
+                                        star.galactic_pos.y,
+                                        star.galactic_pos.z,
+                                    );
+                                    self.camera.position = self.galactic_position;
+                                    self.drive.request_disengage();
+
+                                    // Force star regen at new position
+                                    self.star_streaming.force_load(self.galactic_position);
+                                    if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
+                                        let verts = self.star_streaming.build_vertices(self.galactic_position);
+                                        renderer.star_field.update_star_buffer(&gpu.device, &verts);
+                                    }
+
+                                    // Load the system
+                                    if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
+                                        let sector_coord = sa_universe::SectorCoord::new(
+                                            star.id.sector_x().into(),
+                                            star.id.sector_y().into(),
+                                            star.id.sector_z().into(),
+                                        );
+                                        let sector = sa_universe::sector::generate_sector(
+                                            MasterSeed(42),
+                                            sector_coord,
+                                        );
+                                        if let Some(placed) = sector.stars.iter().find(|s| s.id == star.id) {
+                                            let system = solar_system::ActiveSystem::load(
+                                                star.id,
+                                                placed,
+                                                &mut renderer.mesh_store,
+                                                &gpu.device,
+                                            );
+                                            log::info!("System loaded: {} bodies", system.body_count());
+                                            self.active_system = Some(system);
+                                        }
+                                    }
+                                    self.navigation.clear_target();
+                                } else {
+                                    log::warn!("No nearby stars to jump to");
+                                }
+                            }
                             KeyCode::Equal => { self.fly_speed *= 2.0; log::info!("Fly speed: {:.0} ly/s", self.fly_speed); }
                             KeyCode::Minus => { self.fly_speed = (self.fly_speed / 2.0).max(1.0); log::info!("Fly speed: {:.0} ly/s", self.fly_speed); }
                             _ => {}
@@ -815,6 +864,17 @@ impl ApplicationHandler for App {
                         if self.input.keyboard.just_pressed(KeyCode::Digit2) {
                             if self.drive.request_engage(sa_ship::DriveMode::Cruise) {
                                 log::info!("Drive: CRUISE engaged");
+                            }
+                        }
+                        // Tab: lock nearest star for navigation
+                        if self.input.keyboard.just_pressed(KeyCode::Tab) {
+                            if !self.navigation.nearby_stars.is_empty() {
+                                self.navigation.lock_target(0);
+                                if let Some(target) = &self.navigation.locked_target {
+                                    log::info!("LOCKED: {} ({:.2} ly)", target.catalog_name, target.distance_ly);
+                                }
+                            } else {
+                                log::warn!("No nearby stars found");
                             }
                         }
                         if self.input.keyboard.just_pressed(KeyCode::Digit3) {
