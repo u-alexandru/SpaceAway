@@ -863,11 +863,9 @@ impl ApplicationHandler for App {
                     // Sync interior colliders to ship position (helm branch)
                     if let (Some(ship), Some(ih)) = (&self.ship, crate::ship_colliders::interior_body_handle()) {
                         if let Some(sb) = self.physics.get_body(ship.body_handle) {
-                            let sp = *sb.translation();
-                            let sr = *sb.rotation();
+                            let ship_iso = *sb.position();
                             if let Some(ib) = self.physics.get_body_mut(ih) {
-                                ib.set_translation(sp, true);
-                                ib.set_rotation(sr, true);
+                                ib.set_position(ship_iso, false);
                             }
                         }
                     }
@@ -916,18 +914,16 @@ impl ApplicationHandler for App {
                     let phys_step_us = t_phys.elapsed().as_micros();
 
                     // Sync interior collider body to ship position.
-                    // Interior colliders are on a fixed body (not the ship's dynamic body)
-                    // to avoid 108 AABB updates per physics step. We teleport it now.
+                    // Use set_position (not set_translation) on the fixed body to
+                    // avoid rapier deferring AABB updates to the next step().
                     if let (Some(ship), Some(interior_handle)) = (
                         &self.ship,
                         crate::ship_colliders::interior_body_handle(),
                     ) {
                         if let Some(ship_body) = self.physics.get_body(ship.body_handle) {
-                            let ship_pos = *ship_body.translation();
-                            let ship_rot = *ship_body.rotation();
+                            let ship_iso = *ship_body.position();
                             if let Some(interior) = self.physics.get_body_mut(interior_handle) {
-                                interior.set_translation(ship_pos, true);
-                                interior.set_rotation(ship_rot, true);
+                                interior.set_position(ship_iso, false); // false = don't wake (it's fixed)
                             }
                         }
                     }
