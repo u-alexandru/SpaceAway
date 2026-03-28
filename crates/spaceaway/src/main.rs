@@ -1151,8 +1151,21 @@ impl ApplicationHandler for App {
                         }
                     }
 
-                    // Interior colliders stay at LOCAL origin — ship-local collision
-                    // handles the coordinate transform in PlayerController::update().
+                    // Sync interior collider rotation to match ship (same as walk mode).
+                    // Needed so colliders are correct when the player stands up.
+                    if let (Some(ship_ref), Some(ih)) = (&self.ship, crate::ship_colliders::interior_body_handle()) {
+                        let ship_rot = self.physics.get_body(ship_ref.body_handle)
+                            .map(|b| *b.rotation());
+                        if let (Some(rot), Some(ib)) = (ship_rot, self.physics.get_body_mut(ih)) {
+                            ib.set_position(
+                                nalgebra::Isometry3::from_parts(
+                                    nalgebra::Translation3::identity(),
+                                    rot,
+                                ),
+                                true,
+                            );
+                        }
+                    }
 
                     // Camera: ship quaternion + helm mouse look offset.
                     // ONLY runs while still seated — must not run on the stand-up frame
@@ -1317,7 +1330,8 @@ impl ApplicationHandler for App {
                     self.perf.stars_us = player_move_us as u64;
 
                     if let Some(player) = &self.player {
-                        self.camera.position = player.position(&self.physics);
+                        // Eye position: offset along ship's up (correct after roll/pitch)
+                        self.camera.position = player.position_ship_up(&self.physics, ship_rot_after);
                         // Camera: ship quaternion * (player look offset from ship heading).
                         // Player.yaw is WORLD space. Subtract ship's world yaw to get
                         // the ship-relative look offset. This way the camera follows
@@ -1373,8 +1387,16 @@ impl ApplicationHandler for App {
                             [fwd.x, fwd.y, fwd.z],
                         )
                     } else {
-                        let eye_pos = player.position(&self.physics);
-                        let fwd = player.forward();
+                        // Use camera forward (includes ship rotation via
+                        // orientation_override) so raycasts match where the
+                        // player is actually looking after ship roll/pitch.
+                        // Eye position offset along ship's up direction.
+                        let ship_rot_for_eye = self.ship.as_ref()
+                            .and_then(|s| self.physics.get_body(s.body_handle))
+                            .map(|b| *b.rotation())
+                            .unwrap_or(nalgebra::UnitQuaternion::identity());
+                        let eye_pos = player.position_ship_up(&self.physics, ship_rot_for_eye);
+                        let fwd = self.camera.forward();
                         (
                             [eye_pos.x as f32, eye_pos.y as f32, eye_pos.z as f32],
                             [fwd.x, fwd.y, fwd.z],

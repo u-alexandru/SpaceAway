@@ -86,12 +86,17 @@ impl PlayerController {
     /// `ship_position`: the ship body's world position (translation vector).
     /// `ship_rotation`: the ship body's world rotation (unit quaternion).
     ///
-    /// Collision detection runs in SHIP-LOCAL space where all colliders are
-    /// stationary. This means:
-    /// - Zero AABB updates regardless of ship speed
-    /// - Query pipeline never needs rebuilding
-    /// - move_shape sweeps only the walk distance (0-0.08m), not ship velocity
-    /// - Performance is O(1) regardless of ship speed or collider count
+    /// Collision runs in ORIGIN-CENTERED, SHIP-ROTATED space. Interior colliders
+    /// sit at `(origin, ship_rot)`, so their world positions = `ship_rot * local`.
+    /// The player (after carry) is at `ship_pos + ship_rot * local`, so
+    /// `player - ship_pos = ship_rot * local` — the same rotated space.
+    ///
+    /// We subtract ship_position (NO rotation undo), sweep against rotated
+    /// colliders, then add ship_position back. Walk direction and gravity are
+    /// in this same rotated frame (world-space vectors).
+    ///
+    /// The `char_controller.up` is set to `ship_rot * Y` each frame so
+    /// snap-to-ground and slope detection align with the ship's floor.
     pub fn update(
         &mut self,
         physics: &mut PhysicsWorld,
@@ -107,26 +112,39 @@ impl PlayerController {
         let max_pitch = std::f32::consts::FRAC_PI_2 - 0.01;
         self.pitch = self.pitch.clamp(-max_pitch, max_pitch);
 
-        // Movement direction from WASD (horizontal plane only)
-        let forward_dir = Vec3::new(self.yaw.sin(), 0.0, -self.yaw.cos()).normalize_or_zero();
-        let right_dir = Vec3::new(self.yaw.cos(), 0.0, self.yaw.sin()).normalize_or_zero();
+        // Ship's "up" direction in world space (rotated Y axis).
+        // Used for gravity, jump, and character controller slope detection.
+        let ship_up = ship_rotation * nalgebra::Vector3::new(0.0, 1.0, 0.0);
 
-        let mut move_dir = Vec3::ZERO;
+        // Compute yaw-offset from ship heading for walk direction.
+        // Player.yaw is world-space. Ship heading = atan2 of ship's forward.
+        let ship_fwd = ship_rotation * nalgebra::Vector3::new(0.0, 0.0, -1.0);
+        let ship_yaw = ship_fwd.x.atan2(-ship_fwd.z);
+        let yaw_offset = self.yaw - ship_yaw;
+
+        // Walk direction: rotate by yaw_offset in the ship's floor plane,
+        // then apply ship rotation. This keeps WASD relative to where the
+        // player is looking, projected onto the ship's floor.
+        let local_fwd = nalgebra::Vector3::new(yaw_offset.sin(), 0.0, -yaw_offset.cos());
+        let local_right = nalgebra::Vector3::new(yaw_offset.cos(), 0.0, yaw_offset.sin());
+        let mut move_local = nalgebra::Vector3::zeros();
         if input.keyboard.is_pressed(KeyCode::KeyW) {
-            move_dir += forward_dir;
+            move_local += local_fwd;
         }
         if input.keyboard.is_pressed(KeyCode::KeyS) {
-            move_dir -= forward_dir;
+            move_local -= local_fwd;
         }
         if input.keyboard.is_pressed(KeyCode::KeyD) {
-            move_dir += right_dir;
+            move_local += local_right;
         }
         if input.keyboard.is_pressed(KeyCode::KeyA) {
-            move_dir -= right_dir;
+            move_local -= local_right;
         }
-        if move_dir.length_squared() > 0.0 {
-            move_dir = move_dir.normalize();
+        if move_local.norm_squared() > 0.0 {
+            move_local = move_local.normalize();
         }
+        // Rotate walk direction into world/collision space
+        let walk_dir = ship_rotation * move_local;
 
         // Rising-edge jump detection: only jump on the frame Space is first pressed
         let space_pressed = input.keyboard.is_pressed(KeyCode::Space);
@@ -135,8 +153,6 @@ impl PlayerController {
 
         // Vertical velocity: gravity when airborne, jump impulse, reset when grounded
         if self.grounded {
-            // Snap vertical velocity to zero when on the ground.
-            // Gravity is handled by snap_to_ground in the character controller.
             self.vertical_velocity = 0.0;
             if jump_requested {
                 self.vertical_velocity = JUMP_SPEED;
@@ -145,20 +161,21 @@ impl PlayerController {
             self.vertical_velocity -= GRAVITY * dt;
         }
 
-        // SHIP-LOCAL COLLISION DETECTION
+        // ORIGIN-CENTERED COLLISION
         //
-        // Interior colliders are at world origin, ROTATED to match the ship
-        // (rotation synced each frame in the game loop). We transform the player
-        // to ship-local space (subtract position, undo rotation), sweep there,
-        // then transform back.
+        // Interior colliders are on a fixed body at (origin, ship_rot).
+        // Collider world positions = ship_rot * collider_local.
+        // Player at origin = player_world - ship_position = ship_rot * player_local.
+        // Both share the same rotated coordinate system → move_shape works.
         //
-        // Player.yaw is WORLD space. Walk direction is world-space, then
-        // transformed to ship-local for collision. Gravity in ship-local -Y
-        // (always toward the ship's floor regardless of roll).
-        //
-        // Performance: O(1) regardless of ship speed.
+        // Walk vector and gravity are world-space vectors (already rotated).
+        // char_controller.up is set to ship_up so slopes/snap work correctly.
 
-        let ship_rot_inv = ship_rotation.inverse();
+        // Set character controller "up" to match ship orientation
+        self.char_controller.up =
+            nalgebra::UnitVector3::new_normalize(nalgebra::Vector3::new(
+                ship_up.x, ship_up.y, ship_up.z,
+            ));
 
         // Player's current WORLD position
         let player_world = physics
@@ -166,18 +183,15 @@ impl PlayerController {
             .map(|b| b.translation().clone_owned())
             .unwrap_or(nalgebra::Vector3::zeros());
 
-        // Transform player to ship-local space
-        let player_local = ship_rot_inv * (player_world - ship_position);
+        // Translate to origin (NO rotation undo — keep in rotated space)
+        let player_at_origin = player_world - ship_position;
 
-        // Walk direction in world space, transformed to ship-local for collision.
-        // Gravity in ship-local Y (toward ship's floor regardless of roll).
-        let walk_vel = move_dir * MOVE_SPEED;
-        let walk_world = nalgebra::Vector3::new(walk_vel.x * dt, 0.0, walk_vel.z * dt);
-        let mut walk_local = ship_rot_inv * walk_world;
-        walk_local.y += self.vertical_velocity * dt;
+        // Walk translation: horizontal walk + vertical (gravity/jump) along ship_up
+        let walk_translation =
+            walk_dir * (MOVE_SPEED * dt) + ship_up * (self.vertical_velocity * dt);
 
-        // Sweep in ship-local space (colliders are rotated to match)
-        let local_isometry = Isometry::new(player_local, nalgebra::Vector3::zeros());
+        // Sweep in origin-centered rotated space
+        let sweep_isometry = Isometry::new(player_at_origin, nalgebra::Vector3::zeros());
 
         let filter = QueryFilter::default()
             .exclude_rigid_body(self.body_handle)
@@ -192,15 +206,14 @@ impl PlayerController {
             &physics.collider_set,
             &physics.query_pipeline,
             self.character_shape.as_ref(),
-            &local_isometry,
-            walk_local,
+            &sweep_isometry,
+            walk_translation,
             filter,
             |_collision| {},
         );
 
-        // Transform result back to world space
-        let new_local = player_local + output.translation;
-        let new_world = ship_position + ship_rotation * new_local;
+        // Transform result back to world space (just add ship position)
+        let new_world = ship_position + player_at_origin + output.translation;
 
         if let Some(body) = physics.get_body_mut(self.body_handle) {
             body.set_translation(new_world, true);
@@ -212,7 +225,6 @@ impl PlayerController {
         let was_grounded = self.grounded;
         self.grounded = output.grounded || (was_grounded && self.vertical_velocity.abs() < 0.5);
 
-        // If grounded, kill vertical velocity (gravity handled by snap_to_ground)
         if self.grounded {
             self.vertical_velocity = 0.0;
         }
@@ -229,10 +241,31 @@ impl PlayerController {
     }
 
     /// Returns the player eye position (body translation offset up by capsule height).
+    /// Uses world Y as up — only correct when ship has no roll/pitch.
     pub fn position(&self, physics: &PhysicsWorld) -> WorldPos {
         if let Some(body) = physics.get_body(self.body_handle) {
             let t = body.translation();
             WorldPos::new(t.x as f64, (t.y + EYE_HEIGHT) as f64, t.z as f64)
+        } else {
+            WorldPos::ORIGIN
+        }
+    }
+
+    /// Returns the player eye position offset along the ship's up direction.
+    /// Correct after any ship roll/pitch/yaw.
+    pub fn position_ship_up(
+        &self,
+        physics: &PhysicsWorld,
+        ship_rotation: nalgebra::UnitQuaternion<f32>,
+    ) -> WorldPos {
+        if let Some(body) = physics.get_body(self.body_handle) {
+            let t = body.translation();
+            let up = ship_rotation * nalgebra::Vector3::new(0.0, EYE_HEIGHT, 0.0);
+            WorldPos::new(
+                (t.x + up.x) as f64,
+                (t.y + up.y) as f64,
+                (t.z + up.z) as f64,
+            )
         } else {
             WorldPos::ORIGIN
         }
