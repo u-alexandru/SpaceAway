@@ -324,10 +324,10 @@ fn draw_suit_vital(
     // We fake this by offsetting the label vertically from the value.
     let curve_offset = 8.0 * scale; // vertical shift for curvature illusion
 
-    let h_offset = 18.0 * scale; // horizontal shift for curved glass feel
+    let h_offset = 50.0 * scale; // large horizontal shift — curved glass
 
     if left_aligned {
-        // Left side: label sits further left, value indented right
+        // Left side: label at edge, value indented inward (right)
         let label_pos = egui::pos2(pos.x, pos.y - value_size - curve_offset);
         let value_pos = egui::pos2(pos.x + h_offset, pos.y);
 
