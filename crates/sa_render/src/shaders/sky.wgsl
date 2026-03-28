@@ -166,34 +166,58 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     color += core_color;
 
     // --- Warp effects (only active when warp_intensity > 0) ---
-
-    // 1. Rear hemisphere darkening
     if sky.warp_intensity > 0.0 {
-        let forward_factor = dot(view_dir, normalize(sky.warp_dir));
+        let warp_dir = normalize(sky.warp_dir);
+        let forward_factor = dot(view_dir, warp_dir);
+        let wi = sky.warp_intensity;
+
+        // 1. Directional Doppler color shift on the galaxy itself.
+        //    Forward: blue-shift (brighter, cooler). Rear: red-shift (dimmer, warmer).
+        let doppler = clamp(forward_factor, -1.0, 1.0);
+        let blue_tint = vec3<f32>(0.6, 0.7, 1.2);
+        let red_tint = vec3<f32>(1.3, 0.7, 0.4);
+        let shift_color = mix(red_tint, blue_tint, doppler * 0.5 + 0.5);
+        color = color * mix(vec3<f32>(1.0, 1.0, 1.0), shift_color, wi * 0.6);
+
+        // 2. Galaxy dimming — tunnel replaces galaxy at high warp.
+        //    Galaxy fades to ~20% at full warp intensity.
+        let galaxy_fade = mix(1.0, 0.2, wi);
+        color = color * galaxy_fade;
+
+        // 3. Rear hemisphere darkening (on top of dimming).
         let rear_darkening = smoothstep(-0.3, 0.2, forward_factor);
-        color = color * mix(1.0, rear_darkening, sky.warp_intensity);
+        color = color * mix(1.0, rear_darkening, wi);
+
+        // 4. Procedural radial tunnel streaks.
+        if wi > 0.1 {
+            let uv = in.uv;
+            let dist = length(uv);
+            let angle_uv = atan2(uv.y, uv.x);
+
+            let num_streaks = 64.0;
+            let streak_angle = angle_uv * num_streaks / TAU;
+            let streak = smoothstep(0.3, 0.5, fract(streak_angle))
+                       * (1.0 - smoothstep(0.5, 0.7, fract(streak_angle)));
+
+            // Tunnel vignette: bright at edges, dim in center
+            let tunnel = smoothstep(0.15, 0.6, dist);
+
+            // Tunnel color: blue-white center, deeper blue at edges
+            let tunnel_color = mix(vec3<f32>(0.35, 0.45, 0.9), vec3<f32>(0.1, 0.1, 0.3), dist);
+            let tunnel_brightness = streak * tunnel * wi * 0.2;
+            color += tunnel_color * tunnel_brightness;
+        }
+
+        // 5. Doppler edge vignette — warm red-orange tint at screen edges,
+        //    cool blue at center. Reinforces the "moving forward" sensation.
+        let uv_dist = length(in.uv);
+        let edge_factor = smoothstep(0.3, 1.0, uv_dist);
+        let edge_warm = vec3<f32>(0.4, 0.15, 0.05) * edge_factor * wi * 0.3;
+        let center_cool = vec3<f32>(0.05, 0.08, 0.2) * (1.0 - edge_factor) * wi * 0.15;
+        color += edge_warm + center_cool;
     }
 
-    // 2. Procedural radial tunnel streaks
-    if sky.warp_intensity > 0.1 {
-        let uv = in.uv; // already in [-1,1] range
-        let dist = length(uv);
-        let angle = atan2(uv.y, uv.x);
-
-        let num_streaks = 64.0;
-        let streak_angle = angle * num_streaks / TAU;
-        let streak = smoothstep(0.3, 0.5, fract(streak_angle))
-                   * (1.0 - smoothstep(0.5, 0.7, fract(streak_angle)));
-
-        let tunnel = smoothstep(0.15, 0.6, dist);
-
-        let tunnel_color = mix(vec3<f32>(0.3, 0.4, 0.8), vec3<f32>(0.1, 0.1, 0.3), dist);
-        let tunnel_brightness = streak * tunnel * sky.warp_intensity * 0.15;
-
-        color += tunnel_color * tunnel_brightness;
-    }
-
-    // 3. Additive white flash
+    // 6. Additive white flash (works outside warp block too — for transitions)
     color = mix(color, vec3<f32>(1.0, 1.0, 1.0), sky.flash_intensity);
 
     return vec4<f32>(color, 1.0);

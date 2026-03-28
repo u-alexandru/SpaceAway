@@ -187,7 +187,9 @@ impl Renderer {
             camera_right: camera_right.to_array(),
             _pad0: 0.0,
             camera_up: camera_up.to_array(),
-            _pad1: 0.0,
+            streak_factor: drive_params.streak_factor,
+            velocity_dir: drive_params.velocity_dir,
+            warp_intensity: drive_params.warp_intensity,
         };
         gpu.queue.write_buffer(
             &self.nebula_renderer.uniform_buffer,

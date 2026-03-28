@@ -28,7 +28,12 @@ pub struct NebulaUniforms {
     pub camera_right: [f32; 3],
     pub _pad0: f32,
     pub camera_up: [f32; 3],
-    pub _pad1: f32,
+    /// Star streak factor — nebulae stretch along velocity during warp.
+    pub streak_factor: f32,
+    /// Normalized velocity direction for streak axis.
+    pub velocity_dir: [f32; 3],
+    /// Warp intensity (0.0–1.0) controls nebula dimming during warp.
+    pub warp_intensity: f32,
 }
 
 pub struct NebulaRenderer {
@@ -51,7 +56,7 @@ impl NebulaRenderer {
                 label: Some("Nebula Bind Group Layout"),
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,

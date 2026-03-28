@@ -3,7 +3,9 @@ struct NebulaUniforms {
     camera_right: vec3<f32>,
     _pad0: f32,
     camera_up: vec3<f32>,
-    _pad1: f32,
+    streak_factor: f32,
+    velocity_dir: vec3<f32>,
+    warp_intensity: f32,
 };
 
 @group(0) @binding(0)
@@ -43,10 +45,34 @@ fn vs_main(
     );
     let offset = offsets[vid % 6u];
 
+    // Streak nebulae during warp — stretch along velocity direction in view space.
+    // Nebulae are much larger than stars, so they streak more dramatically.
+    var right_axis = nebula.camera_right;
+    var up_axis = nebula.camera_up;
+    var stretch_x = inst.radius;
+    var stretch_y = inst.radius;
+
+    if nebula.streak_factor > 0.1 {
+        // Project velocity direction into screen space
+        let vel_clip = nebula.view_proj * vec4<f32>(nebula.velocity_dir, 0.0);
+        let vel_screen = normalize(vel_clip.xy + vec2<f32>(0.0001, 0.0001));
+
+        // Compute tangent and normal axes in screen space
+        // Scale the stretch by nebula's angular proximity to velocity axis
+        let center_clip = nebula.view_proj * vec4<f32>(inst.center, 1.0);
+        let center_ndc = center_clip.xy / center_clip.w;
+
+        // Nebula streaking: stretch radius along velocity direction
+        // Nebulae are big, so even small streak_factor produces visible stretch
+        let neb_streak = nebula.streak_factor * 0.02; // More subtle than stars
+        stretch_x = inst.radius * (1.0 + neb_streak * abs(vel_screen.x));
+        stretch_y = inst.radius * (1.0 + neb_streak * abs(vel_screen.y));
+    }
+
     // Billboard: expand quad in camera-facing plane
     let world_pos = inst.center
-        + nebula.camera_right * offset.x * inst.radius
-        + nebula.camera_up * offset.y * inst.radius;
+        + right_axis * offset.x * stretch_x
+        + up_axis * offset.y * stretch_y;
 
     var out: VertexOutput;
     out.position = nebula.view_proj * vec4<f32>(world_pos, 1.0);
@@ -104,7 +130,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let seed_offset = vec2<f32>(in.neb_seed * 17.3, in.neb_seed * 31.7);
     let n = fbm(in.uv * 3.0 + seed_offset);
 
-    let alpha = radial * n * in.neb_opacity;
-    // Non-premultiplied output — blend mode is SrcAlpha/OneMinusSrcAlpha
+    // Dim nebulae during warp — they're overwhelmed by the warp tunnel
+    let warp_dim = mix(1.0, 0.15, nebula.warp_intensity);
+    let alpha = radial * n * in.neb_opacity * warp_dim;
+
     return vec4<f32>(in.neb_color, alpha);
 }
