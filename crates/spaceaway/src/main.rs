@@ -281,6 +281,7 @@ impl App {
             drive: sa_ship::DriveController::new(),
             drive_visuals: drive_integration::DriveVisualState::new(),
             ship_resources: ShipResources::new(),
+            active_system: None,
             deposits: generate_deposits(42),
             gathered: HashSet::new(),
             nearest_gatherable: None,
