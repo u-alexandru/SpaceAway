@@ -599,8 +599,13 @@ impl App {
         lines.push("  \"timing_ms\": {".to_string());
         lines.push(format!("    \"total\": {:.2},", self.perf.total_us as f64 / 1000.0));
         lines.push(format!("    \"player\": {:.2},", self.perf.player_us as f64 / 1000.0));
-        lines.push(format!("    \"physics\": {:.2},", self.perf.physics_us as f64 / 1000.0));
-        lines.push(format!("    \"stars\": {:.2},", self.perf.stars_us as f64 / 1000.0));
+        // physics = phys_step_us * 1000 + query_pipeline_us (encoded)
+        let phys_step_ms = (self.perf.physics_us / 1000) as f64 / 1000.0;
+        let qp_ms = (self.perf.physics_us % 1000) as f64 / 1000.0;
+        let move_shape_ms = self.perf.stars_us as f64 / 1000.0;
+        lines.push(format!("    \"phys_step\": {:.2},", phys_step_ms));
+        lines.push(format!("    \"query_pipeline\": {:.2},", qp_ms));
+        lines.push(format!("    \"move_shape\": {:.2},", move_shape_ms));
         lines.push(format!("    \"render\": {:.2},", self.perf.render_us as f64 / 1000.0));
         lines.push(format!("    \"fps\": {:.0}", self.perf.fps));
         lines.push("  },".to_string());
@@ -892,12 +897,18 @@ impl ApplicationHandler for App {
 
                     // Step 3: Physics step (ship moves)
                     let physics_dt = dt.min(1.0 / 30.0);
+                    let t_phys = Instant::now();
                     if physics_dt > 0.0 {
                         self.physics.step(physics_dt);
                     }
+                    let phys_step_us = t_phys.elapsed().as_micros();
 
                     // Step 4: Update query pipeline AFTER physics step
+                    let t_qp = Instant::now();
                     self.physics.update_query_pipeline();
+                    let qp_us = t_qp.elapsed().as_micros();
+
+                    log::trace!("phys_step: {}us, query_pipeline: {}us", phys_step_us, qp_us);
 
                     // Step 5: Compute ACTUAL ship displacement during the step.
                     // This is exact — no velocity approximation errors from
@@ -930,7 +941,10 @@ impl ApplicationHandler for App {
                         player.update(&mut self.physics, &self.input, physics_dt, effective_vel);
                     }
                     let player_move_us = t_player.elapsed().as_micros();
-                    self.perf.physics_us = player_move_us as u64; // repurpose physics_us for move_shape timing
+                    // Encode breakdown: physics_us = phys_step*1000000 + qp*1000 + move_shape
+                    // Read as: phys_step=X.XXms, qp=X.XXms, move=X.XXms
+                    self.perf.physics_us = phys_step_us as u64 * 1000 + qp_us as u64;
+                    self.perf.stars_us = player_move_us as u64;
 
                     if let Some(player) = &self.player {
                         self.camera.position = player.position(&self.physics);
