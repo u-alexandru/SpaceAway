@@ -43,8 +43,12 @@ impl PlayerController {
         let body_handle = physics.add_rigid_body(body);
 
         let collider = ColliderBuilder::capsule_y(PLAYER_HALF_HEIGHT, PLAYER_RADIUS)
-            .friction(0.0) // Kinematic body — friction is irrelevant
+            .friction(0.0)
             .restitution(0.0)
+            .collision_groups(InteractionGroups::new(
+                Group::GROUP_3,  // PLAYER group
+                Group::GROUP_2,  // collide with SHIP_INTERIOR only
+            ))
             .build();
         let collider_handle = physics.add_collider(collider, body_handle);
 
@@ -149,8 +153,14 @@ impl PlayerController {
             .unwrap_or(Isometry::identity());
 
         // Call move_shape — sweep test that handles walls, slopes, steps.
-        // Exclude the player's own rigid body from the query.
-        let filter = QueryFilter::default().exclude_rigid_body(self.body_handle);
+        // Exclude player's own body. Use PLAYER→SHIP_INTERIOR group filter
+        // so the sweep only hits interior colliders (floor, walls, bulkheads).
+        let filter = QueryFilter::default()
+            .exclude_rigid_body(self.body_handle)
+            .groups(InteractionGroups::new(
+                Group::GROUP_3, // sweep is from PLAYER
+                Group::GROUP_2, // sweep hits SHIP_INTERIOR
+            ));
 
         let output = self.char_controller.move_shape(
             dt,
