@@ -818,7 +818,11 @@ impl ApplicationHandler for App {
 
                     // Step 5: Move player with post-step ship velocity
                     if let Some(player) = &mut self.player {
-                        player.update(&mut self.physics, &self.input, dt, [ship_vel[0], 0.0, ship_vel[2]]);
+                        // Pass FULL ship velocity (including Y) so the player
+                        // follows the ship in all axes. When grounded, vertical_velocity
+                        // is 0.0, so player Y = ship_vel_y (follows ship vertically).
+                        // When airborne (jump/fall), vertical_velocity adds gravity.
+                        player.update(&mut self.physics, &self.input, dt, ship_vel);
                     }
 
                     if let Some(player) = &self.player {
