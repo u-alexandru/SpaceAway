@@ -405,7 +405,25 @@ fn endcap_collider(physics: &mut PhysicsWorld, width: f32, z: f32, ship_body: Ri
 ///
 /// All colliders use the SHIP_INTERIOR collision group so they interact
 /// with PLAYER but not with interaction raycasts or projectiles.
-pub fn build_ship_colliders(physics: &mut PhysicsWorld, ship_body: RigidBodyHandle) {
+/// The rigid body handle for the interior collider container.
+/// Must be teleported to match ship position after each physics step.
+static mut INTERIOR_BODY: Option<RigidBodyHandle> = None;
+
+/// Get the interior body handle (for position syncing after physics step).
+pub fn interior_body_handle() -> Option<RigidBodyHandle> {
+    unsafe { INTERIOR_BODY }
+}
+
+pub fn build_ship_colliders(physics: &mut PhysicsWorld, _ship_body: RigidBodyHandle) {
+    // Create a SEPARATE FIXED body for interior colliders.
+    // Fixed bodies don't participate in the physics step (no AABB updates,
+    // no broad phase rebuilds). We manually teleport this body to match
+    // the ship position after each step. This makes physics.step() O(1)
+    // regardless of how many interior colliders exist.
+    let interior = RigidBodyBuilder::fixed().build();
+    let interior_handle = physics.add_rigid_body(interior);
+    unsafe { INTERIOR_BODY = Some(interior_handle); }
+    let ship_body = interior_handle; // all colliders attach to this fixed body
     let sections = ship_sections();
 
     for section in &sections {
