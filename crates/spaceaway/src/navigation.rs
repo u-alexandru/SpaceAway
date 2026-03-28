@@ -166,7 +166,7 @@ impl Navigation {
         if fwd_len < 1e-10 { return; }
         let fwd = [fwd[0]/fwd_len, fwd[1]/fwd_len, fwd[2]/fwd_len];
 
-        let mut best_dot = 0.7; // minimum threshold (~45° cone)
+        let mut best_dot = 0.0; // forward hemisphere — pick best match ahead of you
         let mut best_idx = None;
 
         for (i, star) in self.nearby_stars.iter().enumerate() {

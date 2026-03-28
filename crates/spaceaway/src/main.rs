@@ -2155,6 +2155,9 @@ impl ApplicationHandler for App {
                             let vp = self.camera.view_projection_matrix(aspect);
                             let (target_screen, target_angle, target_name, target_dist) =
                                 if let Some(target) = &self.navigation.locked_target {
+                                    // Live distance (not stale lock-time value)
+                                    let live_dist = self.galactic_position.distance_to(target.galactic_pos);
+
                                     // Convert galactic ly position to camera-relative meters
                                     let ly_to_m: f64 = 9.461e15;
                                     let dx = (target.galactic_pos.x - self.galactic_position.x) * ly_to_m;
@@ -2173,16 +2176,14 @@ impl ApplicationHandler for App {
                                         let sx = (ndc_x * 0.5 + 0.5) * sw;
                                         let sy = (1.0 - (ndc_y * 0.5 + 0.5)) * sh;
                                         if sx >= 0.0 && sx <= sw && sy >= 0.0 && sy <= sh {
-                                            (Some([sx, sy]), None, Some(target.catalog_name.clone()), Some(target.distance_ly))
+                                            (Some([sx, sy]), None, Some(target.catalog_name.clone()), Some(live_dist))
                                         } else {
-                                            // Off-screen: compute angle from center
                                             let angle = (sy - sh / 2.0).atan2(sx - sw / 2.0);
-                                            (None, Some(angle), Some(target.catalog_name.clone()), Some(target.distance_ly))
+                                            (None, Some(angle), Some(target.catalog_name.clone()), Some(live_dist))
                                         }
                                     } else {
-                                        // Behind camera: show edge chevron pointing backward
                                         let angle = (-clip.y).atan2(-clip.x);
-                                        (None, Some(angle), Some(target.catalog_name.clone()), Some(target.distance_ly))
+                                        (None, Some(angle), Some(target.catalog_name.clone()), Some(live_dist))
                                     }
                                 } else {
                                     (None, None, None, None)
