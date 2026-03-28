@@ -79,16 +79,23 @@ impl PlayerController {
             move_dir = move_dir.normalize();
         }
 
-        let target_vel = move_dir * MOVE_SPEED;
-
-        // Preserve vertical velocity, set horizontal directly
+        // Only override horizontal velocity when movement keys are pressed.
+        // When idle, let physics/friction control velocity naturally —
+        // this allows the player to move with a moving ship floor via friction.
         if let Some(body) = physics.get_body_mut(self.body_handle) {
             let current_vel = *body.linvel();
-            let new_vel =
-                nalgebra::Vector3::new(target_vel.x, current_vel.y, target_vel.z);
-            body.set_linvel(new_vel, true);
 
-            // Grounded check with wider margin to catch landing frame
+            if move_dir.length_squared() > 0.0 {
+                // Player wants to move: set velocity relative to current base
+                // (preserves vertical velocity from gravity)
+                let target_vel = move_dir * MOVE_SPEED;
+                let new_vel =
+                    nalgebra::Vector3::new(target_vel.x, current_vel.y, target_vel.z);
+                body.set_linvel(new_vel, true);
+            }
+            // When no keys pressed: don't touch velocity — friction keeps
+            // the player gripped to the ship floor.
+
             self.grounded = current_vel.y.abs() < 0.5;
         }
 

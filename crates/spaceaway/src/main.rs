@@ -782,15 +782,18 @@ impl ApplicationHandler for App {
                         player.update(&mut self.physics, &self.input, dt);
                     }
 
-                    // Apply thrust while walking — interior colliders are children
-                    // of the ship body so they move together.
+                    // Apply thrust + counteract player gravity on ship.
+                    // The player's weight (80kg × 9.81 = 785N) pushes the ship down
+                    // via contact forces. Counteract with an equal upward force so
+                    // the ship doesn't drift downward from the player standing on it.
                     if let Some(ship) = &self.ship {
                         ship.reset_forces(&mut self.physics);
                         ship.apply_thrust(&mut self.physics);
+                        // Counteract player weight on ship
+                        if let Some(body) = self.physics.get_body_mut(ship.body_handle) {
+                            body.add_force(nalgebra::Vector3::new(0.0, 785.0, 0.0), true);
+                        }
                     }
-
-                    // Gravity handled by PhysicsWorld (0, -9.81, 0).
-                    // Ship body has gravity_scale(0.0), player has default (1.0).
 
                     let physics_dt = dt.min(1.0 / 30.0);
                     if physics_dt > 0.0 {
