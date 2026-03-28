@@ -21,7 +21,7 @@ use sa_render::{
 use sa_ship::helm::HelmController;
 use sa_ship::interaction::InteractionSystem;
 use sa_ship::ship::Ship;
-use sa_survival::{ResourceDeposit, ShipResources, generate_deposits};
+use sa_survival::{ResourceDeposit, ShipResources, SuitResources, generate_deposits};
 use sa_universe::{MasterSeed, Universe};
 use std::collections::HashSet;
 use std::io::Write;
@@ -211,6 +211,8 @@ struct App {
     drive_visuals: drive_integration::DriveVisualState,
     /// Ship survival resources (fuel, oxygen, power).
     ship_resources: ShipResources,
+    /// Suit survival resources (emergency O2 and battery).
+    suit: SuitResources,
     /// Active solar system (set when the player enters one).
     active_system: Option<solar_system::ActiveSystem>,
     /// Mouse look offset while seated at helm (yaw/pitch in ship-local frame).
@@ -300,6 +302,7 @@ impl App {
             drive: sa_ship::DriveController::new(),
             drive_visuals: drive_integration::DriveVisualState::new(),
             ship_resources: ShipResources::new(),
+            suit: SuitResources::new(),
             active_system: None,
             helm_look_yaw: 0.0,
             helm_look_pitch: 0.0,
@@ -1710,6 +1713,13 @@ impl ApplicationHandler for App {
                     }
                 }
 
+                // --- Suit resources: drain when ship fails, recharge when ship works ---
+                self.suit.update(
+                    dt,
+                    self.ship_resources.oxygen > 0.1,
+                    self.ship_resources.power > 0.0,
+                );
+
                 // --- Gathering: check proximity to deposits ---
                 {
                     let ship_pos = self.ship.as_ref()
@@ -2080,6 +2090,45 @@ impl ApplicationHandler for App {
                                     let id = inter.hovered()?;
                                     Some(inter.get(id)?.kind.clone())
                                 });
+                            // Project locked target to screen space
+                            let sw = gpu.config.width as f32;
+                            let sh = gpu.config.height as f32;
+                            let aspect = sw / sh;
+                            let vp = self.camera.view_projection_matrix(aspect);
+                            let (target_screen, target_angle, target_name, target_dist) =
+                                if let Some(target) = &self.navigation.locked_target {
+                                    // Convert galactic ly position to camera-relative meters
+                                    let ly_to_m: f64 = 9.461e15;
+                                    let dx = (target.galactic_pos.x - self.galactic_position.x) * ly_to_m;
+                                    let dy = (target.galactic_pos.y - self.galactic_position.y) * ly_to_m;
+                                    let dz = (target.galactic_pos.z - self.galactic_position.z) * ly_to_m;
+                                    let cam_rel = glam::Vec3::new(dx as f32, dy as f32, dz as f32)
+                                        - glam::Vec3::new(
+                                            self.camera.position.x as f32,
+                                            self.camera.position.y as f32,
+                                            self.camera.position.z as f32,
+                                        );
+                                    let clip = vp * glam::Vec4::new(cam_rel.x, cam_rel.y, cam_rel.z, 1.0);
+                                    if clip.w > 0.0 {
+                                        let ndc_x = clip.x / clip.w;
+                                        let ndc_y = clip.y / clip.w;
+                                        let sx = (ndc_x * 0.5 + 0.5) * sw;
+                                        let sy = (1.0 - (ndc_y * 0.5 + 0.5)) * sh;
+                                        if sx >= 0.0 && sx <= sw && sy >= 0.0 && sy <= sh {
+                                            (Some([sx, sy]), None, Some(target.catalog_name.clone()), Some(target.distance_ly))
+                                        } else {
+                                            // Off-screen: compute angle from center
+                                            let angle = (sy - sh / 2.0).atan2(sx - sw / 2.0);
+                                            (None, Some(angle), Some(target.catalog_name.clone()), Some(target.distance_ly))
+                                        }
+                                    } else {
+                                        // Behind camera: show edge chevron pointing backward
+                                        let angle = (-clip.y).atan2(-clip.x);
+                                        (None, Some(angle), Some(target.catalog_name.clone()), Some(target.distance_ly))
+                                    }
+                                } else {
+                                    (None, None, None, None)
+                                };
                             let hud_state = ui::HudState {
                                 hovered_kind,
                                 screen_width: gpu.config.width,
@@ -2087,6 +2136,14 @@ impl ApplicationHandler for App {
                                 fuel: self.ship_resources.fuel,
                                 oxygen: self.ship_resources.oxygen,
                                 gather_available: self.nearest_gatherable.is_some(),
+                                suit_o2: self.suit.oxygen,
+                                suit_power: self.suit.power,
+                                cursor_grabbed: self.cursor_grabbed,
+                                target_screen_pos: target_screen,
+                                target_off_screen_angle: target_angle,
+                                target_name,
+                                target_distance_ly: target_dist,
+                                time: self.time.total_seconds() as f32,
                             };
                             ui_sys.render_hud(
                                 &gpu.device,
