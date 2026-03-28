@@ -292,20 +292,30 @@ impl Channels {
     fn update_music(&mut self, dt: f32, sounds_root: &Path, master_volume: f32) {
         if !self.music_playing {
             self.music_gap_timer -= dt;
+            if self.music_gap_timer <= 0.0 && self.music_gap_timer > -0.1 {
+                log::info!("Music gap expired, attempting to play {:?} context", self.music_context);
+            }
             if self.music_gap_timer <= 0.0 {
                 let tracks = music_tracks(self.music_context);
                 if !tracks.is_empty() {
                     let idx = rand::thread_rng().gen_range(0..tracks.len());
                     let path = sounds_root.join(tracks[idx]);
-                    if let Ok(file) = File::open(&path)
-                        && let Ok(source) = Decoder::new(BufReader::new(file))
-                        && let Ok(sink) = Sink::try_new(&self.stream_handle)
-                    {
-                        sink.set_volume(0.4 * master_volume); // music is primary atmosphere
-                        sink.append(source);
-                        self.music_sink = Some(sink);
-                        self.music_playing = true;
-                        log::debug!("Music: {}", tracks[idx]);
+                    match File::open(&path) {
+                        Ok(file) => {
+                            match Decoder::new(BufReader::new(file)) {
+                                Ok(source) => {
+                                    if let Ok(sink) = Sink::try_new(&self.stream_handle) {
+                                        sink.set_volume(0.4 * master_volume);
+                                        sink.append(source);
+                                        self.music_sink = Some(sink);
+                                        self.music_playing = true;
+                                        log::info!("Music playing: {}", tracks[idx]);
+                                    }
+                                }
+                                Err(e) => log::warn!("Music decode error {:?}: {}", path, e),
+                            }
+                        }
+                        Err(e) => log::warn!("Music file not found {:?}: {}", path, e),
                     }
                 }
             }
