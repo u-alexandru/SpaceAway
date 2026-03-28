@@ -12,5 +12,6 @@ log.workspace = true
 sa_core.workspace = true
 sa_math.workspace = true
 pollster.workspace = true
-noise.workspace = true
+fastnoise-lite.workspace = true
+gltf.workspace = true
 sa_universe.workspace = true

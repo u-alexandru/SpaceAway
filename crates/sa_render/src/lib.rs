@@ -8,6 +8,7 @@ pub mod renderer;
 pub mod screen_pipeline;
 pub mod sky;
 pub mod star_field;
+pub mod gltf_loader;
 pub mod planet_mesh;
 pub mod vertex;
 

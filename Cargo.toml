@@ -60,7 +60,8 @@ sa_ship = { path = "crates/sa_ship" }
 sa_survival = { path = "crates/sa_survival" }
 egui = "0.31"
 egui-wgpu = { version = "0.31", default-features = false }
-noise = "0.9"
+fastnoise-lite = { version = "1.1.1", features = ["f64"] }
+gltf = "1.4.1"
 rodio = { version = "0.19", default-features = false, features = ["wav"] }
 rand = "0.8"
 sa_audio = { path = "crates/sa_audio" }

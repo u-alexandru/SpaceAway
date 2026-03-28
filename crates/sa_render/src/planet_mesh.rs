@@ -6,7 +6,7 @@
 use crate::icosphere::generate_icosphere;
 use crate::mesh::MeshData;
 use crate::vertex::Vertex;
-use noise::{NoiseFn, OpenSimplex};
+use fastnoise_lite::{FastNoiseLite, FractalType, NoiseType};
 use sa_universe::PlanetSubType;
 
 /// Build a rocky planet mesh with noise-displaced terrain and biome colors.
@@ -17,7 +17,7 @@ pub fn build_rocky_planet_mesh(
     seed: u64,
 ) -> MeshData {
     let ico = generate_icosphere(subdivisions);
-    let noise_gen = OpenSimplex::new(seed as u32);
+    let noise_gen = make_noise(seed);
     let seed_offset = (seed % 10000) as f64 * 0.1;
     let amplitude = displacement_amplitude(sub_type);
 
@@ -26,8 +26,8 @@ pub fn build_rocky_planet_mesh(
     let mut noise_vals: Vec<f32> = Vec::with_capacity(ico.positions.len());
 
     for p in &ico.positions {
-        let (x, y, z) = (p[0] as f64, p[1] as f64, p[2] as f64);
-        let n = fbm(&noise_gen, x + seed_offset, y, z, 4);
+        let (x, y, z) = (p[0] as f64 + seed_offset, p[1] as f64, p[2] as f64);
+        let n = noise_gen.get_noise_3d(x, y, z);
         let disp = n as f32 * amplitude * radius_m;
         let r = radius_m + disp;
         displaced.push([p[0] * r, p[1] * r, p[2] * r]);
@@ -45,7 +45,7 @@ pub fn build_gas_giant_mesh(
     seed: u64,
 ) -> MeshData {
     let ico = generate_icosphere(subdivisions);
-    let noise_gen = OpenSimplex::new(seed as u32);
+    let noise_gen = make_noise(seed);
     let num_bands = 10 + (seed % 5) as usize;
     let palette = gas_giant_palette(sub_type);
 
@@ -76,9 +76,10 @@ pub fn build_gas_giant_mesh(
         let lon = avg_z.atan2(avg_x);
 
         // Perturb latitude with noise for swirling band edges.
-        let perturb = noise_gen.get([lon as f64 * 3.0, avg_y as f64 * 5.0, seed as f64 * 0.01])
-            as f32
-            * 0.06;
+        let perturb =
+            noise_gen.get_noise_3d(lon as f64 * 3.0, avg_y as f64 * 5.0, seed as f64 * 0.01)
+                as f32
+                * 0.06;
         let effective_lat = (lat + perturb).clamp(0.0, 1.0);
 
         let band_idx = ((effective_lat * num_bands as f32) as usize).min(num_bands - 1);
@@ -111,7 +112,7 @@ pub fn build_star_mesh(
     seed: u64,
 ) -> MeshData {
     let ico = generate_icosphere(subdivisions);
-    let noise_gen = OpenSimplex::new(seed as u32);
+    let noise_gen = make_noise(seed);
     let seed_offset = (seed % 10000) as f64 * 0.1;
 
     let scaled: Vec<[f32; 3]> = ico
@@ -136,11 +137,11 @@ pub fn build_star_mesh(
         let cy = (ico.positions[ia][1] + ico.positions[ib][1] + ico.positions[ic][1]) / 3.0;
         let cz = (ico.positions[ia][2] + ico.positions[ib][2] + ico.positions[ic][2]) / 3.0;
 
-        let n = noise_gen.get([
+        let n = noise_gen.get_noise_3d(
             cx as f64 * 6.0 + seed_offset,
             cy as f64 * 6.0,
             cz as f64 * 6.0,
-        ]) as f32;
+        ) as f32;
 
         // Map noise to brightness: high = bright cell center, low = dark edge.
         let t = (n * 0.5 + 0.5).clamp(0.0, 1.0);
@@ -326,16 +327,15 @@ pub fn build_corona_mesh(star_radius_m: f32, color: [f32; 3]) -> MeshData {
 
 // --- Private helpers ---
 
-fn fbm(noise: &OpenSimplex, x: f64, y: f64, z: f64, octaves: u32) -> f64 {
-    let mut value = 0.0;
-    let mut amplitude = 1.0;
-    let mut frequency = 1.0;
-    for _ in 0..octaves {
-        value += amplitude * noise.get([x * frequency, y * frequency, z * frequency]);
-        amplitude *= 0.5;
-        frequency *= 2.0;
-    }
-    value
+fn make_noise(seed: u64) -> FastNoiseLite {
+    let mut noise = FastNoiseLite::with_seed(seed as i32);
+    noise.set_noise_type(Some(NoiseType::OpenSimplex2));
+    noise.set_fractal_type(Some(FractalType::FBm));
+    noise.set_fractal_octaves(Some(4));
+    noise.set_fractal_lacunarity(Some(2.0));
+    noise.set_fractal_gain(Some(0.5));
+    noise.set_frequency(Some(1.0));
+    noise
 }
 
 fn displacement_amplitude(sub_type: PlanetSubType) -> f32 {
