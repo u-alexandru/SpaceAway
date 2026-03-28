@@ -2,6 +2,8 @@
 //!
 //! Pure math -- no physics, no rendering. Updated each frame with dt and ship state.
 
+use sa_ship::DriveMode;
+
 /// Ship survival resources with drain/regen rates.
 #[derive(Debug, Clone)]
 pub struct ShipResources {
@@ -11,6 +13,8 @@ pub struct ShipResources {
     pub oxygen: f32,
     /// Power output (0.0 to 1.0). Proportional to fuel availability.
     pub power: f32,
+    /// Exotic fuel for warp drive (0.0 to 1.0).
+    pub exotic_fuel: f32,
 }
 
 /// Reactor idle fuel burn rate per second.
@@ -21,6 +25,12 @@ const ENGINE_FUEL_DRAIN: f32 = 0.002;
 const O2_DRAIN: f32 = 0.005;
 /// O2 regen rate per second when life support has power.
 const O2_REGEN: f32 = 0.002;
+/// Cruise drive fuel drain rate per second at full drive fraction.
+const CRUISE_FUEL_DRAIN: f32 = 0.02;
+/// Minimum exotic fuel drain rate per second at minimum warp fraction.
+const WARP_EXOTIC_DRAIN_MIN: f32 = 0.005;
+/// Maximum exotic fuel drain rate per second at maximum warp fraction.
+const WARP_EXOTIC_DRAIN_MAX: f32 = 0.05;
 
 impl ShipResources {
     /// Create resources at full capacity.
@@ -29,6 +39,7 @@ impl ShipResources {
             fuel: 1.0,
             oxygen: 1.0,
             power: 1.0,
+            exotic_fuel: 1.0,
         }
     }
 
@@ -57,6 +68,53 @@ impl ShipResources {
         }
     }
 
+    /// Update resources for one frame with drive mode awareness.
+    ///
+    /// - `dt`: delta time in seconds
+    /// - `throttle`: 0.0 to 1.0 (used for Impulse engine drain)
+    /// - `engine_on`: whether impulse engines are firing
+    /// - `drive`: current drive mode
+    /// - `drive_fraction`: 0.0 to 1.0 drive intensity (cruise or warp)
+    pub fn update_with_drive(
+        &mut self,
+        dt: f32,
+        throttle: f32,
+        engine_on: bool,
+        drive: DriveMode,
+        drive_fraction: f32,
+    ) {
+        // Hydrogen fuel drain
+        let engine_drain = match drive {
+            DriveMode::Impulse => {
+                if engine_on {
+                    ENGINE_FUEL_DRAIN * throttle
+                } else {
+                    0.0
+                }
+            }
+            DriveMode::Cruise => CRUISE_FUEL_DRAIN * drive_fraction,
+            DriveMode::Warp => 0.0,
+        };
+        self.fuel = (self.fuel - (IDLE_FUEL_DRAIN + engine_drain) * dt).max(0.0);
+
+        // Exotic fuel drain: only in Warp mode
+        if drive == DriveMode::Warp {
+            let exotic_drain =
+                WARP_EXOTIC_DRAIN_MIN + (WARP_EXOTIC_DRAIN_MAX - WARP_EXOTIC_DRAIN_MIN) * drive_fraction;
+            self.exotic_fuel = (self.exotic_fuel - exotic_drain * dt).max(0.0);
+        }
+
+        // Power from fuel (simple on/off)
+        self.power = if self.fuel > 0.0 { 1.0 } else { 0.0 };
+
+        // O2: drains without power, regenerates with power
+        if self.power > 0.0 {
+            self.oxygen = (self.oxygen + O2_REGEN * dt).min(1.0);
+        } else {
+            self.oxygen = (self.oxygen - O2_DRAIN * dt).max(0.0);
+        }
+    }
+
     /// Add fuel from a gathered resource.
     pub fn add_fuel(&mut self, amount: f32) {
         self.fuel = (self.fuel + amount).min(1.0);
@@ -65,6 +123,11 @@ impl ShipResources {
     /// Add oxygen from a gathered resource.
     pub fn add_oxygen(&mut self, amount: f32) {
         self.oxygen = (self.oxygen + amount).min(1.0);
+    }
+
+    /// Add exotic fuel from a gathered resource.
+    pub fn add_exotic_fuel(&mut self, amount: f32) {
+        self.exotic_fuel = (self.exotic_fuel + amount).min(1.0);
     }
 }
 
@@ -201,5 +264,71 @@ mod tests {
         let seconds = 400.0;
         r.update(seconds, 1.0, true);
         assert_eq!(r.fuel, 0.0);
+    }
+
+    // --- New tests ---
+
+    #[test]
+    fn exotic_fuel_starts_full() {
+        let r = ShipResources::new();
+        assert_eq!(r.exotic_fuel, 1.0);
+    }
+
+    #[test]
+    fn cruise_drains_fuel_faster() {
+        let mut r = ShipResources::new();
+        // 1 second, cruise at full drive_fraction, no impulse throttle
+        r.update_with_drive(1.0, 0.0, false, DriveMode::Cruise, 1.0);
+        let expected = 1.0 - (IDLE_FUEL_DRAIN + CRUISE_FUEL_DRAIN);
+        assert!(
+            (r.fuel - expected).abs() < 1e-6,
+            "fuel={}, expected={}",
+            r.fuel,
+            expected
+        );
+    }
+
+    #[test]
+    fn warp_drains_exotic_fuel() {
+        let mut r = ShipResources::new();
+        // 1 second, warp at full drive_fraction
+        r.update_with_drive(1.0, 0.0, false, DriveMode::Warp, 1.0);
+        let expected_exotic = 1.0 - WARP_EXOTIC_DRAIN_MAX;
+        assert!(
+            (r.exotic_fuel - expected_exotic).abs() < 1e-6,
+            "exotic_fuel={}, expected={}",
+            r.exotic_fuel,
+            expected_exotic
+        );
+    }
+
+    #[test]
+    fn warp_does_not_drain_hydrogen_beyond_idle() {
+        let mut r = ShipResources::new();
+        // 1 second in warp — hydrogen only drains at idle rate
+        r.update_with_drive(1.0, 0.0, false, DriveMode::Warp, 1.0);
+        let expected_fuel = 1.0 - IDLE_FUEL_DRAIN;
+        assert!(
+            (r.fuel - expected_fuel).abs() < 1e-6,
+            "fuel={}, expected={}",
+            r.fuel,
+            expected_fuel
+        );
+    }
+
+    #[test]
+    fn impulse_unchanged_from_original() {
+        let mut r1 = ShipResources::new();
+        let mut r2 = ShipResources::new();
+        r1.update(1.0, 0.5, true);
+        r2.update_with_drive(1.0, 0.5, true, DriveMode::Impulse, 0.0);
+        assert!(
+            (r1.fuel - r2.fuel).abs() < 1e-6,
+            "update fuel={}, update_with_drive fuel={}",
+            r1.fuel,
+            r2.fuel
+        );
+        assert!((r1.oxygen - r2.oxygen).abs() < 1e-6);
+        assert_eq!(r1.power, r2.power);
     }
 }
