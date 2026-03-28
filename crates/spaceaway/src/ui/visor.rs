@@ -92,14 +92,14 @@ pub fn draw_visor(ctx: &egui::Context, state: &VisorState) {
             // Suit O2 (bottom-left)
             draw_suit_vital(
                 painter, "O2", state.suit_o2,
-                egui::pos2(40.0 * s + jx, h - 45.0 * s + jy),
+                egui::pos2(60.0 * s + jx, h - 60.0 * s + jy),
                 s, alpha_mult, true, state.time,
             );
 
             // Suit Power (bottom-right)
             draw_suit_vital(
                 painter, "PWR", state.suit_power,
-                egui::pos2(w - 40.0 * s + jx, h - 45.0 * s + jy),
+                egui::pos2(w - 60.0 * s + jx, h - 60.0 * s + jy),
                 s, alpha_mult, false, state.time,
             );
 
@@ -161,12 +161,11 @@ fn draw_crosshair(
 
     match hovered {
         None => {
-            // Thin ring + center dot with glow
-            let outer = visor_color(base_alpha * 0.3);
-            let inner = visor_color(base_alpha);
-            painter.circle_stroke(c, 6.0 * s, egui::Stroke::new(3.0 * s, outer));
-            painter.circle_stroke(c, 4.0 * s, egui::Stroke::new(1.5 * s, inner));
-            painter.circle_filled(c, 1.5 * s, inner);
+            // Small semi-transparent dot with subtle glow
+            let glow = visor_color(base_alpha * 0.2);
+            let dot = visor_color(base_alpha * 0.6);
+            painter.circle_filled(c, 3.0 * s, glow);
+            painter.circle_filled(c, 1.5 * s, dot);
         }
         Some(kind) => match kind {
             InteractableKind::Lever { .. } => draw_grab_visor(painter, c, s, base_alpha),
@@ -326,7 +325,19 @@ fn draw_suit_vital(
         egui::Align2::RIGHT_BOTTOM
     };
 
-    let font_size = 14.0 * scale;
+    let font_size = 36.0 * scale;
+
+    // Glow layer behind text for visor projection feel
+    let glow_color = egui::Color32::from_rgba_unmultiplied(
+        color.r(), color.g(), color.b(),
+        (text_alpha * 80.0).clamp(0.0, 255.0) as u8,
+    );
+    let glow_offset = 1.0 * scale;
+    painter.text(
+        egui::pos2(pos.x + glow_offset, pos.y + glow_offset),
+        align, &text, visor_font(font_size + 1.0), glow_color,
+    );
+    // Sharp text on top
     painter.text(pos, align, &text, visor_font(font_size), final_color);
 }
 
