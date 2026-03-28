@@ -324,66 +324,30 @@ fn draw_suit_vital(
     // We fake this by offsetting the label vertically from the value.
     let curve_offset = 8.0 * scale; // vertical shift for curvature illusion
 
-    // Curved glass effect: draw each character at a slightly different Y,
-    // creating a gentle arc. Left side curves down-right, right side curves down-left.
-    // This simulates text printed on a curved helmet visor.
-    //
-    // We render label and value as one combined string, character by character,
-    // with per-character Y offset based on position.
-
-    let full_text = format!("{label}  {value_text}");
-    let char_count = full_text.chars().count() as f32;
-    let char_size_label = label_size;
-    let char_size_value = value_size;
-    let label_len = label.chars().count();
-
-    // Approximate character width for positioning
-    let avg_char_w = value_size * 0.65;
-    let total_width = char_count * avg_char_w;
-
-    let start_x = if left_aligned {
-        pos.x
+    // Label above, value below — clean stacked layout.
+    // egui doesn't support rotated text, so curved glass is simulated
+    // through the semi-transparent color + glow only.
+    let align = if left_aligned {
+        egui::Align2::LEFT_BOTTOM
     } else {
-        pos.x - total_width
+        egui::Align2::RIGHT_BOTTOM
     };
 
-    for (i, ch) in full_text.chars().enumerate() {
-        let t = i as f32 / char_count.max(1.0); // 0.0 to 1.0 across the text
+    let label_pos = egui::pos2(pos.x, pos.y - value_size - curve_offset);
 
-        // Curve: parabolic arc, deepest at the middle
-        // For left side: text curves DOWN toward center (right)
-        // For right side: text curves DOWN toward center (left)
-        let curve_amount = 12.0 * scale;
-        let curve_y = if left_aligned {
-            t * curve_amount // progressively lower going right
-        } else {
-            (1.0 - t) * curve_amount // progressively lower going left
-        };
+    // Label (smaller, dimmer)
+    painter.text(
+        egui::pos2(label_pos.x + 1.0, label_pos.y + 1.0),
+        align, label, visor_font(label_size), make_color(text_alpha * 0.2),
+    );
+    painter.text(label_pos, align, label, visor_font(label_size), make_color(text_alpha * 0.7));
 
-        let char_x = start_x + i as f32 * avg_char_w;
-        let char_y = pos.y + curve_y;
-
-        // Use smaller font for label chars, larger for value chars
-        let is_label_char = i < label_len;
-        let font_sz = if is_label_char { char_size_label } else { char_size_value };
-        // Label chars slightly dimmer
-        let char_alpha = if is_label_char { text_alpha * 0.7 } else { text_alpha };
-
-        let char_color = make_color(char_alpha);
-        let glow_c = make_color(char_alpha * 0.3);
-
-        let char_str = String::from(ch);
-        // Glow
-        painter.text(
-            egui::pos2(char_x + 1.0, char_y + 1.0),
-            egui::Align2::LEFT_BOTTOM, &char_str, visor_font(font_sz), glow_c,
-        );
-        // Sharp
-        painter.text(
-            egui::pos2(char_x, char_y),
-            egui::Align2::LEFT_BOTTOM, &char_str, visor_font(font_sz), char_color,
-        );
-    }
+    // Value (larger, brighter)
+    painter.text(
+        egui::pos2(pos.x + 1.0, pos.y + 1.0),
+        align, &value_text, visor_font(value_size), make_color(text_alpha * 0.3),
+    );
+    painter.text(pos, align, &value_text, visor_font(value_size), make_color(text_alpha));
 }
 
 /// Target reticle: thin ring at projected position + name/distance text.
