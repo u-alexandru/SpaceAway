@@ -794,33 +794,55 @@ impl ApplicationHandler for App {
                     // This ensures the player moves relative to where the ship
                     // ACTUALLY IS after the step, not where it WAS before.
 
-                    // Step 1: Apply ship thrust
+                    // Step 1: Record ship position BEFORE step
+                    let ship_pos_before = self.ship.as_ref()
+                        .and_then(|s| self.physics.get_body(s.body_handle))
+                        .map(|b| { let t = b.translation(); [t.x, t.y, t.z] })
+                        .unwrap_or([0.0; 3]);
+
+                    // Step 2: Apply ship thrust
                     if let Some(ship) = &self.ship {
                         ship.reset_forces(&mut self.physics);
                         ship.apply_thrust(&mut self.physics);
                     }
 
-                    // Step 2: Physics step (ship moves)
+                    // Step 3: Physics step (ship moves)
                     let physics_dt = dt.min(1.0 / 30.0);
                     if physics_dt > 0.0 {
                         self.physics.step(physics_dt);
                     }
 
-                    // Step 3: Update query pipeline AFTER physics step
-                    // so move_shape sees colliders at their FINAL positions.
+                    // Step 4: Update query pipeline AFTER physics step
                     self.physics.update_query_pipeline();
 
-                    // Step 4: Read ship velocity AFTER the step
-                    let ship_vel = self.ship.as_ref()
+                    // Step 5: Compute ACTUAL ship displacement during the step.
+                    // This is exact — no velocity approximation errors from
+                    // pre-step vs post-step vs average velocity. The ship moved
+                    // by exactly (pos_after - pos_before), so the player must
+                    // move by the same amount to stay in place relative to the ship.
+                    let ship_pos_after = self.ship.as_ref()
                         .and_then(|s| self.physics.get_body(s.body_handle))
-                        .map(|b| { let v = b.linvel(); [v.x, v.y, v.z] })
-                        .unwrap_or([0.0, 0.0, 0.0]);
+                        .map(|b| { let t = b.translation(); [t.x, t.y, t.z] })
+                        .unwrap_or([0.0; 3]);
+                    let ship_displacement = [
+                        ship_pos_after[0] - ship_pos_before[0],
+                        ship_pos_after[1] - ship_pos_before[1],
+                        ship_pos_after[2] - ship_pos_before[2],
+                    ];
 
-                    // Step 5: Move player with post-step ship velocity.
-                    // MUST use physics_dt (not raw dt) — the ship moved by ship_vel * physics_dt
-                    // during the step, so the player must use the same timestep to match.
+                    // Step 6: Move player. Pass displacement/dt as "velocity" so
+                    // the player controller's desired = (disp/dt + walk) * dt = disp + walk*dt
+                    let effective_vel = if physics_dt > 0.0 {
+                        [
+                            ship_displacement[0] / physics_dt,
+                            ship_displacement[1] / physics_dt,
+                            ship_displacement[2] / physics_dt,
+                        ]
+                    } else {
+                        [0.0; 3]
+                    };
                     if let Some(player) = &mut self.player {
-                        player.update(&mut self.physics, &self.input, physics_dt, ship_vel);
+                        player.update(&mut self.physics, &self.input, physics_dt, effective_vel);
                     }
 
                     if let Some(player) = &self.player {
