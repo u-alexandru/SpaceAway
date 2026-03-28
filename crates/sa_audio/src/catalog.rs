@@ -123,7 +123,7 @@ pub fn music_tracks(ctx: MusicContext) -> &'static [&'static str] {
             "music/fly.wav", "music/Spherical.wav", "music/sound.wav", "music/Freak.wav",
         ],
         MusicContext::Tension => &[
-            "music/trapped.wav", "music/BehindYou.wav", "music/dark.wav", "music/mindcontrol.wav",
+            "music/trapped.wav", "music/BehindYou.wav", "music/mindcontrol.wav",
         ],
         MusicContext::Discovery => &[
             "music/Fantasy.wav", "music/reflexions.wav", "music/sence.wav",
