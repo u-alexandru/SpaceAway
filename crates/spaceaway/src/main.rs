@@ -1153,26 +1153,25 @@ impl ApplicationHandler for App {
                     // handles the coordinate transform in PlayerController::update().
 
                     // Camera: ship quaternion + helm mouse look offset.
-                    // Uses separate helm_look_yaw/pitch (not camera.yaw/pitch which
-                    // belong to walk mode). Ship rotation (including roll) drives the
-                    // base orientation. Mouse adds ship-local look-around offset.
-                    let (dx, dy) = self.input.mouse.delta();
-                    self.helm_look_yaw += dx * 0.003;
-                    self.helm_look_pitch -= dy * 0.003;
-                    let max_p = std::f32::consts::FRAC_PI_2 - 0.01;
-                    self.helm_look_pitch = self.helm_look_pitch.clamp(-max_p, max_p);
+                    // ONLY runs while still seated — must not run on the stand-up frame
+                    // or orientation_override gets re-set after being cleared.
+                    if self.helm.as_ref().map(|h| h.is_seated()).unwrap_or(false) {
+                        let (dx, dy) = self.input.mouse.delta();
+                        self.helm_look_yaw += dx * 0.003;
+                        self.helm_look_pitch -= dy * 0.003;
+                        let max_p = std::f32::consts::FRAC_PI_2 - 0.01;
+                        self.helm_look_pitch = self.helm_look_pitch.clamp(-max_p, max_p);
 
-                    if let Some(ship) = &self.ship {
-                        if let Some(body) = self.physics.get_body(ship.body_handle) {
-                            let r = body.rotation();
-                            let ship_quat = glam::Quat::from_xyzw(r.i, r.j, r.k, r.w);
+                        if let Some(ship) = &self.ship {
+                            if let Some(body) = self.physics.get_body(ship.body_handle) {
+                                let r = body.rotation();
+                                let ship_quat = glam::Quat::from_xyzw(r.i, r.j, r.k, r.w);
 
-                            // Mouse offset as ship-local rotation
-                            let look_offset = glam::Quat::from_rotation_y(-self.helm_look_yaw)
-                                * glam::Quat::from_rotation_x(-self.helm_look_pitch);
+                                let look_offset = glam::Quat::from_rotation_y(-self.helm_look_yaw)
+                                    * glam::Quat::from_rotation_x(-self.helm_look_pitch);
 
-                            // Final camera = ship rotation * local mouse offset
-                            self.camera.orientation_override = Some(ship_quat * look_offset);
+                                self.camera.orientation_override = Some(ship_quat * look_offset);
+                            }
                         }
                     }
 
@@ -1218,19 +1217,18 @@ impl ApplicationHandler for App {
                                 let forward = rot * nalgebra::Vector3::new(0.0, 0.0, -1.0);
                                 let accel = forward * (ship.throttle * ship.max_thrust / body.mass());
                                 let vel = body.linvel() + accel * physics_dt;
-                                // Apply angular damping
-                                let angvel = body.angvel() * (1.0 - 5.0 * physics_dt).max(0.0);
-                                // Apply linear damping
                                 let vel = vel * (1.0 - 0.01 * physics_dt).max(0.0);
                                 body.set_linvel(vel, true);
-                                body.set_angvel(angvel, true);
                             }
+                            // Angular damping ALWAYS applies (not just when engine on).
+                            // Without this, Q/E roll torques create permanent spin.
+                            let angvel = body.angvel() * (1.0 - 5.0 * physics_dt).max(0.0);
+                            body.set_angvel(angvel, true);
                             // Integrate position: p += v * dt
                             let vel = *body.linvel();
                             let pos = body.translation() + vel * physics_dt;
                             let angvel = *body.angvel();
                             let rot = *body.rotation();
-                            // Integrate rotation (small angle approximation)
                             let drot = nalgebra::UnitQuaternion::new(angvel * physics_dt * 0.5);
                             let new_rot = drot * rot;
                             body.set_position(
