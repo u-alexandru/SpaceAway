@@ -1,9 +1,11 @@
+pub mod drive;
 pub mod interactable;
 pub mod interaction;
 pub mod ship;
 pub mod helm;
 pub mod station;
 
+pub use drive::{DriveMode, DriveStatus, DriveController};
 pub use interactable::{Interactable, InteractableKind, ButtonMode};
 pub use interaction::{InteractionSystem, DebugRayResult};
 pub use ship::Ship;
