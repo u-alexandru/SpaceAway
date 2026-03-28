@@ -59,3 +59,4 @@ sa_ship = { path = "crates/sa_ship" }
 sa_survival = { path = "crates/sa_survival" }
 egui = "0.31"
 egui-wgpu = { version = "0.31", default-features = false }
+noise = "0.9"

@@ -8,6 +8,7 @@ pub mod renderer;
 pub mod screen_pipeline;
 pub mod sky;
 pub mod star_field;
+pub mod planet_mesh;
 pub mod vertex;
 
 pub use camera::Camera;
