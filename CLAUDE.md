@@ -134,8 +134,8 @@ See `docs/modular-ship-standards.md` Section 8 and `docs/interior-standards.md` 
 |-----|--------|
 | `W/S` | Pitch (nose up/down) |
 | `A/D` | Yaw (turn left/right) |
-| `Q` | Roll left |
-| `E` | Stand up (exit seat) |
+| `Q/E` | Roll (left/right) |
+| `F` | Stand up (exit seat) |
 | `1` | Select Impulse drive |
 | `2` | Select Cruise drive (1c–500c) |
 | `3` | Select Warp drive (100,000c–5,000,000c, 5s spool) |

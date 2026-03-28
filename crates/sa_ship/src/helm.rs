@@ -58,7 +58,8 @@ impl HelmController {
     /// Input mapping while seated:
     /// - W/S -> pitch (nose up/down)
     /// - A/D -> yaw (turn left/right)
-    /// - Q -> roll left
+    /// - Q/E -> roll (left/right)
+    /// - F -> stand up
     ///
     /// Mouse does NOT control the ship; it controls the camera (handled
     /// in the game loop). Thrust comes from the throttle lever and engine
@@ -94,11 +95,14 @@ impl HelmController {
         if input.keyboard.is_pressed(KeyCode::KeyQ) {
             roll -= HELM_ROTATION_RATE;
         }
+        if input.keyboard.is_pressed(KeyCode::KeyE) {
+            roll += HELM_ROTATION_RATE;
+        }
 
         ship.apply_rotation(physics, pitch, yaw, roll);
 
-        // E key = stand up (exit seat)
-        input.keyboard.just_pressed(KeyCode::KeyE)
+        // F key = stand up (exit seat)
+        input.keyboard.just_pressed(KeyCode::KeyF)
     }
 
     /// Compute the camera world position when seated.

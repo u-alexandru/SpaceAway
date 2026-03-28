@@ -1049,9 +1049,18 @@ impl ApplicationHandler for App {
                     // Interior colliders stay at LOCAL origin — ship-local collision
                     // handles the coordinate transform in PlayerController::update().
 
-                    // Mouse -> free-look camera (independent of ship orientation)
-                    let (dx, dy) = self.input.mouse.delta();
-                    self.camera.rotate(dx * 0.003, -dy * 0.003);
+                    // Camera follows ship rotation. Ship's forward direction is the
+                    // camera's look direction. No mouse free-look offset — the pilot
+                    // looks where the ship points. (Free-look can be added later as
+                    // a hold-to-look modifier key.)
+                    if let Some(ship) = &self.ship {
+                        if let Some(body) = self.physics.get_body(ship.body_handle) {
+                            let rot = body.rotation();
+                            let fwd = rot * nalgebra::Vector3::new(0.0, 0.0, -1.0);
+                            self.camera.yaw = fwd.x.atan2(-fwd.z);
+                            self.camera.pitch = fwd.y.asin();
+                        }
+                    }
 
                     // Camera position fixed at helm viewpoint (moves with ship)
                     if let (Some(helm), Some(ship)) = (&self.helm, &self.ship)
