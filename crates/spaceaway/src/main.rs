@@ -860,15 +860,8 @@ impl ApplicationHandler for App {
                         self.physics.step(physics_dt);
                     }
 
-                    // Sync interior colliders to ship position (helm branch)
-                    if let (Some(ship), Some(ih)) = (&self.ship, crate::ship_colliders::interior_body_handle()) {
-                        if let Some(sb) = self.physics.get_body(ship.body_handle) {
-                            let ship_iso = *sb.position();
-                            if let Some(ib) = self.physics.get_body_mut(ih) {
-                                ib.set_position(ship_iso, false);
-                            }
-                        }
-                    }
+                    // Interior colliders stay at LOCAL origin — ship-local collision
+                    // handles the coordinate transform in PlayerController::update().
 
                     // Mouse -> free-look camera (independent of ship orientation)
                     let (dx, dy) = self.input.mouse.delta();
@@ -901,11 +894,11 @@ impl ApplicationHandler for App {
                     let physics_dt = dt.min(1.0 / 30.0);
                     let t_phys = Instant::now();
 
-                    // Record ship position before
-                    let ship_pos_before = self.ship.as_ref()
+                    // Record ship transform BEFORE integration (needed to carry player)
+                    let (ship_pos_before, ship_rot_before) = self.ship.as_ref()
                         .and_then(|s| self.physics.get_body(s.body_handle))
-                        .map(|b| { let t = b.translation(); [t.x, t.y, t.z] })
-                        .unwrap_or([0.0; 3]);
+                        .map(|b| (b.translation().clone_owned(), *b.rotation()))
+                        .unwrap_or((nalgebra::Vector3::zeros(), nalgebra::UnitQuaternion::identity()));
 
                     // Manually integrate ship: apply thrust as velocity change
                     if let Some(ship) = &self.ship {
@@ -942,55 +935,48 @@ impl ApplicationHandler for App {
                     }
                     let phys_step_us = t_phys.elapsed().as_micros();
 
-                    // Sync interior colliders to ship position
-                    if let (Some(ship), Some(interior_handle)) = (
-                        &self.ship,
-                        crate::ship_colliders::interior_body_handle(),
-                    ) {
-                        if let Some(ship_body) = self.physics.get_body(ship.body_handle) {
-                            let ship_iso = *ship_body.position();
-                            if let Some(interior) = self.physics.get_body_mut(interior_handle) {
-                                interior.set_position(ship_iso, false);
-                            }
+                    // Step 3: Get ship transform AFTER integration
+                    let (ship_pos_after, ship_rot_after) = self.ship.as_ref()
+                        .and_then(|s| self.physics.get_body(s.body_handle))
+                        .map(|b| (b.translation().clone_owned(), *b.rotation()))
+                        .unwrap_or((nalgebra::Vector3::zeros(), nalgebra::UnitQuaternion::identity()));
+
+                    // Step 4: Carry player with ship.
+                    // The player's world position is relative to the OLD ship position.
+                    // Transform to local space (using old ship), then back to world (using new ship).
+                    // This is an instant teleport — no collision sweep, no AABB cost.
+                    // For a non-rotating ship: equivalent to adding ship displacement.
+                    // For a rotating ship: also rotates the player around the ship origin.
+                    let ship_rot_before_inv = ship_rot_before.inverse();
+                    if let Some(player) = &self.player {
+                        if let Some(body) = self.physics.get_body_mut(player.body_handle) {
+                            let p = body.translation().clone_owned();
+                            let local = ship_rot_before_inv * (p - ship_pos_before);
+                            let carried = ship_pos_after + ship_rot_after * local;
+                            body.set_translation(carried, true);
                         }
                     }
 
-                    // Step 4: Update query pipeline AFTER physics step
+                    // Step 5: Update query pipeline
                     let t_qp = Instant::now();
                     self.physics.update_query_pipeline();
                     let qp_us = t_qp.elapsed().as_micros();
 
                     log::trace!("phys_step: {}us, query_pipeline: {}us", phys_step_us, qp_us);
 
-                    // Step 5: Compute ACTUAL ship displacement during the step.
-                    // This is exact — no velocity approximation errors from
-                    // pre-step vs post-step vs average velocity. The ship moved
-                    // by exactly (pos_after - pos_before), so the player must
-                    // move by the same amount to stay in place relative to the ship.
-                    let ship_pos_after = self.ship.as_ref()
-                        .and_then(|s| self.physics.get_body(s.body_handle))
-                        .map(|b| { let t = b.translation(); [t.x, t.y, t.z] })
-                        .unwrap_or([0.0; 3]);
-                    let ship_displacement = [
-                        ship_pos_after[0] - ship_pos_before[0],
-                        ship_pos_after[1] - ship_pos_before[1],
-                        ship_pos_after[2] - ship_pos_before[2],
-                    ];
-
-                    // Step 6: Move player. Pass displacement/dt as "velocity" so
-                    // the player controller's desired = (disp/dt + walk) * dt = disp + walk*dt
-                    let effective_vel = if physics_dt > 0.0 {
-                        [
-                            ship_displacement[0] / physics_dt,
-                            ship_displacement[1] / physics_dt,
-                            ship_displacement[2] / physics_dt,
-                        ]
-                    } else {
-                        [0.0; 3]
-                    };
+                    // Step 6: Move player in ship-local space.
+                    // All collision detection happens in the ship's local coordinate
+                    // system where colliders are stationary. Performance is O(1)
+                    // regardless of ship speed.
                     let t_player = Instant::now();
                     if let Some(player) = &mut self.player {
-                        player.update(&mut self.physics, &self.input, physics_dt, effective_vel);
+                        player.update(
+                            &mut self.physics,
+                            &self.input,
+                            physics_dt,
+                            ship_pos_after,
+                            ship_rot_after,
+                        );
                     }
                     let player_move_us = t_player.elapsed().as_micros();
                     // Encode breakdown: physics_us = phys_step*1000000 + qp*1000 + move_shape

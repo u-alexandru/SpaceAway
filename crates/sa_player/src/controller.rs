@@ -83,15 +83,22 @@ impl PlayerController {
 
     /// Updates the player based on input: mouse look, WASD movement, and jumping.
     ///
-    /// `base_velocity`: the velocity of the platform the player stands on (e.g. ship).
-    /// All player movement is relative to this base. The kinematic character controller
-    /// computes a swept movement that handles walls, slopes, and steps automatically.
+    /// `ship_position`: the ship body's world position (translation vector).
+    /// `ship_rotation`: the ship body's world rotation (unit quaternion).
+    ///
+    /// Collision detection runs in SHIP-LOCAL space where all colliders are
+    /// stationary. This means:
+    /// - Zero AABB updates regardless of ship speed
+    /// - Query pipeline never needs rebuilding
+    /// - move_shape sweeps only the walk distance (0-0.08m), not ship velocity
+    /// - Performance is O(1) regardless of ship speed or collider count
     pub fn update(
         &mut self,
         physics: &mut PhysicsWorld,
         input: &InputState,
         dt: f32,
-        base_velocity: [f32; 3],
+        ship_position: nalgebra::Vector3<f32>,
+        ship_rotation: nalgebra::UnitQuaternion<f32>,
     ) {
         // Mouse look
         let (dx, dy) = input.mouse.delta();
@@ -138,41 +145,38 @@ impl PlayerController {
             self.vertical_velocity -= GRAVITY * dt;
         }
 
-        // SPLIT: ship displacement (direct teleport) + walk displacement (sweep test).
+        // SHIP-LOCAL COLLISION DETECTION
         //
-        // The ship displacement can be hundreds of meters per frame at high speed.
-        // Sweeping the capsule that far is extremely expensive (O(n) colliders × distance).
-        // Instead: teleport the player by the ship displacement first (it's safe —
-        // the ship colliders moved by the same amount), then sweep only the tiny
-        // walk component (0-0.08m per frame). This keeps move_shape cost constant
-        // regardless of ship speed.
-        let ship_displacement = nalgebra::Vector3::new(
-            base_velocity[0] * dt,
-            base_velocity[1] * dt,
-            base_velocity[2] * dt,
-        );
+        // All interior colliders are at fixed positions in the ship's local
+        // coordinate system. They NEVER move. The query pipeline is built
+        // once and never needs updating.
+        //
+        // We transform the player to local space, sweep there (tiny distance,
+        // stationary colliders), then transform back to world space.
+        //
+        // This gives O(1) performance regardless of ship speed or collider count.
 
-        // Walk + gravity (what the player actually does relative to the ship)
-        let walk_vel = move_dir * MOVE_SPEED;
-        let walk_desired = nalgebra::Vector3::new(
-            walk_vel.x * dt,
-            self.vertical_velocity * dt,
-            walk_vel.z * dt,
-        );
+        let ship_rot_inv = ship_rotation.inverse();
 
-        // Step 1: Teleport player by ship displacement (no sweep needed —
-        // ship colliders moved by the same amount during physics step)
-        let char_pos = physics
+        // Player's current WORLD position
+        let player_world = physics
             .get_body(self.body_handle)
-            .map(|b| *b.position())
-            .unwrap_or(Isometry::identity());
+            .map(|b| b.translation().clone_owned())
+            .unwrap_or(nalgebra::Vector3::zeros());
 
-        let teleported_pos = Isometry::new(
-            char_pos.translation.vector + ship_displacement,
-            char_pos.rotation.scaled_axis(),
-        );
+        // Transform player position to ship-local space
+        let player_local = ship_rot_inv * (player_world - ship_position);
 
-        // Step 2: Sweep only the walk component (tiny distance, fast)
+        // Walk direction in ship-local space (player yaw is in world space,
+        // but for a non-rotating ship this is the same as local space.
+        // For rotating ships, we'd need to adjust.)
+        let walk_vel = move_dir * MOVE_SPEED;
+        let walk_world = nalgebra::Vector3::new(walk_vel.x * dt, self.vertical_velocity * dt, walk_vel.z * dt);
+        let walk_local = ship_rot_inv * walk_world;
+
+        // Sweep in LOCAL space — colliders are stationary here
+        let local_isometry = Isometry::new(player_local, nalgebra::Vector3::zeros());
+
         let filter = QueryFilter::default()
             .exclude_rigid_body(self.body_handle)
             .groups(InteractionGroups::new(
@@ -186,16 +190,18 @@ impl PlayerController {
             &physics.collider_set,
             &physics.query_pipeline,
             self.character_shape.as_ref(),
-            &teleported_pos,
-            walk_desired,
+            &local_isometry,
+            walk_local,
             filter,
             |_collision| {},
         );
 
-        // Apply: teleported position + sweep-corrected walk
-        let new_translation = teleported_pos.translation.vector + output.translation;
+        // Transform result back to world space
+        let new_local = player_local + output.translation;
+        let new_world = ship_position + ship_rotation * new_local;
+
         if let Some(body) = physics.get_body_mut(self.body_handle) {
-            body.set_translation(new_translation, true);
+            body.set_translation(new_world, true);
         }
 
         // Update grounded state. Use snap_to_ground result but also keep
