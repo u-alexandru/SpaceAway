@@ -1,8 +1,10 @@
 .superpowers/
 /target/
 /assets/
-*.wav
+.DS_Store
+
+# Ignore audio in general, but allow curated game sounds
 *.mp3
 *.ogg
 *.flac
-.DS_Store
+!/resources/sounds/**/*.wav
