@@ -1,5 +1,6 @@
 mod ship_colliders;
 mod ship_setup;
+mod star_streaming;
 mod ui;
 
 use glam::{Mat4, Vec3};
@@ -17,7 +18,7 @@ use sa_ship::helm::HelmController;
 use sa_ship::interaction::InteractionSystem;
 use sa_ship::ship::Ship;
 use sa_survival::{ResourceDeposit, ShipResources, generate_deposits};
-use sa_universe::{MasterSeed, Universe, VisibleStar};
+use sa_universe::{MasterSeed, Universe};
 use std::collections::HashSet;
 use std::io::Write;
 use std::sync::Arc;
@@ -30,30 +31,6 @@ use winit::window::{CursorGrabMode, Window, WindowId};
 
 /// Convert visible stars from the universe query into GPU-ready vertices.
 ///
-/// `VisibleStar::relative_pos` is in light-years relative to the observer.
-/// We normalise each direction onto the unit sphere so that stars render as a
-/// sky-dome, and use `brightness` / `color` directly from the universe data.
-fn visible_stars_to_vertices(stars: &[VisibleStar]) -> Vec<StarVertex> {
-    stars
-        .iter()
-        .map(|vs| {
-            let [dx, dy, dz] = vs.relative_pos;
-            let len = (dx * dx + dy * dy + dz * dz).sqrt();
-            let (nx, ny, nz) = if len > 1e-6 {
-                (dx / len, dy / len, dz / len)
-            } else {
-                (0.0, 1.0, 0.0)
-            };
-            StarVertex {
-                position: [nx, ny, nz],
-                brightness: vs.brightness,
-                color: vs.color,
-                _pad: 0.0,
-            }
-        })
-        .collect()
-}
-
 /// Convert universe nebulae to GPU-ready `NebulaInstance` data.
 ///
 /// Nebulae are at galaxy scale (light-years). We project them onto the sky dome
@@ -143,13 +120,7 @@ fn distant_galaxies_to_instances(
 // whatever units WorldPos uses. Since physics/player uses meters and the
 // universe treats coordinates as light-years, walking 100m = 100 "ly" in
 // universe space. Set high enough that walking doesn't trigger regen.
-const STAR_REGEN_THRESHOLD: f64 = 500.0;
-
-/// Number of sectors to query in each direction around the observer.
-const STAR_QUERY_RADIUS: i32 = 4;
-/// Minimum star brightness to render. Culls dim stars that are visually
-/// indistinguishable, reducing vertex count by ~60%.
-const STAR_MIN_BRIGHTNESS: f32 = 0.32;
+// Star streaming constants are in star_streaming.rs
 
 /// Per-frame performance timings in microseconds.
 #[derive(Default)]
@@ -180,8 +151,7 @@ struct App {
     physics: PhysicsWorld,
     player: Option<PlayerController>,
     universe: Universe,
-    last_star_gen_pos: WorldPos,
-    stars_initialised: bool,
+    star_streaming: star_streaming::StarStreaming,
     nebulae: Vec<sa_universe::Nebula>,
     distant_galaxies: Vec<sa_universe::DistantGalaxy>,
     perf: PerfTimings,
@@ -249,7 +219,8 @@ impl App {
         let player = PlayerController::spawn(&mut physics, 0.0, 0.0, 3.5);
 
         let camera = Camera::new();
-        let universe = Universe::new(MasterSeed(42));
+        let seed = MasterSeed(42);
+        let universe = Universe::new(seed);
 
         Self {
             window: None,
@@ -266,9 +237,8 @@ impl App {
             cursor_grabbed: false,
             physics,
             player: Some(player),
+            star_streaming: star_streaming::StarStreaming::new(seed),
             universe,
-            last_star_gen_pos: WorldPos::ORIGIN,
-            stars_initialised: false,
             nebulae: Vec::new(),
             distant_galaxies: Vec::new(),
             perf: PerfTimings::default(),
@@ -308,6 +278,9 @@ impl App {
         let seed = MasterSeed(42);
         self.nebulae = sa_universe::generate_nebulae(seed);
         self.distant_galaxies = sa_universe::generate_distant_galaxies(seed);
+
+        // Force-load initial star field (instant, no fade on first frame)
+        self.star_streaming.force_load(self.camera.position);
 
         // Upload nebula instances.
         let nebula_instances = nebulae_to_instances(&self.nebulae, WorldPos::ORIGIN);
@@ -372,12 +345,10 @@ impl App {
     /// or if stars have never been generated yet.
     fn maybe_regenerate_stars(&mut self) {
         let observer = self.camera.position;
-        let dist = observer.distance_to(self.last_star_gen_pos);
+        let dt = self.time.delta_seconds() as f32;
 
-        // In fly mode use a lower threshold so stars update as you fly
-        let threshold = if self.fly_mode { 100.0 } else { STAR_REGEN_THRESHOLD };
-        let needs_regen = !self.stars_initialised || dist > threshold;
-        if !needs_regen {
+        let needs_rebuild = self.star_streaming.update(observer, dt);
+        if !needs_rebuild {
             return;
         }
 
@@ -385,12 +356,7 @@ impl App {
             return;
         };
 
-        let visible = self.universe.visible_stars_filtered(
-            observer,
-            STAR_QUERY_RADIUS,
-            STAR_MIN_BRIGHTNESS,
-        );
-        let vertices = visible_stars_to_vertices(&visible);
+        let vertices = self.star_streaming.build_vertices(observer);
         renderer.star_field.update_star_buffer(&gpu.device, &vertices);
 
         // Also refresh nebulae in fly mode (positions change at galaxy scale)
@@ -398,17 +364,6 @@ impl App {
             let nebula_instances = nebulae_to_instances(&self.nebulae, observer);
             renderer.nebula_renderer.update_instances(&gpu.device, &nebula_instances);
         }
-
-        self.last_star_gen_pos = observer;
-        self.stars_initialised = true;
-
-        log::debug!(
-            "Regenerated star field: {} stars at ({:.1}, {:.1}, {:.1})",
-            visible.len(),
-            observer.x,
-            observer.y,
-            observer.z,
-        );
     }
 
     /// Teleport to a position in the galaxy. `viewpoint` selects the type:
@@ -477,33 +432,24 @@ impl App {
             x, y, z, r, label,
         );
 
-        // Force star regeneration
-        self.stars_initialised = false;
-
         // Regenerate stars and nebulae immediately for the new position
         if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
             let start = Instant::now();
 
-            // Regen stars
-            let visible = self.universe.visible_stars_filtered(
-                self.camera.position,
-                STAR_QUERY_RADIUS,
-                STAR_MIN_BRIGHTNESS,
-            );
-            let vertices = visible_stars_to_vertices(&visible);
+            // Force-load all sectors at new position (instant, no fade)
+            self.star_streaming.force_load(self.camera.position);
+            let vertices = self.star_streaming.build_vertices(self.camera.position);
             renderer.star_field.update_star_buffer(&gpu.device, &vertices);
 
-            // Refresh nebula instances (only on teleport, not on star regen)
+            // Refresh nebula instances
             let nebula_instances = nebulae_to_instances(&self.nebulae, self.camera.position);
             renderer.nebula_renderer.update_instances(&gpu.device, &nebula_instances);
 
-            self.last_star_gen_pos = self.camera.position;
-            self.stars_initialised = true;
-
             log::info!(
-                "Regen complete in {:.0}ms ({} stars)",
+                "Regen complete in {:.0}ms ({} stars, {} sectors)",
                 start.elapsed().as_secs_f64() * 1000.0,
-                visible.len(),
+                vertices.len(),
+                self.star_streaming.sector_count(),
             );
         }
     }
