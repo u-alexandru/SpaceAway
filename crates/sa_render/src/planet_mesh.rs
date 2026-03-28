@@ -191,12 +191,12 @@ pub fn build_atmosphere_mesh(
         // Slightly vary brightness by latitude for visual interest
         let avg_y = (p0[1] + p1[1] + p2[1]) / 3.0; // latitude proxy on unit sphere
         let lat_factor = 0.7 + 0.3 * (1.0 - avg_y.abs()); // brighter at equator
-        // Bright, visible atmosphere color — rendered opaque so needs to be
-        // clearly distinguishable from the planet surface beneath
+        // DEBUG: bright atmosphere color to verify rendering works
+        // TODO: replace with proper alpha-blended atmosphere shader
         let color = [
-            atmo.color[0] * lat_factor * 0.8,
-            atmo.color[1] * lat_factor * 0.8,
-            atmo.color[2] * lat_factor * 0.8,
+            (atmo.color[0] * 1.2 + 0.3) * lat_factor,
+            (atmo.color[1] * 1.2 + 0.1) * lat_factor,
+            (atmo.color[2] * 1.2 + 0.1) * lat_factor,
         ];
 
         let base = vertices.len() as u32;
@@ -251,11 +251,11 @@ pub fn build_ring_mesh(
             // Radial density: seeded variation for gap positions
             let radial_t = (r as f32 + 0.5) / num_rings as f32;
             let gap_noise = (radial_t * 7.0 + seed as f32 * 0.01).sin() * 0.5 + 0.5;
-            let density = gap_noise * 0.8 + 0.2; // never fully transparent
+            let density = gap_noise * 0.6 + 0.4; // bright, visible bands
             let color = [
-                ring.color[0] * density,
-                ring.color[1] * density,
-                ring.color[2] * density,
+                (ring.color[0] * density + 0.2).min(1.0),
+                (ring.color[1] * density + 0.15).min(1.0),
+                (ring.color[2] * density + 0.1).min(1.0),
             ];
 
             // Normal: up vector (tilted by axial tilt)

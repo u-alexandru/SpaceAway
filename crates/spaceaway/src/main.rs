@@ -757,6 +757,9 @@ impl ApplicationHandler for App {
                                             system.star_galactic_pos.z,
                                         );
                                         self.camera.position = self.galactic_position;
+                                        // Face toward the star/planet (in -X direction from our offset)
+                                        self.camera.yaw = -std::f32::consts::FRAC_PI_2; // face -X
+                                        self.camera.pitch = 0.0;
                                         log::info!("→ Planet {} of {}: {:?} {:.0}km at {:.2}AU (viewing from {:.0}km)",
                                             idx + 1, planets.len(), planet.sub_type,
                                             planet.radius_earth * 6371.0, planet.orbital_radius_au,
@@ -792,6 +795,8 @@ impl ApplicationHandler for App {
                                                 star.galactic_pos.x + offset_ly,
                                                 star.galactic_pos.y, star.galactic_pos.z);
                                             self.camera.position = self.galactic_position;
+                                            self.camera.yaw = -std::f32::consts::FRAC_PI_2;
+                                            self.camera.pitch = 0.0;
                                             self.drive.request_disengage();
                                             self.teleport_counter = 1; // next press cycles to planet 2
                                             self.star_streaming.force_load(self.galactic_position);
@@ -863,6 +868,8 @@ impl ApplicationHandler for App {
                                                 star_nav.galactic_pos.z,
                                             );
                                             self.camera.position = self.galactic_position;
+                                            self.camera.yaw = -std::f32::consts::FRAC_PI_2;
+                                            self.camera.pitch = 0.0;
                                             self.drive.request_disengage();
                                             self.star_streaming.force_load(self.galactic_position);
                                             if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
