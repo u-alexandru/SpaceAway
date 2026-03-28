@@ -54,13 +54,13 @@ impl PlayerController {
 
         let char_controller = KinematicCharacterController {
             up: nalgebra::UnitVector3::new_normalize(nalgebra::Vector3::y()),
-            offset: CharacterLength::Absolute(0.02),
+            offset: CharacterLength::Absolute(0.05), // larger offset reduces ground oscillation
             autostep: Some(CharacterAutostep {
                 max_height: CharacterLength::Absolute(0.3),
                 min_width: CharacterLength::Absolute(0.2),
                 include_dynamic_bodies: true,
             }),
-            snap_to_ground: Some(CharacterLength::Absolute(0.2)),
+            snap_to_ground: Some(CharacterLength::Absolute(0.5)), // generous snap prevents ground oscillation
             max_slope_climb_angle: 50_f32.to_radians(),
             min_slope_slide_angle: 30_f32.to_radians(),
             ..Default::default()
@@ -174,18 +174,22 @@ impl PlayerController {
             |_collision| { /* collisions ignored for now */ },
         );
 
-        // Apply corrected movement to the kinematic body
+        // Apply corrected movement IMMEDIATELY (not deferred to next step).
+        // set_translation is instant — no one-frame delay. move_shape already
+        // handled collision detection, so direct positioning is safe.
         let new_translation = char_pos.translation.vector + output.translation;
         if let Some(body) = physics.get_body_mut(self.body_handle) {
-            body.set_next_kinematic_translation(new_translation);
+            body.set_translation(new_translation, true);
         }
 
-        // Update grounded state from controller output
+        // Update grounded state. Use snap_to_ground result but also keep
+        // grounded=true when the vertical velocity is near zero (prevents
+        // oscillation from sub-millimeter ground separation).
         let was_grounded = self.grounded;
-        self.grounded = output.grounded;
+        self.grounded = output.grounded || (was_grounded && self.vertical_velocity.abs() < 0.5);
 
-        // If we just landed, kill vertical velocity
-        if self.grounded && !was_grounded {
+        // If grounded, kill vertical velocity (gravity handled by snap_to_ground)
+        if self.grounded {
             self.vertical_velocity = 0.0;
         }
     }

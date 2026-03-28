@@ -816,13 +816,11 @@ impl ApplicationHandler for App {
                         .map(|b| { let v = b.linvel(); [v.x, v.y, v.z] })
                         .unwrap_or([0.0, 0.0, 0.0]);
 
-                    // Step 5: Move player with post-step ship velocity
+                    // Step 5: Move player with post-step ship velocity.
+                    // MUST use physics_dt (not raw dt) — the ship moved by ship_vel * physics_dt
+                    // during the step, so the player must use the same timestep to match.
                     if let Some(player) = &mut self.player {
-                        // Pass FULL ship velocity (including Y) so the player
-                        // follows the ship in all axes. When grounded, vertical_velocity
-                        // is 0.0, so player Y = ship_vel_y (follows ship vertically).
-                        // When airborne (jump/fall), vertical_velocity adds gravity.
-                        player.update(&mut self.physics, &self.input, dt, ship_vel);
+                        player.update(&mut self.physics, &self.input, physics_dt, ship_vel);
                     }
 
                     if let Some(player) = &self.player {
