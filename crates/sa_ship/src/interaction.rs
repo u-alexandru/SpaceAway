@@ -62,7 +62,7 @@ impl InteractionSystem {
             collider_to_id: HashMap::new(),
             hovered: None,
             drag: DragState::Idle,
-            max_range: 1.5,
+            max_range: 2.5,
             lever_sensitivity: 0.003,
             debug_ray: DebugRayResult::default(),
         }

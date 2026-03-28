@@ -843,8 +843,9 @@ impl ApplicationHandler for App {
                                 ) {
                                     body.set_enabled(true);
                                     // Stand up behind the helm seat in v2 cockpit
+                                    // Close enough to interactables (max_range 2.5m)
                                     body.set_translation(
-                                        nalgebra::Vector3::new(sx, sy - 0.1, sz + 3.5),
+                                        nalgebra::Vector3::new(sx, sy - 0.1, sz + 2.8),
                                         true,
                                     );
                                     // Match ship velocity so player doesn't slide on stand-up
