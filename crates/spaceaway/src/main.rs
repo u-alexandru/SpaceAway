@@ -741,13 +741,22 @@ impl ApplicationHandler for App {
                             && let Some(helm) = &mut self.helm
                         {
                             helm.stand_up();
-                            // Re-enable player physics body
-                            if let Some(player) = &self.player
-                                && let Some(body) = self.physics.get_body_mut(player.body_handle)
-                            {
-                                body.set_enabled(true);
+                            // Re-enable player and teleport to ship's current position
+                            // (ship may have moved while seated)
+                            if let Some(player) = &self.player {
+                                if let (Some((sx, sy, sz)), Some(body)) = (
+                                    ship.position(&self.physics),
+                                    self.physics.get_body_mut(player.body_handle),
+                                ) {
+                                    body.set_enabled(true);
+                                    body.set_translation(
+                                        nalgebra::Vector3::new(sx, sy - 0.1, sz + 1.5),
+                                        true,
+                                    );
+                                    body.set_linvel(nalgebra::Vector3::zeros(), true);
+                                }
                             }
-                            log::info!("Left helm seated mode");
+                            log::info!("Left helm seated mode — player teleported to ship");
                         }
                     }
 
@@ -927,11 +936,14 @@ impl ApplicationHandler for App {
                         && let Some(helm) = &mut self.helm
                     {
                         helm.sit_down();
+                        // Reset camera to face forward (-Z = toward cockpit nose)
+                        self.camera.yaw = 0.0;
+                        self.camera.pitch = 0.0;
                         // Disable player physics body while seated
                         if let Some(body) = self.physics.get_body_mut(player.body_handle) {
                             body.set_enabled(false);
                         }
-                        log::info!("Entered helm seated mode");
+                        log::info!("Entered helm seated mode — camera facing forward");
                     }
                 }
 
