@@ -1278,6 +1278,10 @@ impl ApplicationHandler for App {
                                 .map(|s| s.engine_on)
                                 .unwrap_or(false),
                             fuel: self.ship_resources.fuel,
+                            drive_mode: self.drive.mode(),
+                            drive_status: self.drive.status(),
+                            drive_speed_c: self.drive.current_speed_c(),
+                            exotic_fuel: self.ship_resources.exotic_fuel,
                         };
 
                         let ship_pos = self.ship.as_ref()

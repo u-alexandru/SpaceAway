@@ -12,6 +12,10 @@ pub struct HelmData {
     pub throttle: f32,
     pub engine_on: bool,
     pub fuel: f32,
+    pub drive_mode: sa_ship::DriveMode,
+    pub drive_status: sa_ship::DriveStatus,
+    pub drive_speed_c: f64,
+    pub exotic_fuel: f32,
 }
 
 /// Draw the helm monitor UI. Called within an egui context that targets
@@ -143,6 +147,66 @@ pub fn draw_helm_screen(ctx: &egui::Context, data: &HelmData) {
                     egui::vec2(fill_width, bar_height),
                 );
                 ui.painter().rect_filled(fill_rect, 2.0, fuel_color);
+            }
+
+            ui.add_space(8.0);
+
+            // --- Drive mode section ---
+            let (drive_label, drive_color) = match data.drive_mode {
+                sa_ship::DriveMode::Impulse => ("IMPULSE", egui::Color32::from_rgb(120, 120, 140)),
+                sa_ship::DriveMode::Cruise => ("CRUISE", egui::Color32::from_rgb(40, 200, 220)),
+                sa_ship::DriveMode::Warp => ("WARP", egui::Color32::from_rgb(200, 80, 220)),
+            };
+
+            let status_text = match data.drive_status {
+                sa_ship::DriveStatus::Idle => String::new(),
+                sa_ship::DriveStatus::Spooling(p) => format!("  SPOOL {:.0}%", p / sa_ship::drive::WARP_SPOOL_TIME * 100.0),
+                sa_ship::DriveStatus::Engaged => {
+                    if data.drive_speed_c > 1000.0 {
+                        format!("  {:.0}kc", data.drive_speed_c / 1000.0)
+                    } else if data.drive_speed_c > 1.0 {
+                        format!("  {:.0}c", data.drive_speed_c)
+                    } else {
+                        String::new()
+                    }
+                }
+            };
+
+            ui.label(
+                egui::RichText::new(format!("{drive_label}{status_text}"))
+                    .color(drive_color)
+                    .size(14.0)
+                    .strong(),
+            );
+
+            // Exotic fuel gauge (only show if not at 100%)
+            if data.exotic_fuel < 0.999 {
+                let exotic_color = if data.exotic_fuel < 0.15 {
+                    egui::Color32::from_rgb(220, 50, 30)
+                } else {
+                    egui::Color32::from_rgb(200, 80, 220)
+                };
+                ui.label(
+                    egui::RichText::new(format!("EXOTIC  {:.0}%", data.exotic_fuel * 100.0))
+                        .color(exotic_color)
+                        .size(12.0),
+                );
+                let bar_width = 120.0;
+                let bar_height = 5.0;
+                let (exotic_rect, _) = ui.allocate_exact_size(
+                    egui::vec2(bar_width, bar_height),
+                    egui::Sense::hover(),
+                );
+                ui.painter().rect_filled(
+                    exotic_rect, 2.0, egui::Color32::from_rgb(30, 30, 40),
+                );
+                let ew = bar_width * data.exotic_fuel;
+                if ew > 0.5 {
+                    let fill = egui::Rect::from_min_size(
+                        exotic_rect.left_top(), egui::vec2(ew, bar_height),
+                    );
+                    ui.painter().rect_filled(fill, 2.0, exotic_color);
+                }
             }
         });
     });
