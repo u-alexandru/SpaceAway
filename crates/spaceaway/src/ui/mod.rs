@@ -387,7 +387,7 @@ impl UiSystem {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
-        menu: &crate::menu::MainMenu,
+        menu: &mut crate::menu::MainMenu,
         mouse_pos: Option<[f32; 2]>,
         mouse_clicked: bool,
     ) -> bool {

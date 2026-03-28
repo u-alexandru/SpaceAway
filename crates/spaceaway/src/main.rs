@@ -715,8 +715,31 @@ impl ApplicationHandler for App {
                         self.cursor_grabbed = false;
                     }
 
+                    // Menu keyboard navigation
+                    if event.state.is_pressed() && self.phase == GamePhase::Menu {
+                        if let Some(menu) = &mut self.menu {
+                            match code {
+                                KeyCode::ArrowUp | KeyCode::KeyW => menu.nav_up(),
+                                KeyCode::ArrowDown | KeyCode::KeyS => menu.nav_down(),
+                                KeyCode::Enter | KeyCode::Space => {
+                                    if menu.selected == 0 { // Continue
+                                        self.phase = GamePhase::Playing;
+                                        self.menu = None;
+                                        self.star_streaming.force_load(self.galactic_position);
+                                        if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
+                                            let verts = self.star_streaming.build_vertices(self.galactic_position);
+                                            renderer.star_field.update_star_buffer(&gpu.device, &verts);
+                                        }
+                                        self.audio.set_power(true);
+                                        log::info!("Starting game — entering ship");
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+
                     // Teleport keys: only when NOT seated at helm (1/2/3 are drive keys when seated)
-                    // Skip all game-specific keys during Menu phase
                     let is_seated = self.helm.as_ref().map(|h| h.is_seated()).unwrap_or(false);
                     if event.state.is_pressed() && !is_seated && self.phase == GamePhase::Playing {
                         match code {
@@ -1034,7 +1057,7 @@ impl ApplicationHandler for App {
                                     &gpu.queue,
                                     &mut frame_ctx.encoder,
                                     &frame_ctx.view,
-                                    self.menu.as_ref().unwrap(),
+                                    self.menu.as_mut().unwrap(),
                                     mouse_pos,
                                     mouse_clicked,
                                 );

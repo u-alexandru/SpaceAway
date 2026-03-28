@@ -40,11 +40,19 @@ enum MenuScene {
     },
 }
 
+/// Menu items (indices).
+const MENU_CONTINUE: usize = 0;
+const MENU_NEW_GAME: usize = 1;
+const MENU_SETTINGS: usize = 2;
+const MENU_ITEM_COUNT: usize = 3;
+
 pub struct MainMenu {
     scene: MenuScene,
     camera: Camera,
     quote: &'static str,
     time: f32,
+    /// Currently selected menu item (keyboard navigation).
+    pub selected: usize,
 }
 
 impl MainMenu {
@@ -77,6 +85,7 @@ impl MainMenu {
             camera,
             quote,
             time: 0.0,
+            selected: 0,
         }
     }
 
@@ -204,6 +213,16 @@ impl MainMenu {
         self.camera.yaw += 0.002 * dt;
     }
 
+    /// Move selection up.
+    pub fn nav_up(&mut self) {
+        if self.selected > 0 { self.selected -= 1; }
+    }
+
+    /// Move selection down.
+    pub fn nav_down(&mut self) {
+        if self.selected < MENU_ITEM_COUNT - 1 { self.selected += 1; }
+    }
+
     /// Get the camera for rendering.
     pub fn camera(&self) -> &Camera {
         &self.camera
@@ -235,7 +254,7 @@ impl MainMenu {
     }
 
     /// Render the menu overlay via egui. Returns true if "Continue" clicked.
-    pub fn render_egui(&self, ctx: &egui::Context, font_scale: f32) -> bool {
+    pub fn render_egui(&mut self, ctx: &egui::Context, font_scale: f32) -> bool {
         let mut start_game = false;
         let a = |frac: f32| -> u8 { ((self.time * 0.5).min(1.0) * 255.0 * frac) as u8 };
         let s = font_scale; // scale all sizes
@@ -250,6 +269,12 @@ impl MainMenu {
                 );
             });
 
+        let items: &[(&str, bool)] = &[
+            ("Continue", true),     // enabled
+            ("New Game", false),    // disabled (future)
+            ("Settings", false),    // disabled (future)
+        ];
+
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ctx, |ui| {
@@ -257,35 +282,55 @@ impl MainMenu {
 
                 // Title + menu in center
                 ui.vertical_centered(|ui| {
-                    ui.add_space(screen.height() * 0.28);
+                    ui.add_space(screen.height() * 0.25);
                     ui.label(egui::RichText::new("S  P  A  C  E  A  W  A  Y")
-                        .color(egui::Color32::from_rgba_unmultiplied(200, 205, 215, a(1.0)))
-                        .size(56.0 * s).strong());
-                    ui.add_space(80.0 * s);
+                        .color(egui::Color32::from_rgba_unmultiplied(210, 215, 225, a(1.0)))
+                        .size(72.0 * s).strong());
+                    ui.add_space(100.0 * s);
 
-                    let btn = egui::RichText::new("Continue")
-                        .color(egui::Color32::from_rgba_unmultiplied(180, 185, 200, a(1.0)))
-                        .size(30.0 * s);
-                    if ui.add(egui::Label::new(btn).sense(egui::Sense::click())).clicked() {
-                        start_game = true;
+                    for (i, (label, enabled)) in items.iter().enumerate() {
+                        let selected = i == self.selected;
+                        let color = if !enabled {
+                            egui::Color32::from_rgba_unmultiplied(60, 60, 70, a(0.35))
+                        } else if selected {
+                            egui::Color32::from_rgba_unmultiplied(240, 245, 255, a(1.0))
+                        } else {
+                            egui::Color32::from_rgba_unmultiplied(150, 155, 170, a(0.9))
+                        };
+
+                        let text = if selected && *enabled {
+                            format!(">>  {}  <<", label)
+                        } else {
+                            label.to_string()
+                        };
+
+                        let rt = egui::RichText::new(text)
+                            .color(color)
+                            .size(36.0 * s);
+
+                        let response = ui.add(egui::Label::new(rt).sense(egui::Sense::click()));
+
+                        if response.hovered() && *enabled {
+                            self.selected = i;
+                        }
+                        if response.clicked() && *enabled && i == MENU_CONTINUE {
+                            start_game = true;
+                        }
+                        ui.add_space(24.0 * s);
                     }
-                    ui.add_space(20.0 * s);
-                    ui.label(egui::RichText::new("New Game")
-                        .color(egui::Color32::from_rgba_unmultiplied(80, 80, 90, a(0.35)))
-                        .size(30.0 * s));
-                    ui.add_space(20.0 * s);
-                    ui.label(egui::RichText::new("Settings")
-                        .color(egui::Color32::from_rgba_unmultiplied(80, 80, 90, a(0.35)))
-                        .size(30.0 * s));
                 });
 
                 // Quote pinned to bottom center
+                let quote_width = self.quote.len() as f32 * 8.0 * s;
                 egui::Area::new(egui::Id::new("menu_quote"))
-                    .fixed_pos(egui::pos2(screen.center().x - 200.0 * s, screen.bottom() - 50.0 * s))
+                    .fixed_pos(egui::pos2(
+                        (screen.width() - quote_width) * 0.5,
+                        screen.bottom() - 60.0 * s,
+                    ))
                     .show(ctx, |ui| {
                         ui.label(egui::RichText::new(self.quote)
                             .color(egui::Color32::from_rgba_unmultiplied(120, 125, 140, a(0.6)))
-                            .size(16.0 * s).italics());
+                            .size(18.0 * s).italics());
                     });
             });
         start_game
