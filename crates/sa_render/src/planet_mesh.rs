@@ -161,6 +161,167 @@ pub fn build_star_mesh(
     MeshData { vertices, indices }
 }
 
+/// Build an atmosphere shell mesh slightly larger than the planet (1.03x radius).
+///
+/// Colors the shell with the atmosphere color modulated by opacity, with
+/// slight latitude-based brightness variation for visual interest.
+pub fn build_atmosphere_mesh(
+    subdivisions: u32,
+    planet_radius_m: f32,
+    atmo: &sa_universe::AtmosphereParams,
+) -> MeshData {
+    let atmo_radius = planet_radius_m * 1.03;
+    let ico = generate_icosphere(subdivisions);
+
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+
+    for tri in ico.indices.chunks_exact(3) {
+        let p0 = ico.positions[tri[0] as usize];
+        let p1 = ico.positions[tri[1] as usize];
+        let p2 = ico.positions[tri[2] as usize];
+
+        // Scale to atmosphere radius
+        let v0 = [p0[0] * atmo_radius, p0[1] * atmo_radius, p0[2] * atmo_radius];
+        let v1 = [p1[0] * atmo_radius, p1[1] * atmo_radius, p1[2] * atmo_radius];
+        let v2 = [p2[0] * atmo_radius, p2[1] * atmo_radius, p2[2] * atmo_radius];
+
+        let normal = face_normal(v0, v1, v2);
+
+        // Slightly vary brightness by latitude for visual interest
+        let avg_y = (p0[1] + p1[1] + p2[1]) / 3.0; // latitude proxy on unit sphere
+        let lat_factor = 0.8 + 0.2 * (1.0 - avg_y.abs()); // brighter at equator
+        let color = [
+            atmo.color[0] * atmo.opacity * lat_factor * 0.6,
+            atmo.color[1] * atmo.opacity * lat_factor * 0.6,
+            atmo.color[2] * atmo.opacity * lat_factor * 0.6,
+        ];
+
+        let base = vertices.len() as u32;
+        vertices.push(Vertex { position: v0, color, normal });
+        vertices.push(Vertex { position: v1, color, normal });
+        vertices.push(Vertex { position: v2, color, normal });
+        indices.extend_from_slice(&[base, base + 1, base + 2]);
+    }
+
+    MeshData { vertices, indices }
+}
+
+/// Build a flat annular ring mesh in the planet's equatorial plane.
+///
+/// The ring spans from `inner_ratio * radius` to `outer_ratio * radius`,
+/// tilted by the planet's axial tilt. Radial density variation creates
+/// visual gaps and bands seeded deterministically.
+pub fn build_ring_mesh(
+    planet_radius_m: f32,
+    ring: &sa_universe::RingParams,
+    axial_tilt_deg: f32,
+    seed: u64,
+) -> MeshData {
+    let inner_r = planet_radius_m * ring.inner_ratio;
+    let outer_r = planet_radius_m * ring.outer_ratio;
+    let segments = 64_u32;
+    let num_rings = 10_u32;
+    let tilt_rad = axial_tilt_deg * std::f32::consts::PI / 180.0;
+    let cos_tilt = tilt_rad.cos();
+    let sin_tilt = tilt_rad.sin();
+
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+
+    let make_point = |radius: f32, angle: f32| -> [f32; 3] {
+        let x = radius * angle.cos();
+        let flat_z = radius * angle.sin();
+        // Apply axial tilt (rotate around X axis)
+        let y = flat_z * sin_tilt;
+        let z = flat_z * cos_tilt;
+        [x, y, z]
+    };
+
+    for s in 0..segments {
+        let angle0 = (s as f32 / segments as f32) * 2.0 * std::f32::consts::PI;
+        let angle1 = ((s + 1) as f32 / segments as f32) * 2.0 * std::f32::consts::PI;
+
+        for r in 0..num_rings {
+            let r0 = inner_r + (outer_r - inner_r) * (r as f32 / num_rings as f32);
+            let r1 = inner_r + (outer_r - inner_r) * ((r + 1) as f32 / num_rings as f32);
+
+            // Radial density: seeded variation for gap positions
+            let radial_t = (r as f32 + 0.5) / num_rings as f32;
+            let gap_noise = (radial_t * 7.0 + seed as f32 * 0.01).sin() * 0.5 + 0.5;
+            let density = gap_noise * 0.8 + 0.2; // never fully transparent
+            let color = [
+                ring.color[0] * density,
+                ring.color[1] * density,
+                ring.color[2] * density,
+            ];
+
+            // Normal: up vector (tilted by axial tilt)
+            let normal = [0.0, cos_tilt, sin_tilt];
+
+            let p00 = make_point(r0, angle0);
+            let p10 = make_point(r1, angle0);
+            let p11 = make_point(r1, angle1);
+            let p01 = make_point(r0, angle1);
+
+            let base = vertices.len() as u32;
+            vertices.push(Vertex { position: p00, color, normal });
+            vertices.push(Vertex { position: p10, color, normal });
+            vertices.push(Vertex { position: p11, color, normal });
+            vertices.push(Vertex { position: p01, color, normal });
+            indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+        }
+    }
+
+    MeshData { vertices, indices }
+}
+
+/// Build a corona glow disc mesh at 4x star radius with radial falloff.
+///
+/// The disc lies in the XY plane (normal facing +Z) and should be oriented
+/// toward the camera via the model matrix at draw time (billboard).
+pub fn build_corona_mesh(star_radius_m: f32, color: [f32; 3]) -> MeshData {
+    let corona_radius = star_radius_m * 4.0;
+    let segments = 32_u32;
+    let num_rings = 8_u32;
+
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    let normal = [0.0, 0.0, 1.0]; // facing camera
+
+    for s in 0..segments {
+        let angle0 = (s as f32 / segments as f32) * 2.0 * std::f32::consts::PI;
+        let angle1 = ((s + 1) as f32 / segments as f32) * 2.0 * std::f32::consts::PI;
+
+        for r in 0..num_rings {
+            let r0_frac = r as f32 / num_rings as f32;
+            let r1_frac = (r + 1) as f32 / num_rings as f32;
+            let r0 = corona_radius * r0_frac;
+            let r1 = corona_radius * r1_frac;
+
+            // Radial falloff: bright at center, fading to transparent at edge
+            let brightness0 = (1.0 - r0_frac).powf(2.5);
+            let brightness1 = (1.0 - r1_frac).powf(2.5);
+            let c0 = [color[0] * brightness0, color[1] * brightness0, color[2] * brightness0];
+            let c1 = [color[0] * brightness1, color[1] * brightness1, color[2] * brightness1];
+
+            let p00 = [r0 * angle0.cos(), r0 * angle0.sin(), 0.0];
+            let p10 = [r1 * angle0.cos(), r1 * angle0.sin(), 0.0];
+            let p11 = [r1 * angle1.cos(), r1 * angle1.sin(), 0.0];
+            let p01 = [r0 * angle1.cos(), r0 * angle1.sin(), 0.0];
+
+            let base = vertices.len() as u32;
+            vertices.push(Vertex { position: p00, color: c0, normal });
+            vertices.push(Vertex { position: p10, color: c1, normal });
+            vertices.push(Vertex { position: p11, color: c1, normal });
+            vertices.push(Vertex { position: p01, color: c0, normal });
+            indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+        }
+    }
+
+    MeshData { vertices, indices }
+}
+
 // --- Private helpers ---
 
 fn fbm(noise: &OpenSimplex, x: f64, y: f64, z: f64, octaves: u32) -> f64 {
@@ -378,6 +539,74 @@ mod tests {
     fn star_mesh_not_empty() {
         let mesh = build_star_mesh(3, 696_000_000.0, [1.0, 0.9, 0.7], 42);
         assert!(!mesh.vertices.is_empty());
+    }
+
+    #[test]
+    fn atmosphere_mesh_larger_than_planet() {
+        let atmo = sa_universe::AtmosphereParams {
+            color: [0.4, 0.6, 1.0],
+            opacity: 0.6,
+            scattering_power: 3.0,
+        };
+        let mesh = build_atmosphere_mesh(2, 6_371_000.0, &atmo);
+        assert!(!mesh.vertices.is_empty());
+        // All vertices should be at ~1.03x planet radius
+        for v in &mesh.vertices {
+            let r = (v.position[0] * v.position[0]
+                + v.position[1] * v.position[1]
+                + v.position[2] * v.position[2])
+            .sqrt();
+            let expected = 6_371_000.0 * 1.03;
+            assert!(
+                (r - expected).abs() / expected < 0.01,
+                "atmosphere vertex at wrong radius: {r}"
+            );
+        }
+    }
+
+    #[test]
+    fn ring_mesh_in_correct_range() {
+        let ring = sa_universe::RingParams {
+            inner_ratio: 1.4,
+            outer_ratio: 2.3,
+            color: [0.7, 0.6, 0.5],
+        };
+        let mesh = build_ring_mesh(60_000_000.0, &ring, 15.0, 42);
+        assert!(!mesh.vertices.is_empty());
+        // Vertices should be between inner and outer radius
+        for v in &mesh.vertices {
+            let r = (v.position[0] * v.position[0]
+                + v.position[1] * v.position[1]
+                + v.position[2] * v.position[2])
+            .sqrt();
+            let inner = 60_000_000.0 * 1.4 * 0.99;
+            let outer = 60_000_000.0 * 2.3 * 1.01;
+            assert!(
+                r >= inner && r <= outer,
+                "ring vertex out of range: {r} (expected {inner}..{outer})"
+            );
+        }
+    }
+
+    #[test]
+    fn corona_mesh_large() {
+        let mesh = build_corona_mesh(696_000_000.0, [1.0, 0.9, 0.7]);
+        assert!(!mesh.vertices.is_empty());
+        // Some vertices should be at ~4x star radius
+        let max_r = mesh
+            .vertices
+            .iter()
+            .map(|v| {
+                (v.position[0] * v.position[0]
+                    + v.position[1] * v.position[1]
+                    + v.position[2] * v.position[2])
+                .sqrt()
+            })
+            .fold(0.0_f32, f32::max);
+        assert!(
+            max_r > 696_000_000.0 * 3.5,
+            "corona should extend well beyond star, max_r={max_r}"
+        );
     }
 
     #[test]
