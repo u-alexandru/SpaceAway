@@ -56,4 +56,21 @@ impl GpuContext {
     pub fn aspect_ratio(&self) -> f32 {
         self.config.width as f32 / self.config.height as f32
     }
+
+    /// Toggle between VSync (Fifo) and uncapped (Immediate) for benchmarking.
+    /// Returns true if VSync is now ON.
+    pub fn toggle_vsync(&mut self) -> bool {
+        let vsync_on = match self.config.present_mode {
+            wgpu::PresentMode::Fifo => {
+                self.config.present_mode = wgpu::PresentMode::Immediate;
+                false
+            }
+            _ => {
+                self.config.present_mode = wgpu::PresentMode::Fifo;
+                true
+            }
+        };
+        self.surface.configure(&self.device, &self.config);
+        vsync_on
+    }
 }

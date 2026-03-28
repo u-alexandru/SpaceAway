@@ -1,5 +1,5 @@
 // Sky shader: analytical Milky Way galaxy + galactic core glow
-// Replaces cubemap sampling with per-pixel ray-marched galaxy density.
+// Optimized: fused density/dust, logarithmic sample spacing, half-res friendly.
 
 struct SkyUniforms {
     inv_view_proj: mat4x4<f32>,
@@ -36,7 +36,7 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VertexOutput {
     return out;
 }
 
-// --- Galaxy density model (analytical, evaluated per sample) ---
+// --- Galaxy density model (fused emission + dust in one pass) ---
 
 const TAU: f32 = 6.2831853;
 const PI: f32 = 3.1415926;
@@ -44,57 +44,43 @@ const DISC_THICKNESS: f32 = 500.0;
 const ARM_K: f32 = 0.25;
 const ARM_SPACING: f32 = 1.5707963; // PI / 2
 const ARM_WIDTH: f32 = 2500.0;
+const ARM_WIDTH_SQ: f32 = 6250000.0; // ARM_WIDTH * ARM_WIDTH
 const BULGE_SCALE: f32 = 5000.0;
 const DUST_ABSORPTION: f32 = 0.00008;
+const DUST_WIDTH_SQ: f32 = 2250000.0; // 1500 * 1500
 
-fn galaxy_density(x: f32, y: f32, z: f32) -> f32 {
-    // Disc: exponential falloff from galactic plane
-    let disc = exp(-abs(y) / DISC_THICKNESS);
-
-    // Spiral arms: 4 logarithmic arms
+// Returns vec2(emission, dust) — fused to avoid recomputing r, theta, arm distance.
+fn galaxy_sample(x: f32, y: f32, z: f32) -> vec2<f32> {
     let r = max(sqrt(x * x + z * z), 1.0);
     let theta = atan2(z, x);
 
+    // Find minimum distance to any of 4 spiral arms
     var min_arm_dist = 99999.0;
+    var min_dust_dist = 99999.0;
     for (var i = 0; i < 4; i++) {
         let offset = f32(i) * ARM_SPACING;
         let theta_arm = ARM_K * log(r) + offset;
         var d_theta = theta - theta_arm;
-        // Wrap to [-PI, PI]
         d_theta = d_theta - round(d_theta / TAU) * TAU;
         let linear_dist = abs(d_theta) * r;
         min_arm_dist = min(min_arm_dist, linear_dist);
+        // Dust lanes: offset inward from arm center
+        min_dust_dist = min(min_dust_dist, abs(linear_dist - 500.0));
     }
 
-    let arm = exp(-(min_arm_dist * min_arm_dist) / (ARM_WIDTH * ARM_WIDTH));
-
-    // Bulge: spherical exponential
+    // Emission: disc * (arms + bulge + background)
+    let disc = exp(-abs(y) / DISC_THICKNESS);
+    let arm = exp(-(min_arm_dist * min_arm_dist) / ARM_WIDTH_SQ);
     let r3d = sqrt(x * x + y * y + z * z);
     let bulge = exp(-r3d / BULGE_SCALE);
+    let emission = disc * (arm + bulge + 0.01);
 
-    // Base density very low — empty space should produce no light
-    return disc * (arm + bulge + 0.01);
-}
+    // Dust: concentrated in thin disc, on inner arm edges
+    let dust_disc = exp(-abs(y) / (DISC_THICKNESS * 0.5));
+    let dust_arm = exp(-(min_dust_dist * min_dust_dist) / DUST_WIDTH_SQ);
+    let dust = dust_disc * dust_arm;
 
-fn dust_density(x: f32, y: f32, z: f32) -> f32 {
-    // Dust concentrated in disc plane and on inner edges of arms
-    let disc = exp(-abs(y) / (DISC_THICKNESS * 0.5));
-    let r = max(sqrt(x * x + z * z), 1.0);
-    let theta = atan2(z, x);
-
-    var min_arm_dist = 99999.0;
-    for (var i = 0; i < 4; i++) {
-        let offset = f32(i) * ARM_SPACING;
-        let theta_arm = ARM_K * log(r) + offset;
-        var d_theta = theta - theta_arm;
-        d_theta = d_theta - round(d_theta / TAU) * TAU;
-        // Offset inward for dust lanes (inner edge of arms)
-        let linear_dist = abs(d_theta) * r - 500.0;
-        min_arm_dist = min(min_arm_dist, abs(linear_dist));
-    }
-
-    let arm_dust = exp(-(min_arm_dist * min_arm_dist) / (1500.0 * 1500.0));
-    return disc * arm_dust;
+    return vec2<f32>(emission, dust);
 }
 
 @fragment
@@ -105,9 +91,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let view_dir = normalize(world_dir_h.xyz / world_dir_h.w);
 
     // --- Ray-march through galaxy density ---
-    let num_samples = 16;
-    let max_dist: f32 = 50000.0;
-    let step_size = max_dist / f32(num_samples);
+    // Logarithmic spacing: more samples near observer, fewer far away.
+    // 8 log-spaced samples ≈ 16 uniform samples in visual quality.
+    let num_samples = 8;
+    let min_t: f32 = 200.0;
+    let max_t: f32 = 50000.0;
+    let log_min = log(min_t);
+    let log_max = log(max_t);
+    let log_step = (log_max - log_min) / f32(num_samples);
 
     var accumulated: f32 = 0.0;
     var transmittance: f32 = 1.0;
@@ -119,32 +110,34 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let oz = sky.observer_pos.z;
 
     for (var s = 0; s < num_samples; s++) {
-        let t = (f32(s) + 0.5) * step_size;
+        // Log-spaced sample position (center of each log interval)
+        let log_t = log_min + (f32(s) + 0.5) * log_step;
+        let t = exp(log_t);
+        // Width of this sample interval (for proper integration weight)
+        let dt = exp(log_min + f32(s + 1) * log_step) - exp(log_min + f32(s) * log_step);
+
         let sx = ox + view_dir.x * t;
         let sy = oy + view_dir.y * t;
         let sz = oz + view_dir.z * t;
 
-        let emission = galaxy_density(sx, sy, sz);
-        let dust = dust_density(sx, sy, sz);
+        let sample = galaxy_sample(sx, sy, sz);
+        let emission = sample.x;
+        let dust = sample.y;
 
         // Beer-Lambert absorption
-        transmittance *= exp(-dust * step_size * DUST_ABSORPTION);
+        transmittance *= exp(-dust * dt * DUST_ABSORPTION);
 
-        let contribution = emission * transmittance * step_size / max_dist;
+        let contribution = emission * transmittance * dt / max_t;
         accumulated += contribution;
 
-        // Warmth: weight by proximity to galactic center (bulge region)
+        // Warmth: weight by proximity to galactic center
         let r_center = sqrt(sx * sx + sy * sy + sz * sz);
         let bulge_weight = exp(-r_center / BULGE_SCALE);
         warm_weight += contribution * bulge_weight;
         total_weight += contribution;
     }
 
-    // Two-part curve: smoothstep kills low values (dark sky) while pow
-    // preserves structure in bright regions (spiral arms visible from above).
-    //   - Below 0.03: black (empty space)
-    //   - 0.03-0.15: smooth fade-in (band edges)
-    //   - Above 0.15: pow(0.7) preserves arm/interarm contrast
+    // Two-part curve: smoothstep kills low values, pow preserves arm contrast
     let fade = smoothstep(0.03, 0.15, accumulated);
     let detail = pow(accumulated * 1.5, 0.7);
     let brightness = min(fade * detail, 0.85);

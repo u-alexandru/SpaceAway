@@ -704,6 +704,12 @@ impl ApplicationHandler for App {
                                 self.fly_mode = !self.fly_mode;
                                 log::info!("Fly mode: {}", if self.fly_mode { "ON (WASD to fly, scroll to change speed)" } else { "OFF" });
                             }
+                            KeyCode::KeyV => {
+                                if let Some(gpu) = &mut self.gpu {
+                                    let vsync = gpu.toggle_vsync();
+                                    log::info!("VSync: {}", if vsync { "ON (60 FPS cap)" } else { "OFF (uncapped — benchmark mode)" });
+                                }
+                            }
                             KeyCode::Digit6 => {
                                 // Cycle through individual ship parts
                                 let parts = all_ship_parts();

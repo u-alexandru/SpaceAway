@@ -49,7 +49,12 @@ impl Renderer {
             gpu.config.width,
             gpu.config.height,
         );
-        let sky_renderer = SkyRenderer::new(&gpu.device, gpu.config.format);
+        let sky_renderer = SkyRenderer::new(
+            &gpu.device,
+            gpu.config.format,
+            gpu.config.width,
+            gpu.config.height,
+        );
         let stars = crate::star_field::generate_stars(4000, 42);
         let star_field = StarField::new(&gpu.device, gpu.config.format, &stars);
         let screen_pipeline = ScreenPipeline::new(
@@ -72,6 +77,8 @@ impl Renderer {
 
     pub fn resize(&mut self, gpu: &GpuContext) {
         self.geometry_pipeline
+            .resize(&gpu.device, gpu.config.width, gpu.config.height);
+        self.sky_renderer
             .resize(&gpu.device, gpu.config.width, gpu.config.height);
     }
 
@@ -196,6 +203,10 @@ impl Renderer {
                     label: Some("Frame Encoder"),
                 });
 
+        // Pass 1: Render sky to half-res offscreen texture
+        self.sky_renderer.render_to_texture(&mut encoder);
+
+        // Pass 2: Main scene pass — blit sky + geometry + stars + nebulae + screens
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Main Pass"),
@@ -223,10 +234,8 @@ impl Renderer {
                 ..Default::default()
             });
 
-            // Draw sky (before geometry, no depth)
-            pass.set_pipeline(&self.sky_renderer.pipeline);
-            pass.set_bind_group(0, &self.sky_renderer.bind_group, &[]);
-            pass.draw(0..6, 0..1);
+            // Blit half-res sky to main framebuffer (additive blend, no depth write)
+            self.sky_renderer.blit_to_main(&mut pass);
 
             // Draw geometry — collect instance buffers up-front so they
             // live as long as the render pass (the pass borrows their slices).
