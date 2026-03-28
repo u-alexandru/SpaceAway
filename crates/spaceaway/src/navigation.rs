@@ -114,6 +114,10 @@ impl Navigation {
     /// Check if the observer is within a star's gravity well (~50 AU).
     /// Returns the star to drop at, if any. Checks locked target first,
     /// then all nearby stars.
+    ///
+    /// IMPORTANT: The caller must NOT call this while an ActiveSystem is loaded.
+    /// Otherwise it will re-trigger on the current system's star every frame.
+    /// Call only during warp when no system is active.
     pub fn check_gravity_well(&self, galactic_pos: WorldPos) -> Option<&NavStar> {
         let au_in_ly: f64 = 1.581e-5; // 1 AU in light-years
         let drop_distance_ly = 50.0 * au_in_ly; // 50 AU

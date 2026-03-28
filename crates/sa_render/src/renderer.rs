@@ -13,6 +13,10 @@ use wgpu::util::DeviceExt;
 pub struct DrawCommand {
     pub mesh: Handle<MeshMarker>,
     pub model_matrix: Mat4,
+    /// If true, model_matrix is already in camera-relative coordinates.
+    /// The renderer skips origin rebasing for this command.
+    /// Used by the solar system manager (planet positions pre-computed in f64).
+    pub pre_rebased: bool,
 }
 
 /// A draw command for a textured screen quad.
@@ -263,16 +267,23 @@ impl Renderer {
                 .iter()
                 .filter_map(|cmd| {
                     self.mesh_store.get(cmd.mesh)?;
-                    let col3 = cmd.model_matrix.col(3);
-                    let rebased_translation = Vec3::new(
-                        (col3.x as f64 - cam_pos.x) as f32,
-                        (col3.y as f64 - cam_pos.y) as f32,
-                        (col3.z as f64 - cam_pos.z) as f32,
-                    );
-                    let mut rebased_model = cmd.model_matrix;
-                    rebased_model.col_mut(3).x = rebased_translation.x;
-                    rebased_model.col_mut(3).y = rebased_translation.y;
-                    rebased_model.col_mut(3).z = rebased_translation.z;
+                    let rebased_model = if cmd.pre_rebased {
+                        // Already in camera-relative coordinates (e.g., solar system bodies)
+                        cmd.model_matrix
+                    } else {
+                        // Standard origin rebasing: subtract camera pos in f64
+                        let col3 = cmd.model_matrix.col(3);
+                        let rebased_translation = Vec3::new(
+                            (col3.x as f64 - cam_pos.x) as f32,
+                            (col3.y as f64 - cam_pos.y) as f32,
+                            (col3.z as f64 - cam_pos.z) as f32,
+                        );
+                        let mut m = cmd.model_matrix;
+                        m.col_mut(3).x = rebased_translation.x;
+                        m.col_mut(3).y = rebased_translation.y;
+                        m.col_mut(3).z = rebased_translation.z;
+                        m
+                    };
 
                     let instance = InstanceRaw {
                         model: rebased_model.to_cols_array_2d(),

@@ -75,8 +75,8 @@ impl ActiveSystem {
 
         let catalog_name = format!(
             "SEC {:04}.{:04} / S-{:03}",
-            star_id.sector_x(),
-            star_id.sector_z(),
+            star_id.sector_x().unsigned_abs(),
+            star_id.sector_z().unsigned_abs(),
             star_id.system()
         );
 
@@ -139,9 +139,8 @@ impl ActiveSystem {
     /// `dt_real`: wall-clock seconds since last frame.
     /// `camera_galactic_pos`: the camera's galactic position (light-years).
     ///
-    /// The returned DrawCommands have model_matrix translations in meters
-    /// relative to the camera. They must NOT go through the renderer's
-    /// origin-rebasing pass.
+    /// The returned DrawCommands have `pre_rebased: true` — model_matrix
+    /// translations are in camera-relative meters (computed in f64).
     pub fn update(
         &mut self,
         dt_real: f64,
@@ -164,6 +163,7 @@ impl ActiveSystem {
             commands.push(DrawCommand {
                 mesh: body.mesh_handle,
                 model_matrix: model,
+                pre_rebased: true,
             });
         }
         commands

@@ -1360,6 +1360,7 @@ impl ApplicationHandler for App {
                             vec![DrawCommand {
                                 mesh: ship_mesh,
                                 model_matrix: Mat4::IDENTITY,
+                                pre_rebased: false,
                             }]
                         } else {
                             vec![]
@@ -1384,6 +1385,7 @@ impl ApplicationHandler for App {
                             cmds.push(DrawCommand {
                                 mesh: hull_handle,
                                 model_matrix: ship_transform,
+                                pre_rebased: false,
                             });
                         }
 
@@ -1401,6 +1403,7 @@ impl ApplicationHandler for App {
                                 cmds.push(DrawCommand {
                                     mesh: *handle,
                                     model_matrix: ship_transform * Mat4::from_translation(pos),
+                                    pre_rebased: false,
                                 });
                             }
                         }
