@@ -738,82 +738,99 @@ impl ApplicationHandler for App {
                                 }
                             }
                             KeyCode::Digit8 => {
-                                // Debug: jump to nearest star, teleport next to first planet
-                                self.navigation.update_nearby(self.galactic_position);
-                                if let Some(star) = self.navigation.nearby_stars.first().cloned() {
-                                    log::info!("Jumping to nearest star: {} ({:.2} ly)", star.catalog_name, star.distance_ly);
-
-                                    // Generate the system to find the first planet's position
-                                    let sector_coord = sa_universe::SectorCoord::new(
-                                        star.id.sector_x().into(),
-                                        star.id.sector_y().into(),
-                                        star.id.sector_z().into(),
-                                    );
-                                    let sector = sa_universe::sector::generate_sector(
-                                        MasterSeed(42),
-                                        sector_coord,
-                                    );
-
-                                    if let Some(placed) = sector.stars.iter().find(|s| s.id == star.id) {
-                                        let system = sa_universe::generate_system(&placed.star, star.id.0);
-
-                                        // Teleport near the first planet (or near the star if no planets)
+                                // Debug: cycle through planets in current system (or jump to nearest star)
+                                if let Some(system) = &self.active_system {
+                                    // Already in a system — cycle to next planet
+                                    let planets = &system.system.planets;
+                                    if !planets.is_empty() {
+                                        let idx = self.teleport_counter as usize % planets.len();
+                                        self.teleport_counter += 1;
+                                        let planet = &planets[idx];
                                         let au_in_ly = 1.581e-5_f64;
                                         let meters_in_ly = 1.0 / 9.461e15_f64;
-                                        let (offset_ly, description) = if let Some(planet) = system.planets.first() {
-                                            // Place camera 3x planet radius from the planet surface
-                                            let planet_radius_m = planet.radius_earth as f64 * 6_371_000.0;
-                                            let view_dist_m = planet_radius_m * 3.0;
-                                            let planet_orbital_ly = planet.orbital_radius_au as f64 * au_in_ly;
-                                            // Offset from star: planet orbital distance + viewing distance
-                                            let offset = planet_orbital_ly + view_dist_m * meters_in_ly;
-                                            (offset, format!(
-                                                "Planet 1: {:?} {:.0}km at {:.2}AU — viewing from {:.0}km",
-                                                planet.sub_type,
-                                                planet.radius_earth * 6371.0,
-                                                planet.orbital_radius_au,
-                                                view_dist_m / 1000.0,
-                                            ))
-                                        } else {
-                                            // No planets — teleport near star surface
-                                            let star_radius_m = placed.star.radius as f64 * 696_000_000.0;
-                                            let offset = star_radius_m * 5.0 * meters_in_ly;
-                                            (offset, "No planets — near star".to_string())
-                                        };
-
+                                        let planet_radius_m = planet.radius_earth as f64 * 6_371_000.0;
+                                        let view_dist_m = planet_radius_m * 1.5;
+                                        let planet_orbital_ly = planet.orbital_radius_au as f64 * au_in_ly;
                                         self.galactic_position = WorldPos::new(
-                                            star.galactic_pos.x + offset_ly,
-                                            star.galactic_pos.y,
-                                            star.galactic_pos.z,
+                                            system.star_galactic_pos.x + planet_orbital_ly + view_dist_m * meters_in_ly,
+                                            system.star_galactic_pos.y,
+                                            system.star_galactic_pos.z,
                                         );
                                         self.camera.position = self.galactic_position;
-                                        self.drive.request_disengage();
-
-                                        // Force star regen
-                                        self.star_streaming.force_load(self.galactic_position);
-                                        if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
-                                            let verts = self.star_streaming.build_vertices(self.galactic_position);
-                                            renderer.star_field.update_star_buffer(&gpu.device, &verts);
-                                        }
-
-                                        // Load the system
-                                        if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
-                                            let sys = solar_system::ActiveSystem::load(
-                                                star.id,
-                                                placed,
-                                                &mut renderer.mesh_store,
-                                                &gpu.device,
-                                            );
-                                            log::info!("System loaded: {} bodies — {}", sys.body_count(), description);
-                                            for line in sys.body_summary() {
-                                                log::info!("  {}", line);
-                                            }
-                                            self.active_system = Some(sys);
-                                        }
+                                        log::info!("→ Planet {} of {}: {:?} {:.0}km at {:.2}AU (viewing from {:.0}km)",
+                                            idx + 1, planets.len(), planet.sub_type,
+                                            planet.radius_earth * 6371.0, planet.orbital_radius_au,
+                                            view_dist_m / 1000.0);
                                     }
-                                    self.navigation.clear_target();
                                 } else {
-                                    log::warn!("No nearby stars to jump to");
+                                    // Not in a system — jump to nearest star
+                                    self.navigation.update_nearby(self.galactic_position);
+                                    if let Some(star) = self.navigation.nearby_stars.first().cloned() {
+                                        log::info!("Jumping to: {} ({:.2} ly)", star.catalog_name, star.distance_ly);
+                                        let sector_coord = sa_universe::SectorCoord::new(
+                                            star.id.sector_x().into(),
+                                            star.id.sector_y().into(),
+                                            star.id.sector_z().into(),
+                                        );
+                                        let sector = sa_universe::sector::generate_sector(MasterSeed(42), sector_coord);
+                                        if let Some(placed) = sector.stars.iter().find(|s| s.id == star.id) {
+                                            let system = sa_universe::generate_system(&placed.star, star.id.0);
+                                            let au_in_ly = 1.581e-5_f64;
+                                            let meters_in_ly = 1.0 / 9.461e15_f64;
+                                            let (offset_ly, desc) = if let Some(p) = system.planets.first() {
+                                                let r_m = p.radius_earth as f64 * 6_371_000.0;
+                                                let view_m = r_m * 1.5;
+                                                let orb_ly = p.orbital_radius_au as f64 * au_in_ly;
+                                                (orb_ly + view_m * meters_in_ly, format!(
+                                                    "Planet 1: {:?} {:.0}km at {:.2}AU",
+                                                    p.sub_type, p.radius_earth * 6371.0, p.orbital_radius_au))
+                                            } else {
+                                                let sr = placed.star.radius as f64 * 696_000_000.0;
+                                                (sr * 3.0 * meters_in_ly, "No planets — near star".into())
+                                            };
+                                            self.galactic_position = WorldPos::new(
+                                                star.galactic_pos.x + offset_ly,
+                                                star.galactic_pos.y, star.galactic_pos.z);
+                                            self.camera.position = self.galactic_position;
+                                            self.drive.request_disengage();
+                                            self.teleport_counter = 1; // next press cycles to planet 2
+                                            self.star_streaming.force_load(self.galactic_position);
+                                            if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
+                                                let verts = self.star_streaming.build_vertices(self.galactic_position);
+                                                renderer.star_field.update_star_buffer(&gpu.device, &verts);
+                                            }
+                                            if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
+                                                let sys = solar_system::ActiveSystem::load(
+                                                    star.id, placed, &mut renderer.mesh_store, &gpu.device);
+                                                log::info!("System: {} bodies — {}", sys.body_count(), desc);
+                                                for line in sys.body_summary() { log::info!("  {}", line); }
+                                                self.active_system = Some(sys);
+                                            }
+                                        }
+                                        self.navigation.clear_target();
+                                    }
+                                }
+                            }
+                            KeyCode::Digit9 => {
+                                // Debug: jump to a DIFFERENT star (skip nearest, pick next)
+                                self.active_system = None;
+                                self.navigation.update_nearby(self.galactic_position);
+                                let skip = (self.teleport_counter as usize) % self.navigation.nearby_stars.len().max(1);
+                                self.teleport_counter += 1;
+                                if let Some(star) = self.navigation.nearby_stars.get(skip).cloned() {
+                                    // Teleport near the star (system loads on next key 8 press)
+                                    let au_in_ly = 1.581e-5_f64;
+                                    self.galactic_position = WorldPos::new(
+                                        star.galactic_pos.x + 30.0 * au_in_ly,
+                                        star.galactic_pos.y, star.galactic_pos.z);
+                                    self.camera.position = self.galactic_position;
+                                    self.star_streaming.force_load(self.galactic_position);
+                                    if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
+                                        let verts = self.star_streaming.build_vertices(self.galactic_position);
+                                        renderer.star_field.update_star_buffer(&gpu.device, &verts);
+                                    }
+                                    log::info!("Jumped near {} ({:.2} ly) — press 8 to enter system",
+                                        star.catalog_name, star.distance_ly);
                                 }
                             }
                             KeyCode::Equal => { self.fly_speed *= 2.0; log::info!("Fly speed: {:.0} ly/s", self.fly_speed); }
