@@ -28,9 +28,9 @@ const O2_REGEN: f32 = 0.002;
 /// Cruise drive fuel drain rate per second at full drive fraction.
 const CRUISE_FUEL_DRAIN: f32 = 0.02;
 /// Minimum exotic fuel drain rate per second at minimum warp fraction.
-const WARP_EXOTIC_DRAIN_MIN: f32 = 0.005;
+const WARP_EXOTIC_DRAIN_MIN: f32 = 0.0025;
 /// Maximum exotic fuel drain rate per second at maximum warp fraction.
-const WARP_EXOTIC_DRAIN_MAX: f32 = 0.05;
+const WARP_EXOTIC_DRAIN_MAX: f32 = 0.025;
 
 impl ShipResources {
     /// Create resources at full capacity.

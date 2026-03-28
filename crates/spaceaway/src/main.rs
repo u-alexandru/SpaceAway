@@ -804,18 +804,44 @@ impl ApplicationHandler for App {
                                 log::info!("Returned to normal scene view");
                             }
                             KeyCode::Tab => {
-                                // Lock star nearest to crosshair
+                                // Lock star nearest to screen center
                                 self.navigation.update_nearby(self.galactic_position);
-                                let fwd = self.camera.forward();
-                                self.navigation.lock_nearest_to_crosshair(
-                                    [fwd.x, fwd.y, fwd.z],
-                                    self.galactic_position,
-                                );
-                                if let Some(target) = &self.navigation.locked_target {
-                                    log::info!("LOCKED: {} ({:.2} ly away)", target.catalog_name, target.distance_ly);
-                                    self.audio.play_sfx(sa_audio::SfxId::Confirm, None);
-                                } else {
-                                    log::warn!("No star in crosshair cone");
+                                if let Some(gpu) = &self.gpu {
+                                    let sw = gpu.config.width as f32;
+                                    let sh = gpu.config.height as f32;
+                                    let cx = sw / 2.0;
+                                    let cy = sh / 2.0;
+                                    let aspect = sw / sh;
+                                    let vp = self.camera.view_projection_matrix(aspect);
+                                    let ly_to_m: f64 = 9.461e15;
+
+                                    let mut best_screen_dist = f32::MAX;
+                                    let mut best_idx: Option<usize> = None;
+
+                                    for (i, star) in self.navigation.nearby_stars.iter().enumerate() {
+                                        let dx = ((star.galactic_pos.x - self.galactic_position.x) * ly_to_m) as f32;
+                                        let dy = ((star.galactic_pos.y - self.galactic_position.y) * ly_to_m) as f32;
+                                        let dz = ((star.galactic_pos.z - self.galactic_position.z) * ly_to_m) as f32;
+                                        let clip = vp * glam::Vec4::new(dx, dy, dz, 1.0);
+                                        if clip.w <= 0.0 { continue; }
+                                        let sx = (clip.x / clip.w * 0.5 + 0.5) * sw;
+                                        let sy = (1.0 - (clip.y / clip.w * 0.5 + 0.5)) * sh;
+                                        let screen_dist = ((sx - cx).powi(2) + (sy - cy).powi(2)).sqrt();
+                                        if screen_dist < best_screen_dist {
+                                            best_screen_dist = screen_dist;
+                                            best_idx = Some(i);
+                                        }
+                                    }
+
+                                    if let Some(idx) = best_idx {
+                                        self.navigation.lock_target(idx);
+                                        if let Some(target) = &self.navigation.locked_target {
+                                            log::info!("LOCKED: {} ({:.2} ly, {:.0}px from center)",
+                                                target.catalog_name, target.distance_ly, best_screen_dist);
+                                        }
+                                    } else {
+                                        log::warn!("No star visible on screen");
+                                    }
                                 }
                             }
                             KeyCode::Digit8 => {
@@ -1162,18 +1188,47 @@ impl ApplicationHandler for App {
                                 log::info!("Drive: CRUISE engaged");
                             }
                         }
-                        // Tab: lock star nearest to crosshair
+                        // Tab: lock star nearest to screen center
                         if self.input.keyboard.just_pressed(KeyCode::Tab) {
-                            let fwd = self.camera.forward();
-                            self.navigation.lock_nearest_to_crosshair(
-                                [fwd.x, fwd.y, fwd.z],
-                                self.galactic_position,
-                            );
-                            if let Some(target) = &self.navigation.locked_target {
-                                log::info!("LOCKED: {} ({:.2} ly)", target.catalog_name, target.distance_ly);
-                                self.audio.play_sfx(sa_audio::SfxId::Confirm, None);
-                            } else {
-                                log::warn!("No star in crosshair cone");
+                            // Project all nearby stars to screen space, pick closest to center.
+                            // This guarantees we lock what the player is LOOKING at.
+                            if let Some(gpu) = &self.gpu {
+                                let sw = gpu.config.width as f32;
+                                let sh = gpu.config.height as f32;
+                                let cx = sw / 2.0;
+                                let cy = sh / 2.0;
+                                let aspect = sw / sh;
+                                let vp = self.camera.view_projection_matrix(aspect);
+                                let ly_to_m: f64 = 9.461e15;
+
+                                let mut best_screen_dist = f32::MAX;
+                                let mut best_idx: Option<usize> = None;
+
+                                for (i, star) in self.navigation.nearby_stars.iter().enumerate() {
+                                    let dx = ((star.galactic_pos.x - self.galactic_position.x) * ly_to_m) as f32;
+                                    let dy = ((star.galactic_pos.y - self.galactic_position.y) * ly_to_m) as f32;
+                                    let dz = ((star.galactic_pos.z - self.galactic_position.z) * ly_to_m) as f32;
+                                    let clip = vp * glam::Vec4::new(dx, dy, dz, 1.0);
+                                    if clip.w <= 0.0 { continue; } // behind camera
+                                    let sx = (clip.x / clip.w * 0.5 + 0.5) * sw;
+                                    let sy = (1.0 - (clip.y / clip.w * 0.5 + 0.5)) * sh;
+                                    let screen_dist = ((sx - cx).powi(2) + (sy - cy).powi(2)).sqrt();
+                                    if screen_dist < best_screen_dist {
+                                        best_screen_dist = screen_dist;
+                                        best_idx = Some(i);
+                                    }
+                                }
+
+                                if let Some(idx) = best_idx {
+                                    self.navigation.lock_target(idx);
+                                    if let Some(target) = &self.navigation.locked_target {
+                                        log::info!("LOCKED: {} ({:.2} ly, {:.0}px from center)",
+                                            target.catalog_name, target.distance_ly, best_screen_dist);
+                                        self.audio.play_sfx(sa_audio::SfxId::Confirm, None);
+                                    }
+                                } else {
+                                    log::warn!("No star visible on screen");
+                                }
                             }
                         }
                         if self.input.keyboard.just_pressed(KeyCode::Digit3) {
