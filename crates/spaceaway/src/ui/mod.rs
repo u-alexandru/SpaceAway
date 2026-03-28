@@ -135,9 +135,11 @@ impl UiSystem {
     }
 
     /// UI scale factor based on screen height. Designed at 1080p.
-    /// At 720p: 0.67x. At 1440p: 1.33x. At 4K: 2.0x.
+    /// Multiplied by 1.5 base to ensure readability on HiDPI/Retina.
+    /// At 720 logical (1440 physical): 1.5 * 1440/1080 = 2.0x.
+    /// At 1080 physical: 1.5x. At 4K: 1.5 * 2160/1080 = 3.0x.
     fn ui_scale(&self) -> f32 {
-        (self.screen_height as f32 / REFERENCE_HEIGHT).max(0.5)
+        (self.screen_height as f32 / REFERENCE_HEIGHT * 1.5).max(1.0)
     }
 
     /// Get the helm monitor texture view for binding in the screen pipeline.
