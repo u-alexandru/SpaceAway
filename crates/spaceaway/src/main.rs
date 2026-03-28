@@ -1050,15 +1050,26 @@ impl ApplicationHandler for App {
                         } else {
                             "WALK".to_string()
                         };
+                        // Interaction feedback in title
+                        let hover_info = if let Some(interaction) = &self.interaction {
+                            if let Some(id) = interaction.hovered() {
+                                if let Some(inter) = interaction.get(id) {
+                                    format!(" | [{}]", inter.label)
+                                } else { String::new() }
+                            } else { String::new() }
+                        } else { String::new() };
+                        let engine_info = if let Some(ship) = &self.ship {
+                            format!(" | Engine:{} Throttle:{:.0}%",
+                                if ship.engine_on { "ON" } else { "OFF" },
+                                ship.throttle * 100.0)
+                        } else { String::new() };
+
                         window.set_title(&format!(
-                            "SpaceAway | {:.0} FPS | {} | frame {:.1}ms | player {:.1}ms | stars {:.1}ms ({}) | render {:.1}ms | draws {}",
+                            "SpaceAway | {:.0} FPS | {}{}{} | draws {}",
                             self.perf.fps,
                             helm_status,
-                            self.perf.total_us as f64 / 1000.0,
-                            self.perf.player_us as f64 / 1000.0,
-                            self.perf.stars_us as f64 / 1000.0,
-                            self.perf.star_count,
-                            self.perf.render_us as f64 / 1000.0,
+                            hover_info,
+                            engine_info,
                             self.perf.draw_calls,
                         ));
                     }
