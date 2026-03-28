@@ -55,3 +55,5 @@ csgrs = { version = "0.20", default-features = false, features = ["f32", "earcut
 nalgebra = "0.33"
 sa_meshgen = { path = "crates/sa_meshgen" }
 sa_ship = { path = "crates/sa_ship" }
+egui = "0.34"
+egui-wgpu = { version = "0.34", default-features = false }
