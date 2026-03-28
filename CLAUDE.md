@@ -192,12 +192,29 @@ Primary target: macOS (Metal via wgpu). Secondary: Windows (DX12/Vulkan via wgpu
 - `2026-03-28-travel-system-design.md` — three-tier drive system (Impulse/Cruise/Warp), fuel economy, visual effects
 - `2026-03-28-solar-system-from-space-design.md` — procedural solar systems, planet rendering, navigation, 1:1 scale
 - `2026-03-28-main-menu-design.md` — main menu with random celestial background scenes
+- `2026-03-28-visor-hud-design.md` — suit visor HUD with Orbitron font, degradation system
+- `2026-03-28-audio-system-design.md` — 5-channel spatial audio, computer voice, context music
 
 ## Upcoming Features (prioritized)
 
-1. **Audio (`sa_audio` crate)** — 3100 WAV sci-fi sounds available. Engine states, drive transitions, UI clicks, space ambience, silence. Uses `rodio` crate for WAV playback.
-2. **Main menu** — random celestial background, minimal text UI, atmospheric quotes
-3. **Planet LOD** — distance-based icosphere subdivision switching (point → disk → sphere → detailed)
-4. **CDLOD terrain + landing** — cube-sphere quadtree, OpenSimplex2 fBm, walk on planet surfaces (`sa_terrain` crate)
-5. **Resource gathering** — asteroid mining, gas giant scooping, exotic matter deposits
-6. **Navigation console** — full 3D star map, route planning, ship database with bookmarks
+1. **CDLOD terrain + landing** — cube-sphere quadtree, OpenSimplex2 fBm, walk on planet surfaces (`sa_terrain` crate)
+2. **Resource gathering** — asteroid mining, gas giant scooping, exotic matter deposits
+3. **Navigation console** — full 3D star map, route planning, ship database with bookmarks
+4. **Alpha-blend render pass** — proper transparent atmosphere shells and planetary rings
+5. **FBX/GLTF asset import** — load purchased 3D models (buttons, levers) via `gltf` crate
+6. **Save/load system** — persist universe state, ship position, discoveries
+
+## Planned Library Adoptions
+
+Libraries evaluated for future integration, in priority order:
+
+| Library | Crate | Purpose | When to adopt |
+|---------|-------|---------|---------------|
+| **fastnoise-lite** | `fastnoise-lite` | SIMD noise (5-10x faster than `noise` crate) | Before CDLOD terrain — noise is the bottleneck |
+| **gltf** | `gltf` | Load 3D models (GLTF/GLB format) | When integrating purchased mesh assets |
+| **kira** | `kira` | Advanced audio engine (replaces rodio) | When adding reverb, filters, advanced spatial audio |
+| **tracy-client** | `tracy-client` | Frame profiler with timeline visualizer | When optimizing terrain/rendering performance |
+| **rkyv** or **bincode** | `rkyv` / `bincode` | Fast serialization for save/load | When building save system |
+| **wgpu-profiler** | `wgpu-profiler` | GPU render pass timing | When optimizing GPU-heavy features |
+| **quinn** | `quinn` | QUIC networking for P2P coop | Phase 6 (multiplayer) |
+| **naga_oil** | `naga_oil` | WGSL shader includes/composition | When shaders get large and duplicate code |
