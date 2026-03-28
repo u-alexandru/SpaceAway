@@ -261,6 +261,24 @@ impl Renderer {
             // Blit half-res sky to main framebuffer (additive blend, no depth write)
             self.sky_renderer.blit_to_main(&mut pass);
 
+            // Draw sky-dome elements BEFORE geometry so that opaque objects
+            // (ship, planets) naturally overwrite them. Stars/nebulae paint
+            // the full sky background; geometry paints on top.
+            // (With reversed-Z, far objects have depth near 0. Opaque geometry
+            // at any distance has depth > 0 and overwrites via GreaterEqual.)
+
+            // Stars
+            pass.set_pipeline(&self.star_field.pipeline);
+            pass.set_bind_group(0, &self.star_field.bind_group, &[]);
+            pass.set_vertex_buffer(0, self.star_field.vertex_buffer.slice(..));
+            pass.draw(0..6, 0..self.star_field.star_count);
+
+            // Nebulae (alpha blended, no depth write)
+            self.nebula_renderer.render(&mut pass);
+
+            // Distant galaxies (same pipeline as nebulae)
+            self.galaxy_renderer.render(&mut pass);
+
             // Draw geometry — collect instance buffers up-front so they
             // live as long as the render pass (the pass borrows their slices).
             let instance_buffers: Vec<wgpu::Buffer> = draw_commands
@@ -362,18 +380,7 @@ impl Renderer {
                 }
             }
 
-            // Draw stars
-            pass.set_pipeline(&self.star_field.pipeline);
-            pass.set_bind_group(0, &self.star_field.bind_group, &[]);
-            pass.set_vertex_buffer(0, self.star_field.vertex_buffer.slice(..));
-            // 6 vertices per star (2 triangles = billboard quad), instanced per star
-            pass.draw(0..6, 0..self.star_field.star_count);
-
-            // Draw nebulae (after stars, alpha blended, no depth write)
-            self.nebula_renderer.render(&mut pass);
-
-            // Draw distant galaxies (same pipeline as nebulae, smaller/dimmer)
-            self.galaxy_renderer.render(&mut pass);
+            // Stars, nebulae, and galaxies were rendered before geometry (above).
         }
 
         Some(FrameContext {
