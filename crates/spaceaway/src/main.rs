@@ -944,9 +944,13 @@ impl ApplicationHandler for App {
                     self.write_debug_state();
                 }
 
-                // Always update query pipeline after physics step (needed for raycasting)
-                self.physics.update_query_pipeline();
+                // Query pipeline already updated in walk branch. Only update in
+                // non-walk modes (helm/fly don't update it).
+                if self.fly_mode || self.helm.as_ref().map(|h| h.is_seated()).unwrap_or(false) {
+                    self.physics.update_query_pipeline();
+                }
 
+                let t_interaction = Instant::now();
                 // --- Interaction (runs in both standing and seated modes) ---
                 let is_seated = self.helm.as_ref()
                     .map(|h| h.is_seated())
@@ -1153,9 +1157,9 @@ impl ApplicationHandler for App {
                     }
                 }
 
+                let interaction_us = t_interaction.elapsed().as_micros() as u64;
                 self.perf.player_us = t0.elapsed().as_micros() as u64;
-                // Note: player_us includes ALL game logic (physics, ship, interactions, survival, UI sync).
-                // For detailed breakdown, check individual timers when debugging.
+                self.perf.stars_us = interaction_us; // repurpose stars_us for interaction timing
 
                 // --- Star regen ---
                 let t2 = Instant::now();
