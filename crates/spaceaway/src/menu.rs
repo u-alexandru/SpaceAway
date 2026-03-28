@@ -253,32 +253,40 @@ impl MainMenu {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ctx, |ui| {
+                let screen = ctx.screen_rect();
+
+                // Title + menu in center
                 ui.vertical_centered(|ui| {
-                    ui.add_space(ui.available_height() * 0.25);
+                    ui.add_space(screen.height() * 0.28);
                     ui.label(egui::RichText::new("S  P  A  C  E  A  W  A  Y")
                         .color(egui::Color32::from_rgba_unmultiplied(200, 205, 215, a(1.0)))
-                        .size(42.0 * s).strong());
-                    ui.add_space(60.0 * s);
+                        .size(56.0 * s).strong());
+                    ui.add_space(80.0 * s);
 
-                    let btn = egui::RichText::new("▸  Continue")
+                    let btn = egui::RichText::new("Continue")
                         .color(egui::Color32::from_rgba_unmultiplied(180, 185, 200, a(1.0)))
-                        .size(24.0 * s);
+                        .size(30.0 * s);
                     if ui.add(egui::Label::new(btn).sense(egui::Sense::click())).clicked() {
                         start_game = true;
                     }
-                    ui.add_space(15.0 * s);
-                    ui.label(egui::RichText::new("▸  New Game")
+                    ui.add_space(20.0 * s);
+                    ui.label(egui::RichText::new("New Game")
                         .color(egui::Color32::from_rgba_unmultiplied(80, 80, 90, a(0.35)))
-                        .size(24.0 * s));
-                    ui.add_space(15.0 * s);
-                    ui.label(egui::RichText::new("▸  Settings")
+                        .size(30.0 * s));
+                    ui.add_space(20.0 * s);
+                    ui.label(egui::RichText::new("Settings")
                         .color(egui::Color32::from_rgba_unmultiplied(80, 80, 90, a(0.35)))
-                        .size(24.0 * s));
-                    ui.add_space(60.0 * s);
-                    ui.label(egui::RichText::new(self.quote)
-                        .color(egui::Color32::from_rgba_unmultiplied(120, 125, 140, a(0.6)))
-                        .size(16.0 * s).italics());
+                        .size(30.0 * s));
                 });
+
+                // Quote pinned to bottom center
+                egui::Area::new(egui::Id::new("menu_quote"))
+                    .fixed_pos(egui::pos2(screen.center().x - 200.0 * s, screen.bottom() - 50.0 * s))
+                    .show(ctx, |ui| {
+                        ui.label(egui::RichText::new(self.quote)
+                            .color(egui::Color32::from_rgba_unmultiplied(120, 125, 140, a(0.6)))
+                            .size(16.0 * s).italics());
+                    });
             });
         start_game
     }
