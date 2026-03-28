@@ -196,6 +196,8 @@ struct App {
     sensors_quad: Option<ScreenQuad>,
     /// Bind group for the sensors monitor texture.
     sensors_bind_group: Option<wgpu::BindGroup>,
+    /// Drive controller (impulse/cruise/warp).
+    drive: sa_ship::DriveController,
     /// Ship survival resources (fuel, oxygen, power).
     ship_resources: ShipResources,
     /// Resource deposits in the game world.
@@ -268,6 +270,7 @@ impl App {
             screen_bind_group: None,
             sensors_quad: None,
             sensors_bind_group: None,
+            drive: sa_ship::DriveController::new(),
             ship_resources: ShipResources::new(),
             deposits: generate_deposits(42),
             gathered: HashSet::new(),
@@ -786,12 +789,43 @@ impl ApplicationHandler for App {
                             false
                         };
 
+                        // Drive mode selection (1/2/3) while seated at helm
+                        if self.input.keyboard.just_pressed(KeyCode::Digit1) {
+                            self.drive.request_disengage();
+                            log::info!("Drive: IMPULSE");
+                        }
+                        if self.input.keyboard.just_pressed(KeyCode::Digit2) {
+                            if self.drive.request_engage(sa_ship::DriveMode::Cruise) {
+                                log::info!("Drive: CRUISE engaged");
+                            }
+                        }
+                        if self.input.keyboard.just_pressed(KeyCode::Digit3) {
+                            if self.ship_resources.exotic_fuel > 0.0 {
+                                if self.drive.request_engage(sa_ship::DriveMode::Warp) {
+                                    log::info!("Drive: WARP spooling...");
+                                }
+                            } else {
+                                log::warn!("Cannot engage warp: no exotic fuel");
+                            }
+                        }
+
+                        // Update drive spool progress
+                        self.drive.update(dt);
+
+                        // Map throttle lever to drive speed when in cruise/warp
+                        if self.drive.mode() != sa_ship::DriveMode::Impulse {
+                            if let Some(ship) = &self.ship {
+                                self.drive.set_speed_fraction(ship.throttle);
+                            }
+                        }
+
                         // Apply continuous thrust from throttle lever + engine button
                         ship.apply_thrust(&mut self.physics);
 
                         if wants_stand
                             && let Some(helm) = &mut self.helm
                         {
+                            self.drive.request_disengage();
                             helm.stand_up();
                             // Re-enable player and teleport to ship's current position
                             // (ship may have moved while seated)
@@ -821,6 +855,29 @@ impl ApplicationHandler for App {
                     let physics_dt = dt.min(1.0 / 30.0);
                     if physics_dt > 0.0 {
                         self.physics.step(physics_dt);
+                    }
+
+                    // Update galactic position based on drive speed
+                    if self.drive.mode() != sa_ship::DriveMode::Impulse {
+                        let direction = if let Some(ship) = &self.ship {
+                            if let Some(body) = self.physics.get_body(ship.body_handle) {
+                                let rot = body.rotation();
+                                let fwd = rot * nalgebra::Vector3::new(0.0, 0.0, -1.0);
+                                [fwd.x as f64, fwd.y as f64, fwd.z as f64]
+                            } else {
+                                [0.0, 0.0, -1.0]
+                            }
+                        } else {
+                            [0.0, 0.0, -1.0]
+                        };
+                        let delta = drive_integration::galactic_position_delta(
+                            &self.drive,
+                            direction,
+                            dt as f64,
+                        );
+                        self.galactic_position.x += delta[0];
+                        self.galactic_position.y += delta[1];
+                        self.galactic_position.z += delta[2];
                     }
 
                     // Interior colliders stay at LOCAL origin — ship-local collision
@@ -1095,7 +1152,30 @@ impl ApplicationHandler for App {
                 {
                     let throttle = self.ship.as_ref().map(|s| s.throttle).unwrap_or(0.0);
                     let engine_on = self.ship.as_ref().map(|s| s.engine_on).unwrap_or(false);
-                    self.ship_resources.update(dt, throttle, engine_on);
+                    let is_seated = self.helm.as_ref().map(|h| h.is_seated()).unwrap_or(false);
+                    if is_seated {
+                        self.ship_resources.update_with_drive(
+                            dt,
+                            throttle,
+                            engine_on,
+                            self.drive.mode(),
+                            self.drive.speed_fraction(),
+                        );
+                    } else {
+                        self.ship_resources.update_with_drive(
+                            dt,
+                            throttle,
+                            engine_on,
+                            sa_ship::DriveMode::Impulse,
+                            0.0,
+                        );
+                    }
+
+                    // Emergency warp drop on empty exotic fuel
+                    if self.drive.mode() == sa_ship::DriveMode::Warp && self.ship_resources.exotic_fuel <= 0.0 {
+                        self.drive.request_disengage();
+                        log::warn!("WARP DRIVE FAILED — exotic fuel exhausted!");
+                    }
 
                     // Low fuel consequence: reduce max thrust linearly below 20%
                     if let Some(ship) = &mut self.ship {
