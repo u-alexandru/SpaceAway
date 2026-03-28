@@ -1030,21 +1030,32 @@ impl ApplicationHandler for App {
                         let mut cmds = Vec::new();
 
                         // Ship hull
+                        // Ship transform from physics body (position + rotation)
+                        let ship_transform = if let Some(ship) = &self.ship {
+                            if let Some(body) = self.physics.get_body(ship.body_handle) {
+                                let p = body.translation();
+                                let r = body.rotation();
+                                let rot = glam::Quat::from_xyzw(r.i, r.j, r.k, r.w);
+                                Mat4::from_rotation_translation(rot, Vec3::new(p.x, p.y, p.z))
+                            } else { Mat4::IDENTITY }
+                        } else { Mat4::IDENTITY };
+
+                        // Hull mesh at ship's world position/rotation
                         if let Some(hull_handle) = self.ship_part_mesh {
                             cmds.push(DrawCommand {
                                 mesh: hull_handle,
-                                model_matrix: Mat4::IDENTITY,
+                                model_matrix: ship_transform,
                             });
                         }
 
-                        // Interactable meshes at their positions
+                        // Interactable meshes in ship-local space (transformed by ship)
                         let layout = sa_ship::station::cockpit_layout();
                         for (i, handle) in self.interactable_meshes.iter().enumerate() {
                             if let Some(placement) = layout.interactables.get(i) {
                                 let pos = placement.position;
                                 cmds.push(DrawCommand {
                                     mesh: *handle,
-                                    model_matrix: Mat4::from_translation(pos),
+                                    model_matrix: ship_transform * Mat4::from_translation(pos),
                                 });
                             }
                         }
