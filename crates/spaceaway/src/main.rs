@@ -720,48 +720,90 @@ impl ApplicationHandler for App {
                                 self.ship_part_mesh = None;
                                 log::info!("Returned to normal scene view");
                             }
+                            KeyCode::Tab => {
+                                // Lock nearest star for navigation
+                                self.navigation.update_nearby(self.galactic_position);
+                                if !self.navigation.nearby_stars.is_empty() {
+                                    self.navigation.lock_target(0);
+                                    if let Some(target) = &self.navigation.locked_target {
+                                        log::info!("LOCKED: {} ({:.2} ly away)", target.catalog_name, target.distance_ly);
+                                    }
+                                } else {
+                                    log::warn!("No nearby stars found");
+                                }
+                            }
                             KeyCode::Digit8 => {
-                                // Debug: jump to nearest star system
+                                // Debug: jump to nearest star, teleport next to first planet
                                 self.navigation.update_nearby(self.galactic_position);
                                 if let Some(star) = self.navigation.nearby_stars.first().cloned() {
                                     log::info!("Jumping to nearest star: {} ({:.2} ly)", star.catalog_name, star.distance_ly);
-                                    // Teleport to 40 AU from the star (inside gravity well)
-                                    let au_in_ly = 1.581e-5_f64;
-                                    self.galactic_position = WorldPos::new(
-                                        star.galactic_pos.x + 40.0 * au_in_ly,
-                                        star.galactic_pos.y,
-                                        star.galactic_pos.z,
+
+                                    // Generate the system to find the first planet's position
+                                    let sector_coord = sa_universe::SectorCoord::new(
+                                        star.id.sector_x().into(),
+                                        star.id.sector_y().into(),
+                                        star.id.sector_z().into(),
                                     );
-                                    self.camera.position = self.galactic_position;
-                                    self.drive.request_disengage();
+                                    let sector = sa_universe::sector::generate_sector(
+                                        MasterSeed(42),
+                                        sector_coord,
+                                    );
 
-                                    // Force star regen at new position
-                                    self.star_streaming.force_load(self.galactic_position);
-                                    if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
-                                        let verts = self.star_streaming.build_vertices(self.galactic_position);
-                                        renderer.star_field.update_star_buffer(&gpu.device, &verts);
-                                    }
+                                    if let Some(placed) = sector.stars.iter().find(|s| s.id == star.id) {
+                                        let system = sa_universe::generate_system(&placed.star, star.id.0);
 
-                                    // Load the system
-                                    if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
-                                        let sector_coord = sa_universe::SectorCoord::new(
-                                            star.id.sector_x().into(),
-                                            star.id.sector_y().into(),
-                                            star.id.sector_z().into(),
+                                        // Teleport near the first planet (or near the star if no planets)
+                                        let au_in_ly = 1.581e-5_f64;
+                                        let meters_in_ly = 1.0 / 9.461e15_f64;
+                                        let (offset_ly, description) = if let Some(planet) = system.planets.first() {
+                                            // Place camera 3x planet radius from the planet surface
+                                            let planet_radius_m = planet.radius_earth as f64 * 6_371_000.0;
+                                            let view_dist_m = planet_radius_m * 3.0;
+                                            let planet_orbital_ly = planet.orbital_radius_au as f64 * au_in_ly;
+                                            // Offset from star: planet orbital distance + viewing distance
+                                            let offset = planet_orbital_ly + view_dist_m * meters_in_ly;
+                                            (offset, format!(
+                                                "Planet 1: {:?} {:.0}km at {:.2}AU — viewing from {:.0}km",
+                                                planet.sub_type,
+                                                planet.radius_earth * 6371.0,
+                                                planet.orbital_radius_au,
+                                                view_dist_m / 1000.0,
+                                            ))
+                                        } else {
+                                            // No planets — teleport near star surface
+                                            let star_radius_m = placed.star.radius as f64 * 696_000_000.0;
+                                            let offset = star_radius_m * 5.0 * meters_in_ly;
+                                            (offset, "No planets — near star".to_string())
+                                        };
+
+                                        self.galactic_position = WorldPos::new(
+                                            star.galactic_pos.x + offset_ly,
+                                            star.galactic_pos.y,
+                                            star.galactic_pos.z,
                                         );
-                                        let sector = sa_universe::sector::generate_sector(
-                                            MasterSeed(42),
-                                            sector_coord,
-                                        );
-                                        if let Some(placed) = sector.stars.iter().find(|s| s.id == star.id) {
-                                            let system = solar_system::ActiveSystem::load(
+                                        self.camera.position = self.galactic_position;
+                                        self.drive.request_disengage();
+
+                                        // Force star regen
+                                        self.star_streaming.force_load(self.galactic_position);
+                                        if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
+                                            let verts = self.star_streaming.build_vertices(self.galactic_position);
+                                            renderer.star_field.update_star_buffer(&gpu.device, &verts);
+                                        }
+
+                                        // Load the system
+                                        if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
+                                            let sys = solar_system::ActiveSystem::load(
                                                 star.id,
                                                 placed,
                                                 &mut renderer.mesh_store,
                                                 &gpu.device,
                                             );
-                                            log::info!("System loaded: {} bodies", system.body_count());
-                                            self.active_system = Some(system);
+                                            log::info!("System loaded: {} bodies — {}", sys.body_count(), description);
+                                            for line in sys.body_summary() {
+                                                log::info!("  {}", line);
+                                            }
+                                            self.active_system = Some(sys);
                                         }
                                     }
                                     self.navigation.clear_target();
