@@ -1,6 +1,8 @@
 mod drive_integration;
+mod navigation;
 mod ship_colliders;
 mod ship_setup;
+mod solar_system;
 mod star_streaming;
 mod ui;
 
@@ -202,12 +204,16 @@ struct App {
     drive_visuals: drive_integration::DriveVisualState,
     /// Ship survival resources (fuel, oxygen, power).
     ship_resources: ShipResources,
+    /// Active solar system (set when the player enters one).
+    active_system: Option<solar_system::ActiveSystem>,
     /// Resource deposits in the game world.
     deposits: Vec<ResourceDeposit>,
     /// IDs of deposits that have been gathered.
     gathered: HashSet<u64>,
     /// Index of the nearest gatherable deposit (within range), if any.
     nearest_gatherable: Option<usize>,
+    /// Navigation: nearby stars, lock-on, gravity well detection.
+    navigation: navigation::Navigation,
 }
 
 impl App {
@@ -278,6 +284,7 @@ impl App {
             deposits: generate_deposits(42),
             gathered: HashSet::new(),
             nearest_gatherable: None,
+            navigation: navigation::Navigation::new(seed),
         }
     }
 
