@@ -1,3 +1,4 @@
+mod drive_integration;
 mod ship_colliders;
 mod ship_setup;
 mod star_streaming;
@@ -159,6 +160,11 @@ struct App {
     teleport_counter: u64,
     fly_mode: bool,
     fly_speed: f64, // light-years per second
+    /// Ship's position in the galaxy (light-years). Separate from camera/physics
+    /// positions which are in meters. Used for star field and universe queries.
+    /// In walk/ship mode this is effectively frozen (m/s → ly/s ≈ 0).
+    /// In fly mode this moves at ly/s. Teleport sets it directly.
+    galactic_position: WorldPos,
     /// Current ship part mesh handle (for key 6/7 viewing, also the hull in normal mode).
     ship_part_mesh: Option<sa_core::Handle<sa_render::MeshMarker>>,
     /// Index into all_ship_parts() for cycling (key 6).
@@ -246,6 +252,7 @@ impl App {
             teleport_counter: 0,
             fly_mode: false,
             fly_speed: 5.0,
+            galactic_position: WorldPos::ORIGIN,
             ship_part_mesh: None,
             ship_part_index: 0,
             view_mode: 0,
@@ -280,7 +287,7 @@ impl App {
         self.distant_galaxies = sa_universe::generate_distant_galaxies(seed);
 
         // Force-load initial star field (instant, no fade on first frame)
-        self.star_streaming.force_load(self.camera.position);
+        self.star_streaming.force_load(self.galactic_position);
 
         // Upload nebula instances.
         let nebula_instances = nebulae_to_instances(&self.nebulae, WorldPos::ORIGIN);
@@ -344,7 +351,7 @@ impl App {
     /// has moved more than `STAR_REGEN_THRESHOLD` since the last generation,
     /// or if stars have never been generated yet.
     fn maybe_regenerate_stars(&mut self) {
-        let observer = self.camera.position;
+        let observer = self.galactic_position;
         let dt = self.time.delta_seconds() as f32;
 
         let needs_rebuild = self.star_streaming.update(observer, dt);
@@ -412,7 +419,8 @@ impl App {
             }
         };
 
-        self.camera.position = WorldPos::new(x, y, z);
+        self.galactic_position = WorldPos::new(x, y, z);
+        self.camera.position = self.galactic_position;
 
         // Move the physics body to the new position so the next frame doesn't
         // overwrite the camera with the old body position.
@@ -437,12 +445,12 @@ impl App {
             let start = Instant::now();
 
             // Force-load all sectors at new position (instant, no fade)
-            self.star_streaming.force_load(self.camera.position);
-            let vertices = self.star_streaming.build_vertices(self.camera.position);
+            self.star_streaming.force_load(self.galactic_position);
+            let vertices = self.star_streaming.build_vertices(self.galactic_position);
             renderer.star_field.update_star_buffer(&gpu.device, &vertices);
 
             // Refresh nebula instances
-            let nebula_instances = nebulae_to_instances(&self.nebulae, self.camera.position);
+            let nebula_instances = nebulae_to_instances(&self.nebulae, self.galactic_position);
             renderer.nebula_renderer.update_instances(&gpu.device, &nebula_instances);
 
             log::info!(
@@ -730,7 +738,8 @@ impl ApplicationHandler for App {
                 let dt = self.time.delta_seconds() as f32;
 
                 if self.fly_mode {
-                    // Fly mode: move camera directly in light-years, bypass physics
+                    // Fly mode: move galactic position in light-years, bypass physics.
+                    // camera.position tracks galactic_position in fly mode.
                     let (dx, dy) = self.input.mouse.delta();
                     self.camera.rotate(dx * 0.003, -dy * 0.003);
 
@@ -740,29 +749,31 @@ impl ApplicationHandler for App {
 
                     use winit::keyboard::KeyCode as KC;
                     if self.input.keyboard.is_pressed(KC::KeyW) {
-                        self.camera.position.x += fwd.x as f64 * speed;
-                        self.camera.position.y += fwd.y as f64 * speed;
-                        self.camera.position.z += fwd.z as f64 * speed;
+                        self.galactic_position.x += fwd.x as f64 * speed;
+                        self.galactic_position.y += fwd.y as f64 * speed;
+                        self.galactic_position.z += fwd.z as f64 * speed;
                     }
                     if self.input.keyboard.is_pressed(KC::KeyS) {
-                        self.camera.position.x -= fwd.x as f64 * speed;
-                        self.camera.position.y -= fwd.y as f64 * speed;
-                        self.camera.position.z -= fwd.z as f64 * speed;
+                        self.galactic_position.x -= fwd.x as f64 * speed;
+                        self.galactic_position.y -= fwd.y as f64 * speed;
+                        self.galactic_position.z -= fwd.z as f64 * speed;
                     }
                     if self.input.keyboard.is_pressed(KC::KeyA) {
-                        self.camera.position.x -= right.x as f64 * speed;
-                        self.camera.position.z -= right.z as f64 * speed;
+                        self.galactic_position.x -= right.x as f64 * speed;
+                        self.galactic_position.z -= right.z as f64 * speed;
                     }
                     if self.input.keyboard.is_pressed(KC::KeyD) {
-                        self.camera.position.x += right.x as f64 * speed;
-                        self.camera.position.z += right.z as f64 * speed;
+                        self.galactic_position.x += right.x as f64 * speed;
+                        self.galactic_position.z += right.z as f64 * speed;
                     }
                     if self.input.keyboard.is_pressed(KC::Space) {
-                        self.camera.position.y += speed;
+                        self.galactic_position.y += speed;
                     }
                     if self.input.keyboard.is_pressed(KC::ShiftLeft) {
-                        self.camera.position.y -= speed;
+                        self.galactic_position.y -= speed;
                     }
+                    // Camera follows galactic position in fly mode
+                    self.camera.position = self.galactic_position;
                 } else if self.helm.as_ref().map(|h| h.is_seated()).unwrap_or(false) {
                     // --- Seated at helm: WASD rotates ship, mouse free-looks ---
                     if let Some(ship) = &self.ship {
@@ -1326,6 +1337,7 @@ impl ApplicationHandler for App {
                         &commands,
                         &screen_draws,
                         Vec3::new(0.5, -0.8, -0.3),
+                        self.galactic_position,
                     ) {
                         // 5. Render HUD overlay via egui
                         if let Some(ui_sys) = &mut self.ui_system {
