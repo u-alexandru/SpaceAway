@@ -813,16 +813,20 @@ impl ApplicationHandler for App {
                                     let cy = sh / 2.0;
                                     let aspect = sw / sh;
                                     let vp = self.camera.view_projection_matrix(aspect);
-                                    let ly_to_m: f64 = 9.461e15;
 
                                     let mut best_screen_dist = f32::MAX;
                                     let mut best_idx: Option<usize> = None;
 
                                     for (i, star) in self.navigation.nearby_stars.iter().enumerate() {
-                                        let dx = ((star.galactic_pos.x - self.galactic_position.x) * ly_to_m) as f32;
-                                        let dy = ((star.galactic_pos.y - self.galactic_position.y) * ly_to_m) as f32;
-                                        let dz = ((star.galactic_pos.z - self.galactic_position.z) * ly_to_m) as f32;
-                                        let clip = vp * glam::Vec4::new(dx, dy, dz, 1.0);
+                                        // Project as direction on sky dome (same as star renderer)
+                                        let dx = (star.galactic_pos.x - self.galactic_position.x) as f32;
+                                        let dy = (star.galactic_pos.y - self.galactic_position.y) as f32;
+                                        let dz = (star.galactic_pos.z - self.galactic_position.z) as f32;
+                                        let len = (dx*dx + dy*dy + dz*dz).sqrt();
+                                        if len < 0.001 { continue; }
+                                        // Normalize to direction, place on sky dome at 90000 units
+                                        let dir = glam::Vec3::new(dx/len, dy/len, dz/len) * 90000.0;
+                                        let clip = vp * glam::Vec4::new(dir.x, dir.y, dir.z, 1.0);
                                         if clip.w <= 0.0 { continue; }
                                         let sx = (clip.x / clip.w * 0.5 + 0.5) * sw;
                                         let sy = (1.0 - (clip.y / clip.w * 0.5 + 0.5)) * sh;
@@ -1199,16 +1203,18 @@ impl ApplicationHandler for App {
                                 let cy = sh / 2.0;
                                 let aspect = sw / sh;
                                 let vp = self.camera.view_projection_matrix(aspect);
-                                let ly_to_m: f64 = 9.461e15;
 
                                 let mut best_screen_dist = f32::MAX;
                                 let mut best_idx: Option<usize> = None;
 
                                 for (i, star) in self.navigation.nearby_stars.iter().enumerate() {
-                                    let dx = ((star.galactic_pos.x - self.galactic_position.x) * ly_to_m) as f32;
-                                    let dy = ((star.galactic_pos.y - self.galactic_position.y) * ly_to_m) as f32;
-                                    let dz = ((star.galactic_pos.z - self.galactic_position.z) * ly_to_m) as f32;
-                                    let clip = vp * glam::Vec4::new(dx, dy, dz, 1.0);
+                                    let dx = (star.galactic_pos.x - self.galactic_position.x) as f32;
+                                    let dy = (star.galactic_pos.y - self.galactic_position.y) as f32;
+                                    let dz = (star.galactic_pos.z - self.galactic_position.z) as f32;
+                                    let len = (dx*dx + dy*dy + dz*dz).sqrt();
+                                    if len < 0.001 { continue; }
+                                    let dir = glam::Vec3::new(dx/len, dy/len, dz/len) * 90000.0;
+                                    let clip = vp * glam::Vec4::new(dir.x, dir.y, dir.z, 1.0);
                                     if clip.w <= 0.0 { continue; } // behind camera
                                     let sx = (clip.x / clip.w * 0.5 + 0.5) * sw;
                                     let sy = (1.0 - (clip.y / clip.w * 0.5 + 0.5)) * sh;
