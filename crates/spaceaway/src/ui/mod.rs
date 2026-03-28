@@ -27,6 +27,9 @@ pub struct HudState {
     pub gather_available: bool,
 }
 
+/// Reference height for UI scaling (designed at 1080p).
+const REFERENCE_HEIGHT: f32 = 1080.0;
+
 /// Manages egui context, egui-wgpu renderer, and all UI rendering.
 pub struct UiSystem {
     // --- HUD ---
@@ -129,6 +132,12 @@ impl UiSystem {
     pub fn resize(&mut self, width: u32, height: u32) {
         self.screen_width = width;
         self.screen_height = height;
+    }
+
+    /// UI scale factor based on screen height. Designed at 1080p.
+    /// At 720p: 0.67x. At 1440p: 1.33x. At 4K: 2.0x.
+    fn ui_scale(&self) -> f32 {
+        (self.screen_height as f32 / REFERENCE_HEIGHT).max(0.5)
     }
 
     /// Get the helm monitor texture view for binding in the screen pipeline.
@@ -303,15 +312,16 @@ impl UiSystem {
         view: &wgpu::TextureView,
         hud_state: &HudState,
     ) {
+        let scale = self.ui_scale();
         let screen_descriptor = ScreenDescriptor {
             size_in_pixels: [self.screen_width, self.screen_height],
-            pixels_per_point: 1.0,
+            pixels_per_point: scale,
         };
 
         let raw_input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
-                egui::vec2(self.screen_width as f32, self.screen_height as f32),
+                egui::vec2(self.screen_width as f32 / scale, self.screen_height as f32 / scale),
             )),
             ..Default::default()
         };
@@ -379,15 +389,16 @@ impl UiSystem {
         view: &wgpu::TextureView,
         menu: &crate::menu::MainMenu,
     ) -> bool {
+        let scale = self.ui_scale();
         let screen_descriptor = ScreenDescriptor {
             size_in_pixels: [self.screen_width, self.screen_height],
-            pixels_per_point: 1.0,
+            pixels_per_point: scale,
         };
 
         let raw_input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
-                egui::vec2(self.screen_width as f32, self.screen_height as f32),
+                egui::vec2(self.screen_width as f32 / scale, self.screen_height as f32 / scale),
             )),
             ..Default::default()
         };
