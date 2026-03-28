@@ -26,9 +26,13 @@ pub struct Channels {
     creak_timer: f32,
     // Music
     music_sink: Option<Sink>,
+    music_fading_out: Option<Sink>, // old track fading out during crossfade
     music_context: MusicContext,
     music_gap_timer: f32,
     music_playing: bool,
+    music_volume: f32,        // current fade level 0.0-1.0
+    music_target_volume: f32, // target fade level
+    music_base_volume: f32,   // configured volume (0.4)
     // Voice
     voice_sink: Option<Sink>,
     voice_queue: Vec<VoiceId>,
@@ -57,9 +61,13 @@ impl Channels {
             power_on: false,
             creak_timer: 60.0,
             music_sink: None,
+            music_fading_out: None,
             music_context: MusicContext::Idle,
             music_gap_timer: 5.0,
             music_playing: false,
+            music_volume: 0.0,
+            music_target_volume: 1.0,
+            music_base_volume: 0.4,
             voice_sink: None,
             voice_queue: Vec::new(),
             alarm_sinks: HashMap::new(),
@@ -126,16 +134,21 @@ impl Channels {
 
     /// Switch the music playlist context.
     pub fn set_music_context(&mut self, ctx: MusicContext) {
-        // Only reset if context actually CHANGED
         if ctx == self.music_context {
             return;
         }
         self.music_context = ctx;
-        if let Some(sink) = self.music_sink.take() {
-            sink.stop();
+        // Move current track to fading_out (will be faded by update_music)
+        if let Some(old) = self.music_fading_out.take() {
+            old.stop(); // stop any previous fading track
         }
-        self.music_gap_timer = 2.0;
+        if let Some(current) = self.music_sink.take() {
+            self.music_fading_out = Some(current);
+        }
+        self.music_gap_timer = 3.0; // short gap before new context track
         self.music_playing = false;
+        self.music_volume = 0.0; // new track will fade in
+        self.music_target_volume = 1.0;
     }
 
     // -- SFX ------------------------------------------------------------------
@@ -291,40 +304,62 @@ impl Channels {
     }
 
     fn update_music(&mut self, dt: f32, sounds_root: &Path, master_volume: f32) {
-        if !self.music_playing {
-            self.music_gap_timer -= dt;
-            if self.music_gap_timer <= 0.0 && self.music_gap_timer > -0.1 {
-                log::info!("Music gap expired, attempting to play {:?} context", self.music_context);
+        let fade_speed = 0.5; // 2-second fade (0→1 in 2s)
+
+        // Fade out the old track (from context change)
+        if let Some(ref old_sink) = self.music_fading_out {
+            // Compute the old track's fade-out volume
+            let old_vol = old_sink.volume();
+            let new_vol = (old_vol - fade_speed * dt * self.music_base_volume).max(0.0);
+            if new_vol <= 0.001 {
+                if let Some(s) = self.music_fading_out.take() { s.stop(); }
+            } else {
+                old_sink.set_volume(new_vol);
             }
+        }
+
+        // Fade in the current track
+        if self.music_playing {
+            if self.music_volume < self.music_target_volume {
+                self.music_volume = (self.music_volume + fade_speed * dt).min(self.music_target_volume);
+                if let Some(ref sink) = self.music_sink {
+                    sink.set_volume(self.music_volume * self.music_base_volume * master_volume);
+                }
+            }
+            // Check if track finished
+            if let Some(ref sink) = self.music_sink {
+                if sink.empty() {
+                    self.music_playing = false;
+                    self.music_gap_timer = rand::thread_rng().gen_range(30.0..90.0);
+                }
+            }
+        } else {
+            // Not playing — count down gap timer, then start new track
+            self.music_gap_timer -= dt;
             if self.music_gap_timer <= 0.0 {
                 let tracks = music_tracks(self.music_context);
                 if !tracks.is_empty() {
                     let idx = rand::thread_rng().gen_range(0..tracks.len());
                     let path = sounds_root.join(tracks[idx]);
                     match File::open(&path) {
-                        Ok(file) => {
-                            match Decoder::new(BufReader::new(file)) {
-                                Ok(source) => {
-                                    if let Ok(sink) = Sink::try_new(&self.stream_handle) {
-                                        sink.set_volume(0.4 * master_volume);
-                                        sink.append(source);
-                                        self.music_sink = Some(sink);
-                                        self.music_playing = true;
-                                        log::info!("Music playing: {}", tracks[idx]);
-                                    }
+                        Ok(file) => match Decoder::new(BufReader::new(file)) {
+                            Ok(source) => {
+                                if let Ok(sink) = Sink::try_new(&self.stream_handle) {
+                                    self.music_volume = 0.0; // start silent, fade in
+                                    self.music_target_volume = 1.0;
+                                    sink.set_volume(0.0);
+                                    sink.append(source);
+                                    self.music_sink = Some(sink);
+                                    self.music_playing = true;
+                                    log::info!("Music: {}", tracks[idx]);
                                 }
-                                Err(e) => log::warn!("Music decode error {:?}: {}", path, e),
                             }
-                        }
+                            Err(e) => log::warn!("Music decode error {:?}: {}", path, e),
+                        },
                         Err(e) => log::warn!("Music file not found {:?}: {}", path, e),
                     }
                 }
             }
-        } else if let Some(ref sink) = self.music_sink
-            && sink.empty()
-        {
-            self.music_playing = false;
-            self.music_gap_timer = rand::thread_rng().gen_range(30.0..90.0);
         }
     }
 
