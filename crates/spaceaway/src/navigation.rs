@@ -184,7 +184,18 @@ impl Navigation {
         }
 
         if let Some(idx) = best_idx {
+            let star = &self.nearby_stars[idx];
+            log::info!("Lock-on: {} (dot={:.3}, dist={:.2}ly, dir=[{:.2},{:.2},{:.2}], cam_fwd=[{:.2},{:.2},{:.2}])",
+                star.catalog_name, best_dot, star.distance_ly,
+                {let d=star.galactic_pos.x-galactic_pos.x; let l=(d*d+(star.galactic_pos.y-galactic_pos.y).powi(2)+(star.galactic_pos.z-galactic_pos.z).powi(2)).sqrt(); d/l},
+                {let d=star.galactic_pos.y-galactic_pos.y; let l=((star.galactic_pos.x-galactic_pos.x).powi(2)+d*d+(star.galactic_pos.z-galactic_pos.z).powi(2)).sqrt(); d/l},
+                {let d=star.galactic_pos.z-galactic_pos.z; let l=((star.galactic_pos.x-galactic_pos.x).powi(2)+(star.galactic_pos.y-galactic_pos.y).powi(2)+d*d).sqrt(); d/l},
+                fwd[0], fwd[1], fwd[2],
+            );
             self.locked_target = Some(self.nearby_stars[idx].clone());
+        } else {
+            log::warn!("No star in forward hemisphere ({} nearby stars, fwd=[{:.2},{:.2},{:.2}])",
+                self.nearby_stars.len(), fwd[0], fwd[1], fwd[2]);
         }
     }
 
