@@ -1,4 +1,5 @@
 pub mod camera;
+pub mod icosphere;
 pub mod gpu;
 pub mod mesh;
 pub mod nebula;
