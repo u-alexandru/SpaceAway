@@ -24,7 +24,7 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VertexOutput {
     let pos = positions[idx];
 
     var out: VertexOutput;
-    out.position = vec4<f32>(pos, 0.999, 1.0);
+    out.position = vec4<f32>(pos, 0.001, 1.0); // reversed-Z: 0 = far
     // Convert clip-space [-1,1] to UV [0,1], flip Y for texture coords
     out.uv = vec2<f32>(pos.x * 0.5 + 0.5, 1.0 - (pos.y * 0.5 + 0.5));
     return out;

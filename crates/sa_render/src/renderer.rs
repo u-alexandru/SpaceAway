@@ -250,7 +250,7 @@ impl Renderer {
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.geometry_pipeline.depth_texture,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
+                        load: wgpu::LoadOp::Clear(0.0), // reversed-Z: 0 = infinity
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,

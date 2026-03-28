@@ -17,8 +17,8 @@ impl Camera {
             yaw: 0.0,
             pitch: 0.0,
             fov_y: std::f32::consts::FRAC_PI_4,
-            near: 1.0,
-            far: 1e11, // 100 million km (~0.7 AU) — see nearby planets
+            near: 0.1,
+            far: f32::INFINITY, // reversed-Z infinite projection
         }
     }
 
@@ -64,8 +64,19 @@ impl Camera {
         Mat4::look_to_rh(Vec3::ZERO, self.forward(), Vec3::Y)
     }
 
+    /// Reversed-Z infinite projection matrix.
+    /// Depth 1.0 at near plane, 0.0 at infinity.
+    /// Combined with Depth32Float and GreaterEqual compare, this gives
+    /// sub-millimeter precision near the camera AND renders objects at
+    /// billions of meters (planets at AU distances). No far clip plane.
     pub fn projection_matrix(&self, aspect_ratio: f32) -> Mat4 {
-        Mat4::perspective_rh(self.fov_y, aspect_ratio, self.near, self.far)
+        let f = 1.0 / (self.fov_y / 2.0).tan();
+        glam::Mat4::from_cols(
+            glam::Vec4::new(f / aspect_ratio, 0.0, 0.0, 0.0),
+            glam::Vec4::new(0.0, f, 0.0, 0.0),
+            glam::Vec4::new(0.0, 0.0, 0.0, -1.0),
+            glam::Vec4::new(0.0, 0.0, self.near, 0.0),
+        )
     }
 
     pub fn view_projection_matrix(&self, aspect_ratio: f32) -> Mat4 {

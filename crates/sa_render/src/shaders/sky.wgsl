@@ -33,7 +33,7 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VertexOutput {
     let pos = positions[idx];
 
     var out: VertexOutput;
-    out.position = vec4<f32>(pos, 0.999, 1.0);
+    out.position = vec4<f32>(pos, 0.001, 1.0); // reversed-Z: 0 = far
     out.uv = pos;
     return out;
 }
