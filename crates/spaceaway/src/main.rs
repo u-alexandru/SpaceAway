@@ -360,8 +360,14 @@ impl App {
         let observer = self.galactic_position;
         let dt = self.time.delta_seconds() as f32;
 
-        let needs_rebuild = self.star_streaming.update(observer, dt);
-        if !needs_rebuild {
+        let sector_changed = self.star_streaming.update(observer, dt);
+
+        // Rebuild every frame when drive is engaged — observer moves continuously
+        // and star directions must track it. In impulse, only rebuild on sector change.
+        let drive_active = self.drive.mode() != sa_ship::DriveMode::Impulse
+            && matches!(self.drive.status(), sa_ship::DriveStatus::Engaged);
+
+        if !sector_changed && !drive_active && !self.fly_mode {
             return;
         }
 
@@ -372,8 +378,8 @@ impl App {
         let vertices = self.star_streaming.build_vertices(observer);
         renderer.star_field.update_star_buffer(&gpu.device, &vertices);
 
-        // Also refresh nebulae in fly mode (positions change at galaxy scale)
-        if self.fly_mode {
+        // Refresh nebulae when moving at galactic scale (fly mode or warp)
+        if self.fly_mode || drive_active {
             let nebula_instances = nebulae_to_instances(&self.nebulae, observer);
             renderer.nebula_renderer.update_instances(&gpu.device, &nebula_instances);
         }
