@@ -893,29 +893,56 @@ impl ApplicationHandler for App {
                     // This ensures the player moves relative to where the ship
                     // ACTUALLY IS after the step, not where it WAS before.
 
-                    // Step 1: Record ship position BEFORE step
+                    // MANUAL ship integration — no physics.step() needed.
+                    // physics.step() is extremely expensive with many colliders
+                    // (47ms at 345 m/s). Since the player is kinematic (uses
+                    // move_shape, not contacts) and the ship is the only dynamic
+                    // body, we integrate the ship manually: v += a*dt, p += v*dt.
+                    let physics_dt = dt.min(1.0 / 30.0);
+                    let t_phys = Instant::now();
+
+                    // Record ship position before
                     let ship_pos_before = self.ship.as_ref()
                         .and_then(|s| self.physics.get_body(s.body_handle))
                         .map(|b| { let t = b.translation(); [t.x, t.y, t.z] })
                         .unwrap_or([0.0; 3]);
 
-                    // Step 2: Apply ship thrust
+                    // Manually integrate ship: apply thrust as velocity change
                     if let Some(ship) = &self.ship {
-                        ship.reset_forces(&mut self.physics);
-                        ship.apply_thrust(&mut self.physics);
-                    }
-
-                    // Step 3: Physics step (ship moves)
-                    let physics_dt = dt.min(1.0 / 30.0);
-                    let t_phys = Instant::now();
-                    if physics_dt > 0.0 {
-                        self.physics.step(physics_dt);
+                        if let Some(body) = self.physics.get_body_mut(ship.body_handle) {
+                            // Apply thrust: F = throttle * max_thrust * engine_on
+                            if ship.engine_on && ship.throttle > 0.0 {
+                                let rot = *body.rotation();
+                                let forward = rot * nalgebra::Vector3::new(0.0, 0.0, -1.0);
+                                let accel = forward * (ship.throttle * ship.max_thrust / body.mass());
+                                let vel = body.linvel() + accel * physics_dt;
+                                // Apply angular damping
+                                let angvel = body.angvel() * (1.0 - 5.0 * physics_dt).max(0.0);
+                                // Apply linear damping
+                                let vel = vel * (1.0 - 0.01 * physics_dt).max(0.0);
+                                body.set_linvel(vel, true);
+                                body.set_angvel(angvel, true);
+                            }
+                            // Integrate position: p += v * dt
+                            let vel = *body.linvel();
+                            let pos = body.translation() + vel * physics_dt;
+                            let angvel = *body.angvel();
+                            let rot = *body.rotation();
+                            // Integrate rotation (small angle approximation)
+                            let drot = nalgebra::UnitQuaternion::new(angvel * physics_dt * 0.5);
+                            let new_rot = drot * rot;
+                            body.set_position(
+                                nalgebra::Isometry3::from_parts(
+                                    nalgebra::Translation3::from(pos),
+                                    new_rot,
+                                ),
+                                true,
+                            );
+                        }
                     }
                     let phys_step_us = t_phys.elapsed().as_micros();
 
-                    // Sync interior collider body to ship position.
-                    // Use set_position (not set_translation) on the fixed body to
-                    // avoid rapier deferring AABB updates to the next step().
+                    // Sync interior colliders to ship position
                     if let (Some(ship), Some(interior_handle)) = (
                         &self.ship,
                         crate::ship_colliders::interior_body_handle(),
@@ -923,7 +950,7 @@ impl ApplicationHandler for App {
                         if let Some(ship_body) = self.physics.get_body(ship.body_handle) {
                             let ship_iso = *ship_body.position();
                             if let Some(interior) = self.physics.get_body_mut(interior_handle) {
-                                interior.set_position(ship_iso, false); // false = don't wake (it's fixed)
+                                interior.set_position(ship_iso, false);
                             }
                         }
                     }
