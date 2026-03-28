@@ -325,7 +325,7 @@ impl App {
         );
 
         // Create screen quad for the helm monitor (0.4 x 0.25, matching Speed Display size)
-        let screen_quad = ScreenQuad::new(&gpu.device, 1.0, 0.7);
+        let screen_quad = ScreenQuad::new(&gpu.device, 0.6, 0.4);
         self.screen_quad = Some(screen_quad);
 
         // Create initial bind group for the monitor texture
@@ -1156,9 +1156,13 @@ impl ApplicationHandler for App {
                             });
                         }
 
-                        // Interactable meshes in ship-local space (transformed by ship)
+                        // Interactable meshes in ship-local space (transformed by ship).
+                        // Skip the Speed Display mesh (id=3) — replaced by the egui monitor quad.
                         let layout = sa_ship::station::cockpit_layout();
                         for (i, handle) in self.interactable_meshes.iter().enumerate() {
+                            if let Some(ids) = &self.ship_ids {
+                                if i == ids.speed_screen { continue; }
+                            }
                             if let Some(placement) = layout.interactables.get(i) {
                                 let pos = placement.position;
                                 cmds.push(DrawCommand {
