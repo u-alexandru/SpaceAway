@@ -435,7 +435,8 @@ mod tests {
     #[test]
     fn build_colliders_does_not_panic() {
         let mut physics = PhysicsWorld::new();
-        build_ship_colliders(&mut physics);
+        let ship = sa_ship::ship::Ship::new(&mut physics, 0.0, 0.0, 0.0);
+        build_ship_colliders(&mut physics, ship.body_handle);
         // Should have a reasonable number of colliders
         let count = physics.collider_set.len();
         assert!(
@@ -451,13 +452,16 @@ mod tests {
     #[test]
     fn all_colliders_are_in_interior_group() {
         let mut physics = PhysicsWorld::new();
-        build_ship_colliders(&mut physics);
+        let ship = sa_ship::ship::Ship::new(&mut physics, 0.0, 0.0, 0.0);
+        build_ship_colliders(&mut physics, ship.body_handle);
 
+        // Check only non-sensor colliders (the hull sensor is in SHIP_HULL group)
         for (_, collider) in physics.collider_set.iter() {
+            if collider.is_sensor() { continue; }
             let groups = collider.collision_groups();
             assert_eq!(
                 groups.memberships, SHIP_INTERIOR,
-                "all interior colliders should be in SHIP_INTERIOR group"
+                "interior colliders should be in SHIP_INTERIOR group"
             );
             assert_eq!(
                 groups.filter, PLAYER,

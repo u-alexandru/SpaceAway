@@ -744,8 +744,11 @@ impl ApplicationHandler for App {
                             // Re-enable player and teleport to ship's current position
                             // (ship may have moved while seated)
                             if let Some(player) = &self.player {
+                                // Get ship state before mutable borrow
+                                let ship_pos = ship.position(&self.physics);
+                                let ship_vel = ship.speed_vector(&self.physics);
                                 if let (Some((sx, sy, sz)), Some(body)) = (
-                                    ship.position(&self.physics),
+                                    ship_pos,
                                     self.physics.get_body_mut(player.body_handle),
                                 ) {
                                     body.set_enabled(true);
@@ -753,7 +756,8 @@ impl ApplicationHandler for App {
                                         nalgebra::Vector3::new(sx, sy - 0.1, sz + 1.5),
                                         true,
                                     );
-                                    body.set_linvel(nalgebra::Vector3::zeros(), true);
+                                    // Match ship velocity so player doesn't slide on stand-up
+                                    body.set_linvel(nalgebra::Vector3::new(ship_vel.0, ship_vel.1, ship_vel.2), true);
                                 }
                             }
                             log::info!("Left helm seated mode — player teleported to ship");
@@ -778,8 +782,13 @@ impl ApplicationHandler for App {
                     }
                 } else {
                     // --- Walk mode: physics-driven ---
+                    // Pass ship velocity as base so player moves WITH the ship.
+                    let ship_vel = self.ship.as_ref()
+                        .and_then(|s| self.physics.get_body(s.body_handle))
+                        .map(|b| { let v = b.linvel(); [v.x, v.y, v.z] })
+                        .unwrap_or([0.0, 0.0, 0.0]);
                     if let Some(player) = &mut self.player {
-                        player.update(&mut self.physics, &self.input, dt);
+                        player.update(&mut self.physics, &self.input, dt, [ship_vel[0], 0.0, ship_vel[2]]);
                     }
 
                     // Apply thrust + counteract player gravity on ship.

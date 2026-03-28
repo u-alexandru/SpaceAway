@@ -201,6 +201,14 @@ impl Ship {
             .map(|b| b.linvel().magnitude())
             .unwrap_or(0.0)
     }
+
+    /// Get the ship's velocity vector as (x, y, z).
+    pub fn speed_vector(&self, physics: &PhysicsWorld) -> (f32, f32, f32) {
+        physics
+            .get_body(self.body_handle)
+            .map(|b| { let v = b.linvel(); (v.x, v.y, v.z) })
+            .unwrap_or((0.0, 0.0, 0.0))
+    }
 }
 
 #[cfg(test)]

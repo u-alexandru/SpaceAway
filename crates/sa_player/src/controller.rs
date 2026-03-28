@@ -50,7 +50,11 @@ impl PlayerController {
     }
 
     /// Updates the player based on input: mouse look, WASD movement, and jumping.
-    pub fn update(&mut self, physics: &mut PhysicsWorld, input: &InputState, _dt: f32) {
+    ///
+    /// `base_velocity`: the velocity of the platform the player stands on (e.g. ship).
+    /// All player movement is relative to this base. When idle, the player matches
+    /// the base velocity exactly — no sliding, no friction-correction needed.
+    pub fn update(&mut self, physics: &mut PhysicsWorld, input: &InputState, _dt: f32, base_velocity: [f32; 3]) {
         // Mouse look
         let (dx, dy) = input.mouse.delta();
         self.yaw += dx * MOUSE_SENSITIVITY;
@@ -79,22 +83,20 @@ impl PlayerController {
             move_dir = move_dir.normalize();
         }
 
-        // Only override horizontal velocity when movement keys are pressed.
-        // When idle, let physics/friction control velocity naturally —
-        // this allows the player to move with a moving ship floor via friction.
+        // Velocity = base_velocity (ship) + walk_velocity (player input).
+        // This ensures the player moves WITH the ship at all times.
+        // No velocity gap → no friction correction → no torque on ship.
         if let Some(body) = physics.get_body_mut(self.body_handle) {
             let current_vel = *body.linvel();
+            let walk_vel = move_dir * MOVE_SPEED;
 
-            if move_dir.length_squared() > 0.0 {
-                // Player wants to move: set velocity relative to current base
-                // (preserves vertical velocity from gravity)
-                let target_vel = move_dir * MOVE_SPEED;
-                let new_vel =
-                    nalgebra::Vector3::new(target_vel.x, current_vel.y, target_vel.z);
-                body.set_linvel(new_vel, true);
-            }
-            // When no keys pressed: don't touch velocity — friction keeps
-            // the player gripped to the ship floor.
+            // Horizontal: base (ship) + walk. Vertical: preserve current (gravity).
+            let new_vel = nalgebra::Vector3::new(
+                base_velocity[0] + walk_vel.x,
+                current_vel.y,
+                base_velocity[2] + walk_vel.z,
+            );
+            body.set_linvel(new_vel, true);
 
             self.grounded = current_vel.y.abs() < 0.5;
         }
