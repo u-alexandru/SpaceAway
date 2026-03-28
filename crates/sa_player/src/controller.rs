@@ -190,8 +190,14 @@ impl PlayerController {
         let walk_translation =
             walk_dir * (MOVE_SPEED * dt) + ship_up * (self.vertical_velocity * dt);
 
-        // Sweep in origin-centered rotated space
-        let sweep_isometry = Isometry::new(player_at_origin, nalgebra::Vector3::zeros());
+        // Sweep in origin-centered rotated space.
+        // Capsule MUST be rotated by ship_rotation to match the rotated colliders.
+        // Without this, the capsule stays world-Y-aligned while the door opening
+        // is rotated — a vertical capsule can't fit through a rotated door.
+        let sweep_isometry = nalgebra::Isometry3::from_parts(
+            nalgebra::Translation3::from(player_at_origin),
+            ship_rotation,
+        );
 
         let filter = QueryFilter::default()
             .exclude_rigid_body(self.body_handle)
