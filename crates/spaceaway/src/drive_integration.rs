@@ -17,10 +17,19 @@ pub fn galactic_position_delta(
     if speed_ly_s < 1e-20 {
         return [0.0, 0.0, 0.0];
     }
+    // Normalize direction to guard against floating-point drift
+    let len = (direction[0] * direction[0]
+        + direction[1] * direction[1]
+        + direction[2] * direction[2])
+    .sqrt();
+    if len < 1e-10 {
+        return [0.0, 0.0, 0.0];
+    }
+    let d = [direction[0] / len, direction[1] / len, direction[2] / len];
     [
-        direction[0] * speed_ly_s * dt,
-        direction[1] * speed_ly_s * dt,
-        direction[2] * speed_ly_s * dt,
+        d[0] * speed_ly_s * dt,
+        d[1] * speed_ly_s * dt,
+        d[2] * speed_ly_s * dt,
     ]
 }
 

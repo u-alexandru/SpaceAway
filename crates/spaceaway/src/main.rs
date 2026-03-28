@@ -648,8 +648,9 @@ impl ApplicationHandler for App {
                         self.cursor_grabbed = false;
                     }
 
-                    // Teleport keys: each forces a specific viewpoint type
-                    if event.state.is_pressed() {
+                    // Teleport keys: only when NOT seated at helm (1/2/3 are drive keys when seated)
+                    let is_seated = self.helm.as_ref().map(|h| h.is_seated()).unwrap_or(false);
+                    if event.state.is_pressed() && !is_seated {
                         match code {
                             KeyCode::Digit1 => self.teleport_to(0), // mid-disc
                             KeyCode::Digit2 => self.teleport_to(1), // above galaxy
@@ -1172,7 +1173,9 @@ impl ApplicationHandler for App {
                     }
 
                     // Emergency warp drop on empty exotic fuel
-                    if self.drive.mode() == sa_ship::DriveMode::Warp && self.ship_resources.exotic_fuel <= 0.0 {
+                    if self.drive.mode() == sa_ship::DriveMode::Warp
+                        && self.ship_resources.exotic_fuel <= 0.0
+                    {
                         self.drive.request_disengage();
                         log::warn!("WARP DRIVE FAILED — exotic fuel exhausted!");
                     }
