@@ -126,7 +126,8 @@ impl Channels {
 
     /// Switch the music playlist context.
     pub fn set_music_context(&mut self, ctx: MusicContext) {
-        if ctx == self.music_context && self.music_playing {
+        // Only reset if context actually CHANGED
+        if ctx == self.music_context {
             return;
         }
         self.music_context = ctx;
@@ -305,7 +306,7 @@ impl Channels {
                             match Decoder::new(BufReader::new(file)) {
                                 Ok(source) => {
                                     if let Ok(sink) = Sink::try_new(&self.stream_handle) {
-                                        sink.set_volume(0.4 * master_volume);
+                                        sink.set_volume(0.8 * master_volume);
                                         sink.append(source);
                                         self.music_sink = Some(sink);
                                         self.music_playing = true;
