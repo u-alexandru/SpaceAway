@@ -97,6 +97,19 @@ impl ActiveSystem {
             label: "Star".to_string(),
         });
 
+        // Star corona (large glow disc, rendered at same position as star)
+        let corona_mesh = planet_mesh::build_corona_mesh(star_radius_m as f32, star.color);
+        let corona_handle = mesh_store.upload(device, &corona_mesh);
+        bodies.push(LoadedBody {
+            mesh_handle: corona_handle,
+            orbital_radius_m: 0.0,
+            orbital_period_s: 0.0,
+            initial_phase: 0.0,
+            radius_m: star_radius_m * 4.0, // corona extends 4x star radius
+            parent_index: -1,
+            label: "Corona".to_string(),
+        });
+
         // --- Planets + Moons ---
         for (i, planet) in system.planets.iter().enumerate() {
             let planet_body_index = bodies.len() as i32;
@@ -266,6 +279,7 @@ fn push_planet_body(
     };
     let handle = mesh_store.upload(device, &mesh);
 
+    let planet_body_idx = bodies.len() as i32;
     bodies.push(LoadedBody {
         mesh_handle: handle,
         orbital_radius_m: planet.orbital_radius_au as f64 * AU_METERS,
@@ -275,4 +289,46 @@ fn push_planet_body(
         parent_index: -1, // orbits star
         label: format!("Planet {}", index + 1),
     });
+
+    // Atmosphere shell (if planet has one)
+    if let Some(ref atmo) = planet.atmosphere {
+        let atmo_mesh = planet_mesh::build_atmosphere_mesh(
+            subdivisions,
+            planet_radius_m as f32,
+            atmo,
+        );
+        let atmo_handle = mesh_store.upload(device, &atmo_mesh);
+        // Atmosphere orbits at same position as planet (zero orbital radius = co-located)
+        bodies.push(LoadedBody {
+            mesh_handle: atmo_handle,
+            orbital_radius_m: 0.0,
+            orbital_period_s: 0.0,
+            initial_phase: 0.0,
+            radius_m: planet_radius_m * 1.03,
+            parent_index: planet_body_idx,
+            label: format!("Atmo {}", index + 1),
+        });
+    }
+
+    // Ring system (if planet has one)
+    if planet.has_rings {
+        if let Some(ref ring) = planet.ring_params {
+            let ring_mesh = planet_mesh::build_ring_mesh(
+                planet_radius_m as f32,
+                ring,
+                planet.axial_tilt_deg,
+                planet.color_seed,
+            );
+            let ring_handle = mesh_store.upload(device, &ring_mesh);
+            bodies.push(LoadedBody {
+                mesh_handle: ring_handle,
+                orbital_radius_m: 0.0,
+                orbital_period_s: 0.0,
+                initial_phase: 0.0,
+                radius_m: planet_radius_m * ring.outer_ratio as f64,
+                parent_index: planet_body_idx,
+                label: format!("Ring {}", index + 1),
+            });
+        }
+    }
 }
