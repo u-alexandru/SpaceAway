@@ -83,20 +83,42 @@ impl PlayerController {
             move_dir = move_dir.normalize();
         }
 
-        // Velocity = base_velocity (ship) + walk_velocity (player input).
-        // This ensures the player moves WITH the ship at all times.
-        // No velocity gap → no friction correction → no torque on ship.
+        // Force-based movement instead of set_linvel.
+        //
+        // set_linvel injects velocity every frame, creating 24,000 N impulses
+        // when the player hits a wall (F = m * Δv / dt = 80 * 5 / 0.016).
+        // Force-based movement caps the force at a realistic level (~400 N),
+        // so even pushing against a wall only applies human-scale force to
+        // the ship (imperceptible on a 50,000 kg vessel).
+        //
+        // The target velocity is base_velocity (ship) + walk_direction * MOVE_SPEED.
+        // A PD controller drives the player toward this target with capped force.
         if let Some(body) = physics.get_body_mut(self.body_handle) {
             let current_vel = *body.linvel();
-            let walk_vel = move_dir * MOVE_SPEED;
 
-            // Horizontal: base (ship) + walk. Vertical: preserve current (gravity).
-            let new_vel = nalgebra::Vector3::new(
-                base_velocity[0] + walk_vel.x,
-                current_vel.y,
-                base_velocity[2] + walk_vel.z,
+            // Target velocity: match the ship + player walking intent
+            let target = nalgebra::Vector3::new(
+                base_velocity[0] + move_dir.x * MOVE_SPEED,
+                current_vel.y, // vertical handled by gravity
+                base_velocity[2] + move_dir.z * MOVE_SPEED,
             );
-            body.set_linvel(new_vel, true);
+
+            // Velocity error (what we need to correct)
+            let error = target - current_vel;
+            let error_horizontal = nalgebra::Vector3::new(error.x, 0.0, error.z);
+
+            // Apply force proportional to error, capped at MAX_WALK_FORCE.
+            // This acts like a spring pulling the player toward the target velocity.
+            // Cap at 400 N — realistic human walking/pushing force.
+            const MAX_WALK_FORCE: f32 = 400.0;
+            const GAIN: f32 = 80.0; // N per (m/s) of error — critically damped for 80 kg
+
+            let force_magnitude = (error_horizontal.magnitude() * GAIN).min(MAX_WALK_FORCE);
+            if error_horizontal.magnitude() > 0.01 {
+                let force_dir = error_horizontal.normalize();
+                let force = force_dir * force_magnitude;
+                body.add_force(force, true);
+            }
 
             self.grounded = current_vel.y.abs() < 0.5;
         }
