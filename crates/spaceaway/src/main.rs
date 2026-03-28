@@ -783,36 +783,48 @@ impl ApplicationHandler for App {
                     }
                 } else {
                     // --- Walk mode: kinematic character controller ---
-                    // Update query pipeline BEFORE player.update() so move_shape
-                    // has up-to-date collision data from last physics step.
-                    self.physics.update_query_pipeline();
+                    //
+                    // CORRECT ORDER (prevents drift and teleporting):
+                    // 1. Apply forces to ship
+                    // 2. Run physics step (ship moves to final position)
+                    // 3. Update query pipeline (colliders at final position)
+                    // 4. Read ship's POST-STEP velocity
+                    // 5. Move player using post-step velocity + move_shape
+                    //
+                    // This ensures the player moves relative to where the ship
+                    // ACTUALLY IS after the step, not where it WAS before.
 
-                    // Pass ship velocity as base so player moves WITH the ship.
-                    let ship_vel = self.ship.as_ref()
-                        .and_then(|s| self.physics.get_body(s.body_handle))
-                        .map(|b| { let v = b.linvel(); [v.x, v.y, v.z] })
-                        .unwrap_or([0.0, 0.0, 0.0]);
-                    if let Some(player) = &mut self.player {
-                        player.update(&mut self.physics, &self.input, dt, [ship_vel[0], 0.0, ship_vel[2]]);
-                    }
-
-                    // Apply thrust. No gravity counterforce needed — the kinematic
-                    // player exerts zero reaction forces on the ship.
+                    // Step 1: Apply ship thrust
                     if let Some(ship) = &self.ship {
                         ship.reset_forces(&mut self.physics);
                         ship.apply_thrust(&mut self.physics);
                     }
 
+                    // Step 2: Physics step (ship moves)
                     let physics_dt = dt.min(1.0 / 30.0);
                     if physics_dt > 0.0 {
                         self.physics.step(physics_dt);
+                    }
+
+                    // Step 3: Update query pipeline AFTER physics step
+                    // so move_shape sees colliders at their FINAL positions.
+                    self.physics.update_query_pipeline();
+
+                    // Step 4: Read ship velocity AFTER the step
+                    let ship_vel = self.ship.as_ref()
+                        .and_then(|s| self.physics.get_body(s.body_handle))
+                        .map(|b| { let v = b.linvel(); [v.x, v.y, v.z] })
+                        .unwrap_or([0.0, 0.0, 0.0]);
+
+                    // Step 5: Move player with post-step ship velocity
+                    if let Some(player) = &mut self.player {
+                        player.update(&mut self.physics, &self.input, dt, [ship_vel[0], 0.0, ship_vel[2]]);
                     }
 
                     if let Some(player) = &self.player {
                         self.camera.position = player.position(&self.physics);
                         self.camera.yaw = player.yaw;
                         self.camera.pitch = player.pitch;
-
                     }
                 }
 
