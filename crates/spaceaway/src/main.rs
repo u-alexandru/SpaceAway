@@ -925,9 +925,12 @@ impl ApplicationHandler for App {
                     } else {
                         [0.0; 3]
                     };
+                    let t_player = Instant::now();
                     if let Some(player) = &mut self.player {
                         player.update(&mut self.physics, &self.input, physics_dt, effective_vel);
                     }
+                    let player_move_us = t_player.elapsed().as_micros();
+                    self.perf.physics_us = player_move_us as u64; // repurpose physics_us for move_shape timing
 
                     if let Some(player) = &self.player {
                         self.camera.position = player.position(&self.physics);
@@ -1202,7 +1205,8 @@ impl ApplicationHandler for App {
                 }
 
                 self.perf.player_us = t0.elapsed().as_micros() as u64;
-                self.perf.physics_us = 0;
+                // Note: player_us includes ALL game logic (physics, ship, interactions, survival, UI sync).
+                // For detailed breakdown, check individual timers when debugging.
 
                 // --- Star regen ---
                 let t2 = Instant::now();
