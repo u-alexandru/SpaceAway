@@ -76,6 +76,11 @@ impl DriveController {
                 true
             }
             DriveMode::Warp => {
+                // Ignore if already spooling or engaged in warp
+                if self.mode == DriveMode::Warp {
+                    return false;
+                }
+                // Disengage current drive first (Cruise→Impulse→Warp spool)
                 self.mode = DriveMode::Warp;
                 self.status = DriveStatus::Spooling(0.0);
                 true
@@ -252,5 +257,37 @@ mod tests {
         let ly_s = dc.current_speed_ly_s();
         // 5_000_000c * 3.169e-8 ≈ 0.1585
         assert!((ly_s - 0.1585).abs() < 1e-3, "ly_s={ly_s}");
+    }
+
+    #[test]
+    fn repeated_warp_engage_ignored() {
+        let mut dc = DriveController::new();
+        assert!(dc.request_engage(DriveMode::Warp));
+        dc.update(1.0); // partial spool
+        assert!(!dc.request_engage(DriveMode::Warp), "should reject re-engage while spooling");
+        // Spool progress should not have reset
+        assert!(matches!(dc.status(), DriveStatus::Spooling(t) if t > 0.5));
+    }
+
+    #[test]
+    fn warp_engage_while_already_warping_ignored() {
+        let mut dc = DriveController::new();
+        dc.request_engage(DriveMode::Warp);
+        for _ in 0..300 { dc.update(1.0 / 60.0); }
+        assert_eq!(dc.status(), DriveStatus::Engaged);
+        assert!(!dc.request_engage(DriveMode::Warp), "should reject re-engage while warping");
+        assert_eq!(dc.status(), DriveStatus::Engaged);
+    }
+
+    #[test]
+    fn cruise_to_warp_transition() {
+        let mut dc = DriveController::new();
+        dc.request_engage(DriveMode::Cruise);
+        dc.set_speed_fraction(1.0);
+        assert!(dc.current_speed_c() > 400.0, "should be at cruise speed");
+        // Engage warp — should start spooling, speed drops to 0
+        assert!(dc.request_engage(DriveMode::Warp));
+        assert_eq!(dc.mode(), DriveMode::Warp);
+        assert_eq!(dc.current_speed_c(), 0.0, "speed zero while spooling");
     }
 }
