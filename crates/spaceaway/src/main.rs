@@ -1163,7 +1163,7 @@ impl ApplicationHandler for App {
                                 let ship_quat = glam::Quat::from_xyzw(r.i, r.j, r.k, r.w);
 
                                 let look_offset = glam::Quat::from_rotation_y(-self.helm_look_yaw)
-                                    * glam::Quat::from_rotation_x(-self.helm_look_pitch);
+                                    * glam::Quat::from_rotation_x(self.helm_look_pitch);
 
                                 self.camera.orientation_override = Some(ship_quat * look_offset);
                             }
@@ -1299,7 +1299,7 @@ impl ApplicationHandler for App {
                                 let r = body.rotation();
                                 let ship_quat = glam::Quat::from_xyzw(r.i, r.j, r.k, r.w);
                                 let look = glam::Quat::from_rotation_y(-player.yaw)
-                                    * glam::Quat::from_rotation_x(-player.pitch);
+                                    * glam::Quat::from_rotation_x(player.pitch);
                                 self.camera.orientation_override = Some(ship_quat * look);
                             }
                         } else {
