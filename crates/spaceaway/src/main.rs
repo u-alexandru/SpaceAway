@@ -782,9 +782,12 @@ impl ApplicationHandler for App {
                         player.update(&mut self.physics, &self.input, dt);
                     }
 
-                    // Phase 5a: ship only thrusts when someone is at the helm.
-                    // Thrust while walking would move the ship away from the
-                    // static floor colliders, stranding the player.
+                    // Apply thrust while walking — interior colliders are children
+                    // of the ship body so they move together.
+                    if let Some(ship) = &self.ship {
+                        ship.reset_forces(&mut self.physics);
+                        ship.apply_thrust(&mut self.physics);
+                    }
 
                     // Gravity handled by PhysicsWorld (0, -9.81, 0).
                     // Ship body has gravity_scale(0.0), player has default (1.0).

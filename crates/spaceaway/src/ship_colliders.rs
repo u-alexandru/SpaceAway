@@ -162,11 +162,11 @@ const WALL_THICKNESS: f32 = 0.15;
 const DOOR_W: f32 = 1.2;
 const DOOR_H: f32 = 2.0;
 
-/// Add a fixed rigid body with a collider at the given position.
-fn add_fixed_collider(physics: &mut PhysicsWorld, collider: Collider) {
-    let body = RigidBodyBuilder::fixed().build();
-    let handle = physics.add_rigid_body(body);
-    physics.add_collider(collider, handle);
+/// Add a collider as a child of the ship body.
+/// This makes interior colliders move with the ship — essential for
+/// walking inside a moving vessel.
+fn add_ship_collider(physics: &mut PhysicsWorld, collider: Collider, ship_body: RigidBodyHandle) {
+    physics.add_collider(collider, ship_body);
 }
 
 /// Build a convex hull wall collider from a hex face.
@@ -225,7 +225,7 @@ fn hex_face_wall_collider(
 /// Creates 6 convex hull colliders (one per hex face) connecting the fore
 /// ring to the aft ring. Only generates colliders for faces that are above
 /// the floor level (the bottom face is handled by the floor cuboid).
-fn section_wall_colliders(physics: &mut PhysicsWorld, section: &Section) {
+fn section_wall_colliders(physics: &mut PhysicsWorld, section: &Section, ship_body: RigidBodyHandle) {
     let fore_ring = hex_ring(section.fore_width, section.height, section.z_start);
     let aft_ring = hex_ring(
         section.aft_width,
@@ -252,13 +252,13 @@ fn section_wall_colliders(physics: &mut PhysicsWorld, section: &Section) {
             aft_ring[next],
             WALL_THICKNESS,
         ) {
-            add_fixed_collider(physics, collider);
+            add_ship_collider(physics, collider, ship_body);
         }
     }
 }
 
 /// Add a floor cuboid for a section.
-fn section_floor_collider(physics: &mut PhysicsWorld, section: &Section) {
+fn section_floor_collider(physics: &mut PhysicsWorld, section: &Section, ship_body: RigidBodyHandle) {
     // Use the narrower of fore/aft widths for safe floor extent
     let w = section.fore_width.min(section.aft_width);
     let hw = w / 2.0 - 0.05; // slightly inset from hull
@@ -271,11 +271,11 @@ fn section_floor_collider(physics: &mut PhysicsWorld, section: &Section) {
         .restitution(0.0)
         .collision_groups(interior_groups())
         .build();
-    add_fixed_collider(physics, collider);
+    add_ship_collider(physics, collider, ship_body);
 }
 
 /// Add a ceiling cuboid for a section.
-fn section_ceiling_collider(physics: &mut PhysicsWorld, section: &Section) {
+fn section_ceiling_collider(physics: &mut PhysicsWorld, section: &Section, ship_body: RigidBodyHandle) {
     let w = section.fore_width.min(section.aft_width);
     let hw = w / 2.0 - 0.05;
     let hl = section.length / 2.0;
@@ -287,14 +287,14 @@ fn section_ceiling_collider(physics: &mut PhysicsWorld, section: &Section) {
         .restitution(0.0)
         .collision_groups(interior_groups())
         .build();
-    add_fixed_collider(physics, collider);
+    add_ship_collider(physics, collider, ship_body);
 }
 
 /// Add a bulkhead with door opening at a given Z position.
 ///
 /// Creates three colliders: left of door, right of door, and lintel above door.
 /// All shaped as convex hulls from the hex cross-section at that Z.
-fn bulkhead_colliders(physics: &mut PhysicsWorld, width: f32, z: f32) {
+fn bulkhead_colliders(physics: &mut PhysicsWorld, width: f32, z: f32, ship_body: RigidBodyHandle) {
     let hdw = DOOR_W / 2.0; // 0.6
     let hw = width / 2.0;
     let door_bottom = FLOOR_Y;
@@ -319,7 +319,7 @@ fn bulkhead_colliders(physics: &mut PhysicsWorld, width: f32, z: f32) {
             .restitution(0.0)
             .collision_groups(interior_groups())
             .build();
-        add_fixed_collider(physics, collider);
+        add_ship_collider(physics, collider, ship_body);
     }
 
     // Right of door: from hdw to hw, floor to ceiling
@@ -339,7 +339,7 @@ fn bulkhead_colliders(physics: &mut PhysicsWorld, width: f32, z: f32) {
             .restitution(0.0)
             .collision_groups(interior_groups())
             .build();
-        add_fixed_collider(physics, collider);
+        add_ship_collider(physics, collider, ship_body);
     }
 
     // Lintel above door: spans door width, from door_top to ceiling
@@ -360,13 +360,13 @@ fn bulkhead_colliders(physics: &mut PhysicsWorld, width: f32, z: f32) {
                 .restitution(0.0)
                 .collision_groups(interior_groups())
                 .build();
-            add_fixed_collider(physics, collider);
+            add_ship_collider(physics, collider, ship_body);
         }
     }
 }
 
 /// Add an endcap wall (solid, no door) at a given Z position.
-fn endcap_collider(physics: &mut PhysicsWorld, width: f32, z: f32) {
+fn endcap_collider(physics: &mut PhysicsWorld, width: f32, z: f32, ship_body: RigidBodyHandle) {
     let hw = width / 2.0;
     let ht = 0.1;
 
@@ -386,7 +386,7 @@ fn endcap_collider(physics: &mut PhysicsWorld, width: f32, z: f32) {
             .restitution(0.0)
             .collision_groups(interior_groups())
             .build();
-        add_fixed_collider(physics, collider);
+        add_ship_collider(physics, collider, ship_body);
     }
 }
 
@@ -405,34 +405,27 @@ fn endcap_collider(physics: &mut PhysicsWorld, width: f32, z: f32) {
 ///
 /// All colliders use the SHIP_INTERIOR collision group so they interact
 /// with PLAYER but not with interaction raycasts or projectiles.
-pub fn build_ship_colliders(physics: &mut PhysicsWorld) {
+pub fn build_ship_colliders(physics: &mut PhysicsWorld, ship_body: RigidBodyHandle) {
     let sections = ship_sections();
 
     for section in &sections {
-        // Hex face walls (5 faces, skipping bottom)
-        section_wall_colliders(physics, section);
+        section_wall_colliders(physics, section, ship_body);
+        section_floor_collider(physics, section, ship_body);
+        section_ceiling_collider(physics, section, ship_body);
 
-        // Floor and ceiling
-        section_floor_collider(physics, section);
-        section_ceiling_collider(physics, section);
-
-        // Bulkheads at section boundaries
         if section.bulkhead_fore {
-            let width = section.fore_width;
-            bulkhead_colliders(physics, width, section.z_start);
+            bulkhead_colliders(physics, section.fore_width, section.z_start, ship_body);
         }
         if section.bulkhead_aft {
-            let width = section.aft_width;
-            bulkhead_colliders(physics, width, section.z_start + section.length);
+            bulkhead_colliders(physics, section.aft_width, section.z_start + section.length, ship_body);
         }
     }
 
-    // Endcaps at nose (z=0) and tail (z=29)
     let first = &sections[0];
-    endcap_collider(physics, first.fore_width, first.z_start);
+    endcap_collider(physics, first.fore_width, first.z_start, ship_body);
 
     let last = &sections[sections.len() - 1];
-    endcap_collider(physics, last.aft_width, last.z_start + last.length);
+    endcap_collider(physics, last.aft_width, last.z_start + last.length, ship_body);
 }
 
 #[cfg(test)]

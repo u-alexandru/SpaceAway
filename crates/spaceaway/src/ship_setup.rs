@@ -40,7 +40,7 @@ pub fn create_ship_and_interactables(
     // Build precise hex-hull interior colliders (walls, bulkheads, endcaps).
     // These match the actual hexagonal cross-section of each ship section,
     // replacing the old simple box colliders that left gaps at angled hull faces.
-    crate::ship_colliders::build_ship_colliders(physics);
+    crate::ship_colliders::build_ship_colliders(physics, ship.body_handle);
 
     let mut interaction = InteractionSystem::new();
     let layout = cockpit_layout();
