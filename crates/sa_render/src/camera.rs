@@ -17,8 +17,8 @@ impl Camera {
             yaw: 0.0,
             pitch: 0.0,
             fov_y: std::f32::consts::FRAC_PI_4,
-            near: 0.1,
-            far: 100_000.0,
+            near: 1.0,
+            far: 1e11, // 100 million km (~0.7 AU) — see nearby planets
         }
     }
 
