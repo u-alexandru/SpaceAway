@@ -1151,10 +1151,12 @@ impl ApplicationHandler for App {
                             let ship_quat = glam::Quat::from_xyzw(r.i, r.j, r.k, r.w);
 
                             // Build camera orientation: ship rotation + mouse yaw/pitch offset
+                            // Negate yaw: in ship-local frame, positive euler Y rotation
+                            // goes left (right-hand rule), but mouse-right should look right.
                             let mouse_offset = glam::Quat::from_euler(
                                 glam::EulerRot::YXZ,
-                                self.camera.yaw,
-                                self.camera.pitch,
+                                -self.camera.yaw,
+                                -self.camera.pitch,
                                 0.0,
                             );
                             // Remove the ship's yaw/pitch from the mouse offset so only

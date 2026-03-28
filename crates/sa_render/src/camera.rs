@@ -27,16 +27,25 @@ impl Camera {
     }
 
     pub fn forward(&self) -> Vec3 {
-        Vec3::new(
-            self.yaw.sin() * self.pitch.cos(),
-            self.pitch.sin(),
-            -self.yaw.cos() * self.pitch.cos(),
-        )
-        .normalize()
+        if let Some(q) = self.orientation_override {
+            // Quaternion mode: forward is -Z rotated by orientation
+            q * Vec3::new(0.0, 0.0, -1.0)
+        } else {
+            Vec3::new(
+                self.yaw.sin() * self.pitch.cos(),
+                self.pitch.sin(),
+                -self.yaw.cos() * self.pitch.cos(),
+            )
+            .normalize()
+        }
     }
 
     pub fn right(&self) -> Vec3 {
-        self.forward().cross(Vec3::Y).normalize()
+        if let Some(q) = self.orientation_override {
+            q * Vec3::new(1.0, 0.0, 0.0)
+        } else {
+            self.forward().cross(Vec3::Y).normalize()
+        }
     }
 
     pub fn rotate(&mut self, delta_yaw: f32, delta_pitch: f32) {
