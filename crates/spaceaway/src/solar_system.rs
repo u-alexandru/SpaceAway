@@ -291,7 +291,10 @@ fn push_planet_body(
     });
 
     // Atmosphere shell (if planet has one)
+    log::debug!("  Planet {}: atmo={}, rings={}", index + 1, planet.atmosphere.is_some(), planet.has_rings);
     if let Some(ref atmo) = planet.atmosphere {
+        log::info!("  + Atmosphere for Planet {} (color [{:.1},{:.1},{:.1}] opacity {:.1})",
+            index + 1, atmo.color[0], atmo.color[1], atmo.color[2], atmo.opacity);
         let atmo_mesh = planet_mesh::build_atmosphere_mesh(
             subdivisions,
             planet_radius_m as f32,
@@ -304,7 +307,7 @@ fn push_planet_body(
             orbital_radius_m: 0.0,
             orbital_period_s: 0.0,
             initial_phase: 0.0,
-            radius_m: planet_radius_m * 1.03,
+            radius_m: planet_radius_m * 1.08,
             parent_index: planet_body_idx,
             label: format!("Atmo {}", index + 1),
         });
@@ -313,6 +316,8 @@ fn push_planet_body(
     // Ring system (if planet has one)
     if planet.has_rings {
         if let Some(ref ring) = planet.ring_params {
+            log::info!("  + Rings for Planet {} (inner {:.1}x, outer {:.1}x)",
+                index + 1, ring.inner_ratio, ring.outer_ratio);
             let ring_mesh = planet_mesh::build_ring_mesh(
                 planet_radius_m as f32,
                 ring,

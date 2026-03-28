@@ -170,7 +170,7 @@ pub fn build_atmosphere_mesh(
     planet_radius_m: f32,
     atmo: &sa_universe::AtmosphereParams,
 ) -> MeshData {
-    let atmo_radius = planet_radius_m * 1.03;
+    let atmo_radius = planet_radius_m * 1.08; // 8% larger — visible halo
     let ico = generate_icosphere(subdivisions);
 
     let mut vertices = Vec::new();
@@ -190,11 +190,13 @@ pub fn build_atmosphere_mesh(
 
         // Slightly vary brightness by latitude for visual interest
         let avg_y = (p0[1] + p1[1] + p2[1]) / 3.0; // latitude proxy on unit sphere
-        let lat_factor = 0.8 + 0.2 * (1.0 - avg_y.abs()); // brighter at equator
+        let lat_factor = 0.7 + 0.3 * (1.0 - avg_y.abs()); // brighter at equator
+        // Bright, visible atmosphere color — rendered opaque so needs to be
+        // clearly distinguishable from the planet surface beneath
         let color = [
-            atmo.color[0] * atmo.opacity * lat_factor * 0.6,
-            atmo.color[1] * atmo.opacity * lat_factor * 0.6,
-            atmo.color[2] * atmo.opacity * lat_factor * 0.6,
+            atmo.color[0] * lat_factor * 0.8,
+            atmo.color[1] * lat_factor * 0.8,
+            atmo.color[2] * lat_factor * 0.8,
         ];
 
         let base = vertices.len() as u32;
