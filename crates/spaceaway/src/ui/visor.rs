@@ -297,7 +297,7 @@ fn draw_suit_vital(
     time: f32,
 ) {
     let pct = (value * 100.0).round() as i32;
-    let text = format!("{label} {pct}%");
+    let value_text = format!("{pct}%");
 
     let (color, text_alpha) = if value >= 1.0 {
         (visor_color(1.0), 0.15 * alpha_mult)
@@ -306,39 +306,76 @@ fn draw_suit_vital(
     } else if value > 0.2 {
         (warn_color(1.0), 0.5 * alpha_mult)
     } else {
-        // Critical: pulsing red
         let pulse = 0.5 + 0.5 * (time * 4.0).sin();
         let a = (0.5 + 0.4 * pulse) * alpha_mult;
         (crit_color(1.0), a)
     };
 
-    let final_color = egui::Color32::from_rgba_unmultiplied(
-        color.r(),
-        color.g(),
-        color.b(),
-        (text_alpha * 255.0).clamp(0.0, 255.0) as u8,
-    );
-
-    let align = if left_aligned {
-        egui::Align2::LEFT_BOTTOM
-    } else {
-        egui::Align2::RIGHT_BOTTOM
-    };
-
-    let font_size = 36.0 * scale;
-
-    // Glow layer behind text for visor projection feel
-    let glow_color = egui::Color32::from_rgba_unmultiplied(
+    let make_color = |a: f32| egui::Color32::from_rgba_unmultiplied(
         color.r(), color.g(), color.b(),
-        (text_alpha * 80.0).clamp(0.0, 255.0) as u8,
+        (a * 255.0).clamp(0.0, 255.0) as u8,
     );
-    let glow_offset = 1.0 * scale;
-    painter.text(
-        egui::pos2(pos.x + glow_offset, pos.y + glow_offset),
-        align, &text, visor_font(font_size + 1.0), glow_color,
-    );
-    // Sharp text on top
-    painter.text(pos, align, &text, visor_font(font_size), final_color);
+
+    let label_size = 22.0 * scale;  // smaller label
+    let value_size = 36.0 * scale;  // larger value
+
+    // Simulate curved glass: text angled inward from the corners.
+    // Left side tilts clockwise, right side tilts counter-clockwise.
+    // We fake this by offsetting the label vertically from the value.
+    let curve_offset = 8.0 * scale; // vertical shift for curvature illusion
+
+    if left_aligned {
+        // Left side: label above and slightly right, value below
+        // Angled by drawing label higher-left, value lower-right
+        let label_pos = egui::pos2(pos.x, pos.y - value_size - curve_offset);
+        let value_pos = egui::pos2(pos.x + 4.0 * scale, pos.y);
+
+        // Label glow + text
+        painter.text(
+            egui::pos2(label_pos.x + 1.0, label_pos.y + 1.0),
+            egui::Align2::LEFT_BOTTOM, label, visor_font(label_size),
+            make_color(text_alpha * 0.3),
+        );
+        painter.text(
+            label_pos, egui::Align2::LEFT_BOTTOM, label,
+            visor_font(label_size), make_color(text_alpha * 0.7),
+        );
+
+        // Value glow + text
+        painter.text(
+            egui::pos2(value_pos.x + 1.0, value_pos.y + 1.0),
+            egui::Align2::LEFT_BOTTOM, &value_text, visor_font(value_size),
+            make_color(text_alpha * 0.3),
+        );
+        painter.text(
+            value_pos, egui::Align2::LEFT_BOTTOM, &value_text,
+            visor_font(value_size), make_color(text_alpha),
+        );
+    } else {
+        // Right side: label above and slightly left, value below
+        let label_pos = egui::pos2(pos.x, pos.y - value_size - curve_offset);
+        let value_pos = egui::pos2(pos.x - 4.0 * scale, pos.y);
+
+        painter.text(
+            egui::pos2(label_pos.x + 1.0, label_pos.y + 1.0),
+            egui::Align2::RIGHT_BOTTOM, label, visor_font(label_size),
+            make_color(text_alpha * 0.3),
+        );
+        painter.text(
+            label_pos, egui::Align2::RIGHT_BOTTOM, label,
+            visor_font(label_size), make_color(text_alpha * 0.7),
+        );
+
+        painter.text(
+            egui::pos2(value_pos.x + 1.0, value_pos.y + 1.0),
+            egui::Align2::RIGHT_BOTTOM, &value_text, visor_font(value_size),
+            make_color(text_alpha * 0.3),
+        );
+        painter.text(
+            value_pos, egui::Align2::RIGHT_BOTTOM, &value_text,
+            visor_font(value_size), make_color(text_alpha),
+        );
+    }
 }
 
 /// Target reticle: thin ring at projected position + name/distance text.
