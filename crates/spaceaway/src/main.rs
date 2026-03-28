@@ -1007,64 +1007,8 @@ impl ApplicationHandler for App {
                     } else {
                         [1.0, 0.0, 0.0] // red = miss
                     };
-                    self.debug_ray_data = Some((ray_origin, end, color, true));
-
-                    // Build the ray line mesh (thin box from origin to end)
-                    if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
-                        let dx = end[0] - ray_origin[0];
-                        let dy = end[1] - ray_origin[1];
-                        let dz = end[2] - ray_origin[2];
-                        let len = (dx*dx + dy*dy + dz*dz).sqrt();
-                        if len > 0.01 {
-                            let _mid = [
-                                (ray_origin[0] + end[0]) / 2.0,
-                                (ray_origin[1] + end[1]) / 2.0,
-                                (ray_origin[2] + end[2]) / 2.0,
-                            ];
-                            // Create a small marker at the end point
-                            let marker = sa_meshgen::primitives::box_mesh(0.05, 0.05, 0.05, color);
-                            let marker = marker.transform(Mat4::from_translation(Vec3::new(end[0], end[1], end[2])));
-                            // Create a thin line from origin to end
-                            let line_dir = Vec3::new(dx/len, dy/len, dz/len);
-                            let up = if line_dir.y.abs() > 0.9 { Vec3::X } else { Vec3::Y };
-                            let right = line_dir.cross(up).normalize() * 0.005;
-                            let up2 = line_dir.cross(right).normalize() * 0.005;
-
-                            let mut verts = Vec::new();
-                            let mut indices = Vec::new();
-                            // 4 vertices at origin, 4 at end → thin box
-                            let o = Vec3::new(ray_origin[0], ray_origin[1], ray_origin[2]);
-                            let e = Vec3::new(end[0], end[1], end[2]);
-                            for &offset in &[right + up2, right - up2, -right - up2, -right + up2] {
-                                verts.push(sa_meshgen::mesh::MeshVertex {
-                                    position: (o + offset).to_array(),
-                                    color,
-                                    normal: [0.0, 1.0, 0.0],
-                                });
-                            }
-                            for &offset in &[right + up2, right - up2, -right - up2, -right + up2] {
-                                verts.push(sa_meshgen::mesh::MeshVertex {
-                                    position: (e + offset).to_array(),
-                                    color,
-                                    normal: [0.0, 1.0, 0.0],
-                                });
-                            }
-                            // 6 faces of the thin box
-                            for &[a,b,c,d] in &[[0,1,5,4],[1,2,6,5],[2,3,7,6],[3,0,4,7],[0,1,2,3],[4,5,6,7]] {
-                                let base = indices.len() as u32;
-                                let _ = base;
-                                indices.extend_from_slice(&[a,b,c, a,c,d]);
-                            }
-
-                            let mut ray_mesh = sa_meshgen::Mesh { vertices: verts, indices };
-                            // Merge the marker cube
-                            ray_mesh = sa_meshgen::Mesh::merge(&[ray_mesh, marker]);
-
-                            let mesh_data = meshgen_to_render(&ray_mesh);
-                            let handle = renderer.mesh_store.upload(&gpu.device, &mesh_data);
-                            self.debug_ray_mesh = Some(handle);
-                        }
-                    }
+                    // Debug ray visualization disabled — was generating mesh + uploading
+                    // to GPU every frame (24ms!). Enable only when actively debugging.
 
                     // If helm seat was clicked while standing, enter seated mode
                     if !is_seated && helm_clicked.is_some()
@@ -1096,29 +1040,34 @@ impl ApplicationHandler for App {
                         ship.engine_on = button.is_button_pressed().unwrap_or(false);
                     }
                 }
-                // Update interactable meshes when state changes (visual feedback)
+                // Update interactable meshes ONLY when state changes (not every frame).
+                // Regenerating meshes + uploading to GPU every frame is extremely expensive.
                 if let (Some(interaction), Some(gpu), Some(renderer), Some(ids)) =
                     (&self.interaction, &self.gpu, &mut self.renderer, &self.ship_ids)
                 {
-                    // Update lever mesh based on current position
+                    // Update lever mesh only if position changed
                     if let Some(lever) = interaction.get(ids.throttle_lever) {
                         let pos = lever.lever_position().unwrap_or(0.0);
-                        let mesh = sa_meshgen::interactables::lever_mesh(pos);
-                        let mesh_data = meshgen_to_render(&mesh);
-                        let handle = renderer.mesh_store.upload(&gpu.device, &mesh_data);
-                        if let Some(slot) = self.interactable_meshes.get_mut(ids.throttle_lever) {
-                            *slot = handle;
+                        if interaction.is_dragging() {
+                            let mesh = sa_meshgen::interactables::lever_mesh(pos);
+                            let mesh_data = meshgen_to_render(&mesh);
+                            let handle = renderer.mesh_store.upload(&gpu.device, &mesh_data);
+                            if let Some(slot) = self.interactable_meshes.get_mut(ids.throttle_lever) {
+                                *slot = handle;
+                            }
                         }
                     }
 
-                    // Update button mesh based on pressed state
+                    // Update button mesh only on click (toggle frame)
                     if let Some(button) = interaction.get(ids.engine_button) {
-                        let pressed = button.is_button_pressed().unwrap_or(false);
-                        let mesh = sa_meshgen::interactables::button_mesh(pressed);
-                        let mesh_data = meshgen_to_render(&mesh);
-                        let handle = renderer.mesh_store.upload(&gpu.device, &mesh_data);
-                        if let Some(slot) = self.interactable_meshes.get_mut(ids.engine_button) {
-                            *slot = handle;
+                        if self.input.mouse.left_just_released() && interaction.hovered() == Some(ids.engine_button) {
+                            let pressed = button.is_button_pressed().unwrap_or(false);
+                            let mesh = sa_meshgen::interactables::button_mesh(pressed);
+                            let mesh_data = meshgen_to_render(&mesh);
+                            let handle = renderer.mesh_store.upload(&gpu.device, &mesh_data);
+                            if let Some(slot) = self.interactable_meshes.get_mut(ids.engine_button) {
+                                *slot = handle;
+                            }
                         }
                     }
                 }
