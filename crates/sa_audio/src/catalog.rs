@@ -113,7 +113,7 @@ pub fn engine_path(state: EngineState) -> Option<&'static str> {
 pub fn music_tracks(ctx: MusicContext) -> &'static [&'static str] {
     match ctx {
         MusicContext::Idle => &[
-            "music/Alone.wav", "music/Winter.wav", "music/Tears.wav", "music/winterdreams.wav",
+            "music/Alone.wav", "music/Winter.wav", "music/Tears.wav",
         ],
         MusicContext::Exploration => &[
             "music/SilentFloating.wav", "music/Deep.wav", "music/Hope.wav",
