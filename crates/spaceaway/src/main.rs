@@ -206,6 +206,9 @@ struct App {
     ship_resources: ShipResources,
     /// Active solar system (set when the player enters one).
     active_system: Option<solar_system::ActiveSystem>,
+    /// Previous frame's ship yaw/pitch for computing rotation delta (helm camera tracking).
+    prev_ship_yaw: f32,
+    prev_ship_pitch: f32,
     /// Resource deposits in the game world.
     deposits: Vec<ResourceDeposit>,
     /// IDs of deposits that have been gathered.
@@ -282,6 +285,8 @@ impl App {
             drive_visuals: drive_integration::DriveVisualState::new(),
             ship_resources: ShipResources::new(),
             active_system: None,
+            prev_ship_yaw: 0.0,
+            prev_ship_pitch: 0.0,
             deposits: generate_deposits(42),
             gathered: HashSet::new(),
             nearest_gatherable: None,
@@ -1049,16 +1054,29 @@ impl ApplicationHandler for App {
                     // Interior colliders stay at LOCAL origin — ship-local collision
                     // handles the coordinate transform in PlayerController::update().
 
-                    // Camera follows ship rotation. Ship's forward direction is the
-                    // camera's look direction. No mouse free-look offset — the pilot
-                    // looks where the ship points. (Free-look can be added later as
-                    // a hold-to-look modifier key.)
+                    // Camera: mouse free-look + ship rotation tracking.
+                    // Mouse moves the camera freely (for clicking controls).
+                    // Ship rotation delta is ADDED so the view follows the ship.
+                    // Result: if you look at the throttle and the ship turns,
+                    // you're still looking at the throttle.
+                    let (dx, dy) = self.input.mouse.delta();
+                    self.camera.rotate(dx * 0.003, -dy * 0.003);
+
                     if let Some(ship) = &self.ship {
                         if let Some(body) = self.physics.get_body(ship.body_handle) {
                             let rot = body.rotation();
                             let fwd = rot * nalgebra::Vector3::new(0.0, 0.0, -1.0);
-                            self.camera.yaw = fwd.x.atan2(-fwd.z);
-                            self.camera.pitch = fwd.y.asin();
+                            let ship_yaw = fwd.x.atan2(-fwd.z);
+                            let ship_pitch = fwd.y.asin();
+
+                            // Apply ship rotation DELTA to camera
+                            let dyaw = ship_yaw - self.prev_ship_yaw;
+                            let dpitch = ship_pitch - self.prev_ship_pitch;
+                            self.camera.yaw += dyaw;
+                            self.camera.pitch += dpitch;
+
+                            self.prev_ship_yaw = ship_yaw;
+                            self.prev_ship_pitch = ship_pitch;
                         }
                     }
 
