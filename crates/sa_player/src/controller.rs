@@ -8,8 +8,8 @@ use sa_math::WorldPos;
 use sa_physics::PhysicsWorld;
 use winit::keyboard::KeyCode;
 
-const PLAYER_RADIUS: f32 = 0.3;
-const PLAYER_HALF_HEIGHT: f32 = 0.6;
+const PLAYER_RADIUS: f32 = 0.2;
+const PLAYER_HALF_HEIGHT: f32 = 0.7;
 const MOVE_SPEED: f32 = 5.0;
 const JUMP_SPEED: f32 = 5.0;
 const MOUSE_SENSITIVITY: f32 = 0.003;
