@@ -13,6 +13,7 @@ members = [
     "crates/sa_ship",
     "crates/sa_survival",
     "crates/spaceaway",
+    "crates/sa_audio",
 ]
 
 [workspace.package]
@@ -60,3 +61,6 @@ sa_survival = { path = "crates/sa_survival" }
 egui = "0.31"
 egui-wgpu = { version = "0.31", default-features = false }
 noise = "0.9"
+rodio = { version = "0.19", default-features = false, features = ["wav"] }
+rand = "0.8"
+sa_audio = { path = "crates/sa_audio" }
