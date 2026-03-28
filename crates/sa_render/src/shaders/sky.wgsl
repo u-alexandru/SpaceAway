@@ -6,7 +6,9 @@ struct SkyUniforms {
     galactic_center_dir: vec3<f32>,
     core_brightness: f32,
     observer_pos: vec3<f32>,
-    _pad: f32,
+    warp_intensity: f32,     // tunnel/vignette strength (0.0-1.0)
+    warp_dir: vec3<f32>,     // normalized travel direction
+    flash_intensity: f32,    // additive white flash (0.0-1.0)
 };
 
 @group(0) @binding(0)
@@ -162,6 +164,37 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let glow = sky.core_brightness * exp(-angle * angle / (spread * spread));
     let core_color = vec3<f32>(0.95, 0.85, 0.6) * glow;
     color += core_color;
+
+    // --- Warp effects (only active when warp_intensity > 0) ---
+
+    // 1. Rear hemisphere darkening
+    if sky.warp_intensity > 0.0 {
+        let forward_factor = dot(view_dir, normalize(sky.warp_dir));
+        let rear_darkening = smoothstep(-0.3, 0.2, forward_factor);
+        color = color * mix(1.0, rear_darkening, sky.warp_intensity);
+    }
+
+    // 2. Procedural radial tunnel streaks
+    if sky.warp_intensity > 0.1 {
+        let uv = in.uv; // already in [-1,1] range
+        let dist = length(uv);
+        let angle = atan2(uv.y, uv.x);
+
+        let num_streaks = 64.0;
+        let streak_angle = angle * num_streaks / TAU;
+        let streak = smoothstep(0.3, 0.5, fract(streak_angle))
+                   * (1.0 - smoothstep(0.5, 0.7, fract(streak_angle)));
+
+        let tunnel = smoothstep(0.15, 0.6, dist);
+
+        let tunnel_color = mix(vec3<f32>(0.3, 0.4, 0.8), vec3<f32>(0.1, 0.1, 0.3), dist);
+        let tunnel_brightness = streak * tunnel * sky.warp_intensity * 0.15;
+
+        color += tunnel_color * tunnel_brightness;
+    }
+
+    // 3. Additive white flash
+    color = mix(color, vec3<f32>(1.0, 1.0, 1.0), sky.flash_intensity);
 
     return vec4<f32>(color, 1.0);
 }
