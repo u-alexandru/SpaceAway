@@ -158,6 +158,156 @@ impl Navigation {
         }
     }
 
+    /// Lock the star most aligned with the camera forward direction.
+    /// Only considers stars within a ~45° cone (dot > 0.7).
+    pub fn lock_nearest_to_crosshair(&mut self, camera_forward: [f32; 3], galactic_pos: WorldPos) {
+        let fwd = [camera_forward[0] as f64, camera_forward[1] as f64, camera_forward[2] as f64];
+        let fwd_len = (fwd[0]*fwd[0] + fwd[1]*fwd[1] + fwd[2]*fwd[2]).sqrt();
+        if fwd_len < 1e-10 { return; }
+        let fwd = [fwd[0]/fwd_len, fwd[1]/fwd_len, fwd[2]/fwd_len];
+
+        let mut best_dot = 0.7; // minimum threshold (~45° cone)
+        let mut best_idx = None;
+
+        for (i, star) in self.nearby_stars.iter().enumerate() {
+            let dx = star.galactic_pos.x - galactic_pos.x;
+            let dy = star.galactic_pos.y - galactic_pos.y;
+            let dz = star.galactic_pos.z - galactic_pos.z;
+            let len = (dx*dx + dy*dy + dz*dz).sqrt();
+            if len < 0.01 { continue; }
+            let dir = [dx/len, dy/len, dz/len];
+            let dot = fwd[0]*dir[0] + fwd[1]*dir[1] + fwd[2]*dir[2];
+            if dot > best_dot {
+                best_dot = dot;
+                best_idx = Some(i);
+            }
+        }
+
+        if let Some(idx) = best_idx {
+            self.locked_target = Some(self.nearby_stars[idx].clone());
+        }
+    }
+
+    /// Predictive gravity well check: does the line segment from pos_before to pos_after
+    /// pass within 50 AU of any star? Returns the star and the exact drop position.
+    pub fn check_gravity_well_predictive(
+        &self,
+        pos_before: WorldPos,
+        pos_after: WorldPos,
+    ) -> Option<(NavStar, WorldPos)> {
+        let au_in_ly: f64 = 1.581e-5;
+        let well_radius = 50.0 * au_in_ly;
+
+        // Segment vector
+        let seg = [
+            pos_after.x - pos_before.x,
+            pos_after.y - pos_before.y,
+            pos_after.z - pos_before.z,
+        ];
+        let seg_len_sq = seg[0]*seg[0] + seg[1]*seg[1] + seg[2]*seg[2];
+        if seg_len_sq < 1e-30 { return None; }
+
+        let mut closest_t = f64::MAX;
+        let mut hit_star = None;
+        let mut hit_pos = pos_after;
+
+        // Check locked target first, then all nearby stars
+        let targets: Vec<&NavStar> = self.locked_target.iter()
+            .chain(self.nearby_stars.iter())
+            .collect();
+
+        for star in targets {
+            // Vector from segment start to star
+            let to_star = [
+                star.galactic_pos.x - pos_before.x,
+                star.galactic_pos.y - pos_before.y,
+                star.galactic_pos.z - pos_before.z,
+            ];
+
+            // Project star onto segment: t = dot(to_star, seg) / dot(seg, seg)
+            let dot = to_star[0]*seg[0] + to_star[1]*seg[1] + to_star[2]*seg[2];
+            let t = (dot / seg_len_sq).clamp(0.0, 1.0);
+
+            // Closest point on segment to star
+            let closest = [
+                pos_before.x + seg[0] * t,
+                pos_before.y + seg[1] * t,
+                pos_before.z + seg[2] * t,
+            ];
+
+            let dx = closest[0] - star.galactic_pos.x;
+            let dy = closest[1] - star.galactic_pos.y;
+            let dz = closest[2] - star.galactic_pos.z;
+            let dist = (dx*dx + dy*dy + dz*dz).sqrt();
+
+            if dist < well_radius && t < closest_t {
+                closest_t = t;
+                // Place ship at well_radius from star, on the approach side
+                let approach_dir = [
+                    pos_before.x - star.galactic_pos.x,
+                    pos_before.y - star.galactic_pos.y,
+                    pos_before.z - star.galactic_pos.z,
+                ];
+                let a_len = (approach_dir[0]*approach_dir[0]
+                    + approach_dir[1]*approach_dir[1]
+                    + approach_dir[2]*approach_dir[2]).sqrt();
+                if a_len > 1e-10 {
+                    hit_pos = WorldPos::new(
+                        star.galactic_pos.x + approach_dir[0]/a_len * well_radius,
+                        star.galactic_pos.y + approach_dir[1]/a_len * well_radius,
+                        star.galactic_pos.z + approach_dir[2]/a_len * well_radius,
+                    );
+                }
+                hit_star = Some(star.clone());
+            }
+        }
+
+        hit_star.map(|star| (star, hit_pos))
+    }
+
+    /// Check if the ship will pass through a gravity well within `lookahead` ly.
+    /// Returns the star if a proximity alert should fire.
+    pub fn check_proximity_warning(
+        &self,
+        pos: WorldPos,
+        velocity_dir: [f64; 3],
+        lookahead_ly: f64,
+    ) -> Option<&NavStar> {
+        let au_in_ly: f64 = 1.581e-5;
+        let well_radius = 50.0 * au_in_ly;
+
+        let future_pos = WorldPos::new(
+            pos.x + velocity_dir[0] * lookahead_ly,
+            pos.y + velocity_dir[1] * lookahead_ly,
+            pos.z + velocity_dir[2] * lookahead_ly,
+        );
+
+        for star in &self.nearby_stars {
+            let seg = [future_pos.x - pos.x, future_pos.y - pos.y, future_pos.z - pos.z];
+            let seg_len_sq = seg[0]*seg[0] + seg[1]*seg[1] + seg[2]*seg[2];
+            if seg_len_sq < 1e-30 { continue; }
+
+            let to_star = [
+                star.galactic_pos.x - pos.x,
+                star.galactic_pos.y - pos.y,
+                star.galactic_pos.z - pos.z,
+            ];
+            let dot = to_star[0]*seg[0] + to_star[1]*seg[1] + to_star[2]*seg[2];
+            let t = (dot / seg_len_sq).clamp(0.0, 1.0);
+
+            let closest = [pos.x + seg[0]*t, pos.y + seg[1]*t, pos.z + seg[2]*t];
+            let dx = closest[0] - star.galactic_pos.x;
+            let dy = closest[1] - star.galactic_pos.y;
+            let dz = closest[2] - star.galactic_pos.z;
+            let dist = (dx*dx + dy*dy + dz*dz).sqrt();
+
+            if dist < well_radius {
+                return Some(star);
+            }
+        }
+        None
+    }
+
     /// Compute distance and ETA to locked target.
     /// Returns (distance_ly, eta_seconds) or None if no target.
     pub fn target_eta(&self, galactic_pos: WorldPos, speed_ly_s: f64) -> Option<(f64, f64)> {
@@ -259,6 +409,40 @@ mod tests {
             let (dist, eta) = result.unwrap();
             assert!(dist > 0.0);
             assert!(eta > 0.0);
+        }
+    }
+
+    #[test]
+    fn lock_nearest_to_crosshair_picks_aimed_star() {
+        let mut nav = Navigation::new(MasterSeed(42));
+        nav.update_nearby(WorldPos::new(5.0, 0.0, 5.0));
+        if nav.nearby_stars.len() >= 2 {
+            // Aim at the first star
+            let star = &nav.nearby_stars[0];
+            let dx = (star.galactic_pos.x - 5.0) as f32;
+            let dy = (star.galactic_pos.y) as f32;
+            let dz = (star.galactic_pos.z - 5.0) as f32;
+            let len = (dx*dx + dy*dy + dz*dz).sqrt();
+            let fwd = [dx/len, dy/len, dz/len];
+            nav.lock_nearest_to_crosshair(fwd, WorldPos::new(5.0, 0.0, 5.0));
+            assert!(nav.locked_target.is_some());
+        }
+    }
+
+    #[test]
+    fn predictive_gravity_well_catches_flythrough() {
+        let mut nav = Navigation::new(MasterSeed(42));
+        nav.update_nearby(WorldPos::ORIGIN);
+        if let Some(star) = nav.nearby_stars.first() {
+            // Fly a segment that passes through the star
+            let before = WorldPos::new(
+                star.galactic_pos.x - 0.1, star.galactic_pos.y, star.galactic_pos.z,
+            );
+            let after = WorldPos::new(
+                star.galactic_pos.x + 0.1, star.galactic_pos.y, star.galactic_pos.z,
+            );
+            let result = nav.check_gravity_well_predictive(before, after);
+            assert!(result.is_some(), "should detect flythrough");
         }
     }
 }

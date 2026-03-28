@@ -231,6 +231,10 @@ struct App {
     audio: sa_audio::AudioManager,
     /// Prevents spamming the low-fuel voice announcement.
     fuel_low_announced: bool,
+    /// Prevents repeated proximity warnings during a single warp pass.
+    proximity_warned: bool,
+    /// Previous frame's distance to locked target (for approach voice trigger).
+    prev_target_dist: Option<f64>,
     /// Current game phase (Menu or Playing).
     phase: GamePhase,
     /// Main menu state (only present during Menu phase).
@@ -312,6 +316,8 @@ impl App {
             navigation: navigation::Navigation::new(seed),
             audio: sa_audio::AudioManager::new("resources/sounds".into()),
             fuel_low_announced: false,
+            proximity_warned: false,
+            prev_target_dist: None,
             phase: GamePhase::Menu,
             menu: None,
         }
@@ -798,15 +804,18 @@ impl ApplicationHandler for App {
                                 log::info!("Returned to normal scene view");
                             }
                             KeyCode::Tab => {
-                                // Lock nearest star for navigation
+                                // Lock star nearest to crosshair
                                 self.navigation.update_nearby(self.galactic_position);
-                                if !self.navigation.nearby_stars.is_empty() {
-                                    self.navigation.lock_target(0);
-                                    if let Some(target) = &self.navigation.locked_target {
-                                        log::info!("LOCKED: {} ({:.2} ly away)", target.catalog_name, target.distance_ly);
-                                    }
+                                let fwd = self.camera.forward();
+                                self.navigation.lock_nearest_to_crosshair(
+                                    [fwd.x, fwd.y, fwd.z],
+                                    self.galactic_position,
+                                );
+                                if let Some(target) = &self.navigation.locked_target {
+                                    log::info!("LOCKED: {} ({:.2} ly away)", target.catalog_name, target.distance_ly);
+                                    self.audio.play_sfx(sa_audio::SfxId::Confirm, None);
                                 } else {
-                                    log::warn!("No nearby stars found");
+                                    log::warn!("No star in crosshair cone");
                                 }
                             }
                             KeyCode::Digit8 => {
@@ -1153,15 +1162,18 @@ impl ApplicationHandler for App {
                                 log::info!("Drive: CRUISE engaged");
                             }
                         }
-                        // Tab: lock nearest star for navigation
+                        // Tab: lock star nearest to crosshair
                         if self.input.keyboard.just_pressed(KeyCode::Tab) {
-                            if !self.navigation.nearby_stars.is_empty() {
-                                self.navigation.lock_target(0);
-                                if let Some(target) = &self.navigation.locked_target {
-                                    log::info!("LOCKED: {} ({:.2} ly)", target.catalog_name, target.distance_ly);
-                                }
+                            let fwd = self.camera.forward();
+                            self.navigation.lock_nearest_to_crosshair(
+                                [fwd.x, fwd.y, fwd.z],
+                                self.galactic_position,
+                            );
+                            if let Some(target) = &self.navigation.locked_target {
+                                log::info!("LOCKED: {} ({:.2} ly)", target.catalog_name, target.distance_ly);
+                                self.audio.play_sfx(sa_audio::SfxId::Confirm, None);
                             } else {
-                                log::warn!("No nearby stars found");
+                                log::warn!("No star in crosshair cone");
                             }
                         }
                         if self.input.keyboard.just_pressed(KeyCode::Digit3) {
@@ -1244,7 +1256,7 @@ impl ApplicationHandler for App {
                         self.physics.step(physics_dt);
                     }
 
-                    // Update galactic position based on drive speed
+                    // Update galactic position based on drive speed (with deceleration)
                     if self.drive.mode() != sa_ship::DriveMode::Impulse {
                         let direction = if let Some(ship) = &self.ship {
                             if let Some(body) = self.physics.get_body(ship.body_handle) {
@@ -1257,55 +1269,101 @@ impl ApplicationHandler for App {
                         } else {
                             [0.0, 0.0, -1.0]
                         };
-                        let delta = drive_integration::galactic_position_delta(
+
+                        // Save position before warp movement
+                        let pos_before = self.galactic_position;
+
+                        // Compute target distance for deceleration
+                        let target_dist = self.navigation.locked_target.as_ref()
+                            .map(|t| self.galactic_position.distance_to(t.galactic_pos));
+
+                        // Apply warp movement with deceleration
+                        let (delta, effective_speed) = drive_integration::galactic_position_delta_decel(
                             &self.drive,
                             direction,
                             dt as f64,
+                            target_dist,
                         );
                         self.galactic_position.x += delta[0];
                         self.galactic_position.y += delta[1];
                         self.galactic_position.z += delta[2];
-                    }
 
-                    // Gravity well auto-drop: only check during warp when no system is loaded
-                    if self.drive.mode() == sa_ship::DriveMode::Warp
-                        && matches!(self.drive.status(), sa_ship::DriveStatus::Engaged)
-                        && self.active_system.is_none()
-                    {
-                        if let Some(nav_star) = self.navigation.check_gravity_well(self.galactic_position) {
-                            // Drop out of warp
-                            self.drive.request_disengage();
-                            log::info!("GRAVITY WELL — entering system: {}", nav_star.catalog_name);
+                        let pos_after = self.galactic_position;
 
-                            // Load the solar system
-                            let nav_id = nav_star.id;
-                            let nav_name = nav_star.catalog_name.clone();
-                            if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
-                                let sector_coord = sa_universe::SectorCoord::new(
-                                    nav_id.sector_x().into(),
-                                    nav_id.sector_y().into(),
-                                    nav_id.sector_z().into(),
-                                );
-                                let sector = sa_universe::sector::generate_sector(
-                                    MasterSeed(42),
-                                    sector_coord,
-                                );
-                                if let Some(placed) = sector.stars.iter().find(|s| s.id == nav_id) {
-                                    let system = solar_system::ActiveSystem::load(
-                                        nav_id,
-                                        placed,
-                                        &mut renderer.mesh_store,
-                                        &gpu.device,
-                                    );
-                                    log::info!("System loaded: {} bodies ({})", system.body_count(), nav_name);
-                                    self.audio.announce(sa_audio::VoiceId::AllSystemsReady);
-                                    self.active_system = Some(system);
-                                }
+                        // "Approaching destination" voice when deceleration begins (~1 ly)
+                        if let Some(dist) = target_dist {
+                            if dist < 1.0 && self.prev_target_dist.map_or(true, |d| d >= 1.0) {
+                                self.audio.announce(sa_audio::VoiceId::AllSystemsReady);
+                                log::info!("Approaching destination — deceleration engaged");
                             }
-
-                            // Clear navigation lock (prevent re-triggering)
-                            self.navigation.clear_target();
+                            self.prev_target_dist = Some(dist);
                         }
+
+                        // Free warp proximity warning (3 seconds lookahead)
+                        if self.drive.mode() == sa_ship::DriveMode::Warp
+                            && matches!(self.drive.status(), sa_ship::DriveStatus::Engaged)
+                            && self.navigation.locked_target.is_none()
+                            && !self.proximity_warned
+                        {
+                            let lookahead = effective_speed * 3.0;
+                            if self.navigation.check_proximity_warning(
+                                self.galactic_position, direction, lookahead,
+                            ).is_some() {
+                                self.audio.announce(sa_audio::VoiceId::Alert);
+                                self.proximity_warned = true;
+                                log::info!("PROXIMITY ALERT — star ahead");
+                            }
+                        }
+
+                        // Predictive gravity well auto-drop (ray-segment, catches flythroughs)
+                        if self.drive.mode() == sa_ship::DriveMode::Warp
+                            && matches!(self.drive.status(), sa_ship::DriveStatus::Engaged)
+                            && self.active_system.is_none()
+                        {
+                            if let Some((nav_star, drop_pos)) =
+                                self.navigation.check_gravity_well_predictive(pos_before, pos_after)
+                            {
+                                // Place ship at well boundary, not inside
+                                self.galactic_position = drop_pos;
+                                self.drive.request_disengage();
+                                self.proximity_warned = false;
+                                self.prev_target_dist = None;
+                                log::info!("GRAVITY WELL — entering system: {}", nav_star.catalog_name);
+
+                                // Load the solar system
+                                let nav_id = nav_star.id;
+                                let nav_name = nav_star.catalog_name.clone();
+                                if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
+                                    let sector_coord = sa_universe::SectorCoord::new(
+                                        nav_id.sector_x().into(),
+                                        nav_id.sector_y().into(),
+                                        nav_id.sector_z().into(),
+                                    );
+                                    let sector = sa_universe::sector::generate_sector(
+                                        MasterSeed(42),
+                                        sector_coord,
+                                    );
+                                    if let Some(placed) = sector.stars.iter().find(|s| s.id == nav_id) {
+                                        let system = solar_system::ActiveSystem::load(
+                                            nav_id,
+                                            placed,
+                                            &mut renderer.mesh_store,
+                                            &gpu.device,
+                                        );
+                                        log::info!("System loaded: {} bodies ({})", system.body_count(), nav_name);
+                                        self.audio.announce(sa_audio::VoiceId::AllSystemsReady);
+                                        self.active_system = Some(system);
+                                    }
+                                }
+
+                                // Clear navigation lock (prevent re-triggering)
+                                self.navigation.clear_target();
+                            }
+                        }
+                    } else {
+                        // Not in cruise/warp — reset proximity warning and approach tracking
+                        self.proximity_warned = false;
+                        self.prev_target_dist = None;
                     }
 
                     // Sync interior collider rotation to match ship (same as walk mode).

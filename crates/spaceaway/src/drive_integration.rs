@@ -157,6 +157,57 @@ pub fn galactic_position_delta(
     ]
 }
 
+/// Compute the warp deceleration multiplier based on distance to locked target.
+/// Returns 1.0 (full speed) when far, ramps down to 0.01 when close.
+pub fn warp_deceleration(distance_to_target_ly: f64) -> f64 {
+    if distance_to_target_ly > 1.0 {
+        1.0 // full speed
+    } else if distance_to_target_ly > 0.1 {
+        // Linear ramp: 1.0 at 1ly -> 0.1 at 0.1ly
+        0.1 + 0.9 * ((distance_to_target_ly - 0.1) / 0.9)
+    } else if distance_to_target_ly > 0.001 {
+        // Ramp: 0.1 at 0.1ly -> 0.01 at 0.001ly
+        0.01 + 0.09 * ((distance_to_target_ly - 0.001) / 0.099)
+    } else {
+        0.01 // minimum
+    }
+}
+
+/// Like galactic_position_delta but with deceleration toward a target.
+/// `target_distance_ly`: distance to locked target (None = no deceleration).
+/// Returns both the position delta and the effective speed (ly/s).
+pub fn galactic_position_delta_decel(
+    drive: &DriveController,
+    direction: [f64; 3],
+    dt: f64,
+    target_distance_ly: Option<f64>,
+) -> ([f64; 3], f64) {
+    let base_speed = drive.current_speed_ly_s();
+    if base_speed < 1e-20 {
+        return ([0.0, 0.0, 0.0], 0.0);
+    }
+
+    let decel = target_distance_ly
+        .map(|d| warp_deceleration(d))
+        .unwrap_or(1.0);
+    let effective_speed = base_speed * decel;
+
+    let len = (direction[0]*direction[0]
+        + direction[1]*direction[1]
+        + direction[2]*direction[2]).sqrt();
+    if len < 1e-10 {
+        return ([0.0, 0.0, 0.0], 0.0);
+    }
+    let d = [direction[0]/len, direction[1]/len, direction[2]/len];
+
+    let delta = [
+        d[0] * effective_speed * dt,
+        d[1] * effective_speed * dt,
+        d[2] * effective_speed * dt,
+    ];
+    (delta, effective_speed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,5 +249,22 @@ mod tests {
         dc.set_speed_fraction(1.0);
         let delta = galactic_position_delta(&dc, [0.0, 0.0, -1.0], 1.0);
         assert!(delta[2].abs() < 1e-20);
+    }
+
+    #[test]
+    fn deceleration_full_speed_far() {
+        assert!((warp_deceleration(5.0) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn deceleration_reduced_close() {
+        let d = warp_deceleration(0.5);
+        assert!(d < 1.0 && d > 0.1, "at 0.5ly should be between 0.1 and 1.0, got {d}");
+    }
+
+    #[test]
+    fn deceleration_very_slow_near() {
+        let d = warp_deceleration(0.01);
+        assert!(d < 0.15, "at 0.01ly should be very slow, got {d}");
     }
 }
