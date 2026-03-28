@@ -325,7 +325,7 @@ impl App {
         );
 
         // Create screen quad for the helm monitor (0.4 x 0.25, matching Speed Display size)
-        let screen_quad = ScreenQuad::new(&gpu.device, 0.4, 0.25);
+        let screen_quad = ScreenQuad::new(&gpu.device, 1.0, 0.7);
         self.screen_quad = Some(screen_quad);
 
         // Create initial bind group for the monitor texture
@@ -1166,14 +1166,6 @@ impl ApplicationHandler for App {
                                     model_matrix: ship_transform * Mat4::from_translation(pos),
                                 });
                             }
-                        }
-
-                        // Debug ray visualization
-                        if let Some(ray_handle) = self.debug_ray_mesh {
-                            cmds.push(DrawCommand {
-                                mesh: ray_handle,
-                                model_matrix: Mat4::IDENTITY,
-                            });
                         }
 
                         cmds
