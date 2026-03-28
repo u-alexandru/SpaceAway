@@ -1,4 +1,4 @@
-use glam::{Mat4, Vec3};
+use glam::{Mat4, Quat, Vec3};
 use sa_math::WorldPos;
 
 pub struct Camera {
@@ -8,6 +8,9 @@ pub struct Camera {
     pub fov_y: f32,
     pub near: f32,
     pub far: f32,
+    /// When set, view_matrix() uses this orientation instead of yaw/pitch.
+    /// Used by helm mode to track full ship rotation (including roll).
+    pub orientation_override: Option<Quat>,
 }
 
 impl Camera {
@@ -18,7 +21,8 @@ impl Camera {
             pitch: 0.0,
             fov_y: std::f32::consts::FRAC_PI_4,
             near: 0.1,
-            far: f32::INFINITY, // reversed-Z infinite projection
+            far: f32::INFINITY,
+            orientation_override: None,
         }
     }
 
@@ -61,7 +65,13 @@ impl Camera {
     }
 
     pub fn view_matrix(&self) -> Mat4 {
-        Mat4::look_to_rh(Vec3::ZERO, self.forward(), Vec3::Y)
+        if let Some(q) = self.orientation_override {
+            // Helm mode: full quaternion orientation (includes roll)
+            Mat4::from_quat(q.conjugate()) // conjugate = inverse for unit quaternion
+        } else {
+            // Normal mode: yaw/pitch only
+            Mat4::look_to_rh(Vec3::ZERO, self.forward(), Vec3::Y)
+        }
     }
 
     /// Reversed-Z infinite projection matrix.

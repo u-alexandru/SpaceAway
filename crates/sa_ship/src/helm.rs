@@ -15,8 +15,10 @@ pub enum HelmState {
     Seated,
 }
 
-/// Rotation rate for keyboard-driven ship rotation (normalized input * this).
+/// Rotation rate for pitch/yaw (normalized input * this).
 const HELM_ROTATION_RATE: f32 = 1.0;
+/// Roll rate — slower than pitch/yaw for control precision.
+const HELM_ROLL_RATE: f32 = 0.3;
 
 /// Controls the helm seated mode.
 pub struct HelmController {
@@ -93,10 +95,10 @@ impl HelmController {
             yaw += HELM_ROTATION_RATE;
         }
         if input.keyboard.is_pressed(KeyCode::KeyQ) {
-            roll -= HELM_ROTATION_RATE;
+            roll -= HELM_ROLL_RATE;
         }
         if input.keyboard.is_pressed(KeyCode::KeyE) {
-            roll += HELM_ROTATION_RATE;
+            roll += HELM_ROLL_RATE;
         }
 
         ship.apply_rotation(physics, pitch, yaw, roll);

@@ -751,15 +751,17 @@ impl ApplicationHandler for App {
                                         let planet_radius_m = planet.radius_earth as f64 * 6_371_000.0;
                                         let view_dist_m = planet_radius_m * 1.5;
                                         let planet_orbital_ly = planet.orbital_radius_au as f64 * au_in_ly;
+                                        // Offset above orbital plane so rings are visible
+                                        let above_ly = view_dist_m * 0.4 * meters_in_ly;
                                         self.galactic_position = WorldPos::new(
                                             system.star_galactic_pos.x + planet_orbital_ly + view_dist_m * meters_in_ly,
-                                            system.star_galactic_pos.y,
+                                            system.star_galactic_pos.y + above_ly,
                                             system.star_galactic_pos.z,
                                         );
                                         self.camera.position = self.galactic_position;
-                                        // Face toward the star/planet (in -X direction from our offset)
-                                        self.camera.yaw = -std::f32::consts::FRAC_PI_2; // face -X
-                                        self.camera.pitch = 0.0;
+                                        self.camera.orientation_override = None;
+                                        self.camera.yaw = -std::f32::consts::FRAC_PI_2;
+                                        self.camera.pitch = -0.2; // look down toward planet
                                         log::info!("→ Planet {} of {}: {:?} {:.0}km at {:.2}AU (viewing from {:.0}km)",
                                             idx + 1, planets.len(), planet.sub_type,
                                             planet.radius_earth * 6371.0, planet.orbital_radius_au,
@@ -791,12 +793,15 @@ impl ApplicationHandler for App {
                                                 let sr = placed.star.radius as f64 * 696_000_000.0;
                                                 (sr * 3.0 * meters_in_ly, "No planets — near star".into())
                                             };
+                                            let above_ly = offset_ly * 0.3;
                                             self.galactic_position = WorldPos::new(
                                                 star.galactic_pos.x + offset_ly,
-                                                star.galactic_pos.y, star.galactic_pos.z);
+                                                star.galactic_pos.y + above_ly,
+                                                star.galactic_pos.z);
                                             self.camera.position = self.galactic_position;
+                                            self.camera.orientation_override = None;
                                             self.camera.yaw = -std::f32::consts::FRAC_PI_2;
-                                            self.camera.pitch = 0.0;
+                                            self.camera.pitch = -0.15;
                                             self.drive.request_disengage();
                                             self.teleport_counter = 1; // next press cycles to planet 2
                                             self.star_streaming.force_load(self.galactic_position);
@@ -862,12 +867,14 @@ impl ApplicationHandler for App {
                                             let view_m = r_m * 1.5;
                                             let orb_ly = planet.orbital_radius_au as f64 * au_in_ly;
 
+                                            let above_ly = view_m * 0.4 * meters_in_ly;
                                             self.galactic_position = WorldPos::new(
                                                 star_nav.galactic_pos.x + orb_ly + view_m * meters_in_ly,
-                                                star_nav.galactic_pos.y,
+                                                star_nav.galactic_pos.y + above_ly,
                                                 star_nav.galactic_pos.z,
                                             );
                                             self.camera.position = self.galactic_position;
+                                            self.camera.orientation_override = None;
                                             self.camera.yaw = -std::f32::consts::FRAC_PI_2;
                                             self.camera.pitch = 0.0;
                                             self.drive.request_disengage();
@@ -1033,6 +1040,7 @@ impl ApplicationHandler for App {
                             && let Some(helm) = &mut self.helm
                         {
                             self.drive.request_disengage();
+                            self.camera.orientation_override = None; // exit quaternion mode
                             helm.stand_up();
                             // Re-enable player and teleport to ship's current position
                             // (ship may have moved while seated)
@@ -1131,29 +1139,33 @@ impl ApplicationHandler for App {
                     // Interior colliders stay at LOCAL origin — ship-local collision
                     // handles the coordinate transform in PlayerController::update().
 
-                    // Camera: mouse free-look + ship rotation tracking.
-                    // Mouse moves the camera freely (for clicking controls).
-                    // Ship rotation delta is ADDED so the view follows the ship.
-                    // Result: if you look at the throttle and the ship turns,
-                    // you're still looking at the throttle.
+                    // Camera: ship quaternion + mouse look offset.
+                    // The ship's full rotation (including roll) drives the camera.
+                    // Mouse adds yaw/pitch offset for looking around the cockpit.
                     let (dx, dy) = self.input.mouse.delta();
                     self.camera.rotate(dx * 0.003, -dy * 0.003);
 
                     if let Some(ship) = &self.ship {
                         if let Some(body) = self.physics.get_body(ship.body_handle) {
-                            let rot = body.rotation();
-                            let fwd = rot * nalgebra::Vector3::new(0.0, 0.0, -1.0);
-                            let ship_yaw = fwd.x.atan2(-fwd.z);
-                            let ship_pitch = fwd.y.asin();
+                            let r = body.rotation();
+                            let ship_quat = glam::Quat::from_xyzw(r.i, r.j, r.k, r.w);
 
-                            // Apply ship rotation DELTA to camera
-                            let dyaw = ship_yaw - self.prev_ship_yaw;
-                            let dpitch = ship_pitch - self.prev_ship_pitch;
-                            self.camera.yaw += dyaw;
-                            self.camera.pitch += dpitch;
-
-                            self.prev_ship_yaw = ship_yaw;
-                            self.prev_ship_pitch = ship_pitch;
+                            // Build camera orientation: ship rotation + mouse yaw/pitch offset
+                            let mouse_offset = glam::Quat::from_euler(
+                                glam::EulerRot::YXZ,
+                                self.camera.yaw,
+                                self.camera.pitch,
+                                0.0,
+                            );
+                            // Remove the ship's yaw/pitch from the mouse offset so only
+                            // the RELATIVE offset remains. Actually simpler: just compose
+                            // ship_quat * mouse_offset_local where mouse_offset is relative
+                            // to the ship frame.
+                            //
+                            // When mouse hasn't moved (yaw=pitch=0 from sit-down reset),
+                            // camera = ship_quat → looks where ship points.
+                            // Mouse yaw/pitch adds local look-around on top.
+                            self.camera.orientation_override = Some(ship_quat * mouse_offset);
                         }
                     }
 
