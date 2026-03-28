@@ -33,7 +33,8 @@ impl PlayerController {
         let body_handle = physics.add_rigid_body(body);
 
         let collider = ColliderBuilder::capsule_y(PLAYER_HALF_HEIGHT, PLAYER_RADIUS)
-            .friction(0.0)
+            .friction(1.0) // High friction — player grips the floor and moves with the ship.
+                           // At accelerations > ~1g the player slides (realistic).
             .restitution(0.0)
             .mass(80.0) // 80 kg player — must match the mag-boot gravity force (785 N ≈ 80kg × 9.81)
             .build();
