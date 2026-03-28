@@ -1041,18 +1041,13 @@ impl ApplicationHandler for App {
                             && let Some(helm) = &mut self.helm
                         {
                             self.drive.request_disengage();
-                            self.camera.orientation_override = None;
-                            // Restore walk-mode camera direction from ship's current heading
-                            if let Some(body) = self.physics.get_body(ship.body_handle) {
-                                let rot = body.rotation();
-                                let fwd = rot * nalgebra::Vector3::new(0.0, 0.0, -1.0);
-                                let yaw = fwd.x.atan2(-fwd.z);
-                                let pitch = fwd.y.asin();
-                                // Set player yaw/pitch so walk mode camera matches ship direction
-                                if let Some(player) = &mut self.player {
-                                    player.yaw = yaw;
-                                    player.pitch = pitch;
-                                }
+                            // Reset player to face ship-local forward on stand-up.
+                            // Player yaw/pitch are SHIP-LOCAL (not world space).
+                            // Walk mode camera uses ship quaternion + player look offset
+                            // (same approach as helm mode, just with player.yaw/pitch).
+                            if let Some(player) = &mut self.player {
+                                player.yaw = 0.0;
+                                player.pitch = 0.0;
                             }
                             helm.stand_up();
                             // Re-enable player and teleport to ship's current position
@@ -1296,8 +1291,22 @@ impl ApplicationHandler for App {
 
                     if let Some(player) = &self.player {
                         self.camera.position = player.position(&self.physics);
-                        self.camera.yaw = player.yaw;
-                        self.camera.pitch = player.pitch;
+                        // Camera orientation: ship rotation * player look direction.
+                        // Player yaw/pitch are ship-local, so the camera correctly
+                        // follows the ship's roll/pitch/yaw.
+                        if let Some(ship) = &self.ship {
+                            if let Some(body) = self.physics.get_body(ship.body_handle) {
+                                let r = body.rotation();
+                                let ship_quat = glam::Quat::from_xyzw(r.i, r.j, r.k, r.w);
+                                let look = glam::Quat::from_rotation_y(-player.yaw)
+                                    * glam::Quat::from_rotation_x(-player.pitch);
+                                self.camera.orientation_override = Some(ship_quat * look);
+                            }
+                        } else {
+                            self.camera.yaw = player.yaw;
+                            self.camera.pitch = player.pitch;
+                            self.camera.orientation_override = None;
+                        }
                     }
                 }
 

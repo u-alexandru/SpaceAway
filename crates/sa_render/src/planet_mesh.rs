@@ -552,13 +552,13 @@ mod tests {
         };
         let mesh = build_atmosphere_mesh(2, 6_371_000.0, &atmo);
         assert!(!mesh.vertices.is_empty());
-        // All vertices should be at ~1.03x planet radius
+        // All vertices should be at ~1.08x planet radius
         for v in &mesh.vertices {
             let r = (v.position[0] * v.position[0]
                 + v.position[1] * v.position[1]
                 + v.position[2] * v.position[2])
             .sqrt();
-            let expected = 6_371_000.0 * 1.03;
+            let expected = 6_371_000.0 * 1.08;
             assert!(
                 (r - expected).abs() / expected < 0.01,
                 "atmosphere vertex at wrong radius: {r}"
