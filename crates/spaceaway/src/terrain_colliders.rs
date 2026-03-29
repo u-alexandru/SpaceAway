@@ -18,6 +18,14 @@ const COLLIDER_RANGE_M: f64 = 500.0;
 /// Shift all collider positions when the ship moves this far from the anchor.
 const ANCHOR_REBASE_THRESHOLD_M: f64 = 100.0;
 
+/// Handles for all bodies that must be shifted during an anchor rebase.
+/// Collected from main.rs and passed into the rebase function.
+pub(crate) struct RebaseBodies {
+    pub ship: Option<RigidBodyHandle>,
+    pub player: Option<RigidBodyHandle>,
+    pub interior: Option<RigidBodyHandle>,
+}
+
 /// Minimal data retained per chunk for collider management.
 pub(crate) struct CachedChunk {
     pub center_f64: [f64; 3],
@@ -96,10 +104,10 @@ impl TerrainColliders {
 
     /// Update HeightField colliders for chunks near the camera.
     ///
-    /// `ship_physics_pos`: the ship body's rapier translation. The terrain
-    /// body is repositioned here each frame so that collider offsets
-    /// (computed in galactic-relative meters) line up with the ship in
-    /// rapier's coordinate system.
+    /// Unified anchor system: the terrain body stays at (0,0,0). All physics
+    /// bodies (ship, player, interior) are positioned relative to the anchor.
+    /// When the ship drifts >100m from origin, all bodies are shifted back.
+    #[allow(clippy::too_many_arguments)]
     pub fn update(
         &mut self,
         physics: &mut PhysicsWorld,
@@ -107,7 +115,8 @@ impl TerrainColliders {
         radius_m: f64,
         max_displacement_m: f64,
         visible_keys: &std::collections::HashSet<ChunkKey>,
-        ship_physics_pos: [f32; 3],
+        _ship_physics_pos: [f32; 3],
+        rebase_bodies: &RebaseBodies,
     ) {
         // On first call, initialize anchor to the camera position so the
         // sphere barrier is placed correctly. Without this, anchor stays at
@@ -118,40 +127,10 @@ impl TerrainColliders {
         }
 
         let terrain_body = *self.terrain_body.get_or_insert_with(|| {
+            // Terrain body stays at (0,0,0) forever — never repositioned.
             let rb = RigidBodyBuilder::fixed().build();
             physics.add_rigid_body(rb)
         });
-
-        // Position the terrain body so that collider offsets (computed
-        // relative to the anchor) place chunks at the correct rapier-space
-        // positions relative to the ship.
-        //
-        // Collider offset = chunk_center - anchor  (planet-relative meters)
-        // Desired collider world = ship_phys + (chunk_center - cam_rel_m)
-        //
-        // So: body_pos + (chunk_center - anchor) = ship_phys + (chunk_center - cam_rel_m)
-        //     body_pos = ship_phys - cam_rel_m + anchor
-        //     body_pos = ship_phys - (cam_rel_m - anchor)
-        //
-        // Between rebases, (cam_rel_m - anchor) is the drift that would
-        // otherwise cause terrain to move with the ship. This formula
-        // cancels that drift so colliders stay at physically correct
-        // positions on every frame, not just at rebase boundaries.
-        let drift_from_anchor = [
-            (cam_rel_m[0] - self.anchor_f64[0]) as f32,
-            (cam_rel_m[1] - self.anchor_f64[1]) as f32,
-            (cam_rel_m[2] - self.anchor_f64[2]) as f32,
-        ];
-        if let Some(body) = physics.rigid_body_set.get_mut(terrain_body) {
-            body.set_translation(
-                nalgebra::Vector3::new(
-                    ship_physics_pos[0] - drift_from_anchor[0],
-                    ship_physics_pos[1] - drift_from_anchor[1],
-                    ship_physics_pos[2] - drift_from_anchor[2],
-                ),
-                true,
-            );
-        }
 
         // Sphere barrier: a ball collider at planet radius that prevents
         // flying through the planet at coarse LODs (where HeightField
@@ -170,23 +149,38 @@ impl TerrainColliders {
             self.sphere_barrier = Some(physics.add_collider(collider, terrain_body));
         }
 
-        // Anchor rebasing.
-        let dx = cam_rel_m[0] - self.anchor_f64[0];
-        let dy = cam_rel_m[1] - self.anchor_f64[1];
-        let dz = cam_rel_m[2] - self.anchor_f64[2];
-        let drift = (dx * dx + dy * dy + dz * dz).sqrt();
+        // Unified anchor rebase: check if the ship has drifted >100m from
+        // the physics origin. If so, shift ALL bodies (ship, player, interior,
+        // terrain colliders) so the ship returns near origin.
+        let ship_rapier_pos = rebase_bodies.ship
+            .and_then(|h| physics.rigid_body_set.get(h))
+            .map(|b| *b.translation())
+            .unwrap_or(nalgebra::Vector3::zeros());
+        let ship_drift = (ship_rapier_pos.x * ship_rapier_pos.x
+            + ship_rapier_pos.y * ship_rapier_pos.y
+            + ship_rapier_pos.z * ship_rapier_pos.z).sqrt();
 
-        if drift > ANCHOR_REBASE_THRESHOLD_M {
-            // Shift existing collider positions instead of destroying them.
-            // This preserves collision during high-speed descent.
-            let old_anchor = self.anchor_f64;
-            self.anchor_f64 = cam_rel_m;
-            let shift = nalgebra::Vector3::new(
-                (old_anchor[0] - cam_rel_m[0]) as f32,
-                (old_anchor[1] - cam_rel_m[1]) as f32,
-                (old_anchor[2] - cam_rel_m[2]) as f32,
-            );
-            // Shift HeightField colliders
+        if ship_drift > ANCHOR_REBASE_THRESHOLD_M as f32 {
+            // The shift moves ship back toward origin.
+            let shift = -ship_rapier_pos;
+
+            // Update anchor: add the ship's rapier position (in f64) to the anchor.
+            self.anchor_f64[0] += ship_rapier_pos.x as f64;
+            self.anchor_f64[1] += ship_rapier_pos.y as f64;
+            self.anchor_f64[2] += ship_rapier_pos.z as f64;
+
+            // Shift all rigid bodies.
+            for handle in [rebase_bodies.ship, rebase_bodies.player, rebase_bodies.interior].iter().flatten() {
+                if let Some(body) = physics.rigid_body_set.get_mut(*handle) {
+                    let t = body.translation();
+                    body.set_translation(
+                        nalgebra::Vector3::new(t.x + shift.x, t.y + shift.y, t.z + shift.z),
+                        true,
+                    );
+                }
+            }
+
+            // Shift HeightField colliders (position_wrt_parent on terrain body).
             for handle in self.colliders.values() {
                 if let Some(coll) = physics.collider_set.get_mut(*handle)
                     && let Some(pos) = coll.position_wrt_parent()
@@ -202,17 +196,19 @@ impl TerrainColliders {
                     coll.set_position_wrt_parent(new_pos);
                 }
             }
-            // Shift sphere barrier to planet center relative to new anchor
+
+            // Recompute sphere barrier to planet center relative to new anchor.
             if let Some(sh) = self.sphere_barrier
                 && let Some(coll) = physics.collider_set.get_mut(sh)
             {
-                let cx = (-cam_rel_m[0]) as f32;
-                let cy = (-cam_rel_m[1]) as f32;
-                let cz = (-cam_rel_m[2]) as f32;
+                let cx = (-self.anchor_f64[0]) as f32;
+                let cy = (-self.anchor_f64[1]) as f32;
+                let cz = (-self.anchor_f64[2]) as f32;
                 coll.set_position_wrt_parent(
                     nalgebra::Isometry3::translation(cx, cy, cz)
                 );
             }
+
             physics.sync_collider_positions();
             physics.update_query_pipeline();
         }

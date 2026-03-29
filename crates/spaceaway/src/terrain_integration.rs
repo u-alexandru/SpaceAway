@@ -119,6 +119,7 @@ impl TerrainManager {
         physics: &mut PhysicsWorld,
         ship_down: [f32; 3],
         ship_physics_pos: [f32; 3],
+        rebase_bodies: &crate::terrain_colliders::RebaseBodies,
     ) -> TerrainFrameResult {
         // DO NOT update planet_center_ly from orbital motion.
         // The planet orbits with TIME_SCALE=30 which can move it out of
@@ -196,6 +197,7 @@ impl TerrainManager {
             self.max_displacement_m,
             &visible_keys,
             ship_physics_pos,
+            rebase_bodies,
         );
 
         // --- Collision diagnostic (every 60 frames) ---
@@ -255,34 +257,20 @@ impl TerrainManager {
         self.col.cleanup(physics);
     }
 
-    /// Terrain rigid body handle (for repositioning before physics step).
+    /// Terrain rigid body handle.
+    #[allow(dead_code)]
     pub fn terrain_body_handle(&self) -> Option<rapier3d::prelude::RigidBodyHandle> {
         self.col.terrain_body
     }
 
-    /// Compute the correct terrain body position for a given ship rapier
-    /// position and camera galactic position.
-    ///
-    /// The terrain body must be offset from the ship by the drift between
-    /// `cam_rel_m` (current camera-to-planet displacement) and the collider
-    /// anchor. Without this correction, terrain colliders move with the
-    /// ship between anchor rebases, preventing collision.
-    pub fn corrected_terrain_body_pos(
-        &self,
-        camera_galactic_ly: WorldPos,
-        ship_physics_pos: [f32; 3],
-    ) -> [f32; 3] {
-        let cam_rel_m = [
-            (camera_galactic_ly.x - self.planet_center_ly.x) * LY_TO_M,
-            (camera_galactic_ly.y - self.planet_center_ly.y) * LY_TO_M,
-            (camera_galactic_ly.z - self.planet_center_ly.z) * LY_TO_M,
-        ];
-        let anchor = self.col.anchor_f64;
-        [
-            ship_physics_pos[0] - (cam_rel_m[0] - anchor[0]) as f32,
-            ship_physics_pos[1] - (cam_rel_m[1] - anchor[1]) as f32,
-            ship_physics_pos[2] - (cam_rel_m[2] - anchor[2]) as f32,
-        ]
+    /// The frozen planet center in light-years (set at activation time).
+    pub fn frozen_planet_center_ly(&self) -> WorldPos {
+        self.planet_center_ly
+    }
+
+    /// Current physics anchor in planet-relative meters (f64).
+    pub fn anchor_f64(&self) -> [f64; 3] {
+        self.col.anchor_f64
     }
 
     /// Planet radius in meters.

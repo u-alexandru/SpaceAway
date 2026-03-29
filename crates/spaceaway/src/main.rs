@@ -1492,55 +1492,38 @@ impl ApplicationHandler for App {
                         .and_then(|s| self.physics.get_body(s.body_handle))
                         .map(|b| b.translation().clone_owned());
 
-                    // Move terrain body to the drift-corrected position BEFORE
-                    // physics.step() so rapier resolves contacts between the ship's
-                    // skid colliders and terrain colliders in the same frame.
-                    // The correction accounts for the offset between the current
-                    // cam_rel_m and the collider anchor, preventing terrain from
-                    // drifting with the ship between anchor rebases.
-                    if let Some(terrain_mgr) = &self.terrain
-                        && let Some(tb) = terrain_mgr.terrain_body_handle()
-                    {
-                        let ship_pos = self.ship.as_ref()
-                            .and_then(|s| self.physics.get_body(s.body_handle))
-                            .map(|b| {
-                                let t = b.translation();
-                                [t.x, t.y, t.z]
-                            });
-                        if let Some(sp) = ship_pos
-                            && let Some(body) = self.physics.rigid_body_set.get_mut(tb)
-                        {
-                            let corrected = terrain_mgr.corrected_terrain_body_pos(
-                                self.galactic_position, sp,
-                            );
-                            body.set_translation(
-                                nalgebra::Vector3::new(corrected[0], corrected[1], corrected[2]),
-                                true,
-                            );
-                        }
-                    }
-
                     // Physics step
                     let physics_dt = dt.min(1.0 / 30.0);
                     if physics_dt > 0.0 {
                         self.physics.step(physics_dt);
                     }
 
-                    // Track ship physics delta into galactic_position (impulse only).
-                    // In cruise/warp, galactic_position is updated by the drive system
-                    // below. In impulse, the ship moves via rapier but galactic_position
-                    // was previously frozen — causing the player to be unable to visually
-                    // approach planets (pre-rebased rendering uses galactic_position).
-                    if self.drive.mode() == sa_ship::DriveMode::Impulse
-                        && let Some(pre) = ship_pos_pre_helm
-                        && let Some(ship) = &self.ship
-                        && let Some(body) = self.physics.get_body(ship.body_handle)
-                    {
-                        let post = body.translation();
-                        let m_to_ly = 1.0 / 9.461e15_f64;
-                        self.galactic_position.x += (post.x as f64 - pre.x as f64) * m_to_ly;
-                        self.galactic_position.y += (post.y as f64 - pre.y as f64) * m_to_ly;
-                        self.galactic_position.z += (post.z as f64 - pre.z as f64) * m_to_ly;
+                    // Track ship physics into galactic_position (impulse only).
+                    // When terrain is active, compute exactly from anchor + ship rapier pos.
+                    // When terrain is NOT active, use delta-based tracking.
+                    if self.drive.mode() == sa_ship::DriveMode::Impulse {
+                        if let Some(terrain_mgr) = &self.terrain
+                            && let Some(ship) = &self.ship
+                            && let Some(body) = self.physics.get_body(ship.body_handle)
+                        {
+                            // Exact galactic position: frozen_planet_center + (anchor + ship_rapier) / LY_TO_M
+                            let anchor = terrain_mgr.anchor_f64();
+                            let post = body.translation();
+                            let planet = terrain_mgr.frozen_planet_center_ly();
+                            let ly_to_m = 9.461e15_f64;
+                            self.galactic_position.x = planet.x + (anchor[0] + post.x as f64) / ly_to_m;
+                            self.galactic_position.y = planet.y + (anchor[1] + post.y as f64) / ly_to_m;
+                            self.galactic_position.z = planet.z + (anchor[2] + post.z as f64) / ly_to_m;
+                        } else if let Some(pre) = ship_pos_pre_helm
+                            && let Some(ship) = &self.ship
+                            && let Some(body) = self.physics.get_body(ship.body_handle)
+                        {
+                            let post = body.translation();
+                            let m_to_ly = 1.0 / 9.461e15_f64;
+                            self.galactic_position.x += (post.x as f64 - pre.x as f64) * m_to_ly;
+                            self.galactic_position.y += (post.y as f64 - pre.y as f64) * m_to_ly;
+                            self.galactic_position.z += (post.z as f64 - pre.z as f64) * m_to_ly;
+                        }
                     }
 
                     // Auto-orient ship toward locked target in cruise/warp.
@@ -1986,43 +1969,25 @@ impl ApplicationHandler for App {
                         .map(|b| (b.translation().clone_owned(), *b.rotation()))
                         .unwrap_or((nalgebra::Vector3::zeros(), nalgebra::UnitQuaternion::identity()));
 
-                    // Track ship physics delta into galactic_position (impulse only).
-                    // Same as the helm-mode tracking above — keeps pre-rebased
-                    // rendering (planets, terrain) in sync with the ship's movement.
+                    // Track ship physics into galactic_position (impulse only).
+                    // When terrain is active, compute exactly from anchor + ship rapier pos.
+                    // When terrain is NOT active, use delta-based tracking.
                     if self.drive.mode() == sa_ship::DriveMode::Impulse
                         && self.ship.is_some()
                     {
-                        let m_to_ly = 1.0 / 9.461e15_f64;
-                        self.galactic_position.x += (ship_pos_after.x as f64 - ship_pos_before.x as f64) * m_to_ly;
-                        self.galactic_position.y += (ship_pos_after.y as f64 - ship_pos_before.y as f64) * m_to_ly;
-                        self.galactic_position.z += (ship_pos_after.z as f64 - ship_pos_before.z as f64) * m_to_ly;
-                    }
-
-                    // Reposition terrain body before landing raycasts so
-                    // terrain colliders are at the correct rapier-space
-                    // positions after this frame's ship integration.
-                    if let Some(terrain_mgr) = &self.terrain
-                        && let Some(tb) = terrain_mgr.terrain_body_handle()
-                    {
-                        let sp = self.ship.as_ref()
-                            .and_then(|s| self.physics.get_body(s.body_handle))
-                            .map(|b| {
-                                let t = b.translation();
-                                [t.x, t.y, t.z]
-                            });
-                        if let Some(sp) = sp
-                            && let Some(body) = self.physics.rigid_body_set.get_mut(tb)
-                        {
-                            let corrected = terrain_mgr.corrected_terrain_body_pos(
-                                self.galactic_position, sp,
-                            );
-                            body.set_translation(
-                                nalgebra::Vector3::new(corrected[0], corrected[1], corrected[2]),
-                                true,
-                            );
+                        if let Some(terrain_mgr) = &self.terrain {
+                            let anchor = terrain_mgr.anchor_f64();
+                            let planet = terrain_mgr.frozen_planet_center_ly();
+                            let ly_to_m = 9.461e15_f64;
+                            self.galactic_position.x = planet.x + (anchor[0] + ship_pos_after.x as f64) / ly_to_m;
+                            self.galactic_position.y = planet.y + (anchor[1] + ship_pos_after.y as f64) / ly_to_m;
+                            self.galactic_position.z = planet.z + (anchor[2] + ship_pos_after.z as f64) / ly_to_m;
+                        } else {
+                            let m_to_ly = 1.0 / 9.461e15_f64;
+                            self.galactic_position.x += (ship_pos_after.x as f64 - ship_pos_before.x as f64) * m_to_ly;
+                            self.galactic_position.y += (ship_pos_after.y as f64 - ship_pos_before.y as f64) * m_to_ly;
+                            self.galactic_position.z += (ship_pos_after.z as f64 - ship_pos_before.z as f64) * m_to_ly;
                         }
-                        self.physics.sync_collider_positions();
-                        self.physics.update_query_pipeline();
                     }
 
                     // --- Landing system update (walk mode) ---
@@ -2738,6 +2703,48 @@ impl ApplicationHandler for App {
                     self.terrain = Some(terrain_integration::TerrainManager::new(
                         config, planet_pos, body_idx, surface_grav,
                     ));
+
+                    // Unified physics origin rebase: on terrain activation,
+                    // shift all physics bodies so the ship is at the rapier origin.
+                    // This ensures terrain colliders (within ~600m) and the sphere
+                    // barrier are at reasonable f32 distances from the ship.
+                    if let Some(ship) = &self.ship
+                        && let Some(body) = self.physics.rigid_body_set.get(ship.body_handle)
+                    {
+                        let ship_pos = body.translation().clone_owned();
+                        let shift = -ship_pos;
+                        // Shift ship body
+                        if let Some(b) = self.physics.rigid_body_set.get_mut(ship.body_handle) {
+                            let t = b.translation();
+                            b.set_translation(
+                                nalgebra::Vector3::new(t.x + shift.x, t.y + shift.y, t.z + shift.z),
+                                true,
+                            );
+                        }
+                        // Shift player body
+                        if let Some(player) = &self.player
+                            && let Some(b) = self.physics.rigid_body_set.get_mut(player.body_handle)
+                        {
+                            let t = b.translation();
+                            b.set_translation(
+                                nalgebra::Vector3::new(t.x + shift.x, t.y + shift.y, t.z + shift.z),
+                                true,
+                            );
+                        }
+                        // Shift interior body
+                        if let Some(ih) = ship_colliders::interior_body_handle()
+                            && let Some(b) = self.physics.rigid_body_set.get_mut(ih)
+                        {
+                            let t = b.translation();
+                            b.set_translation(
+                                nalgebra::Vector3::new(t.x + shift.x, t.y + shift.y, t.z + shift.z),
+                                true,
+                            );
+                        }
+                        log::info!("Physics origin rebase on terrain activation: shifted by ({:.0},{:.0},{:.0})",
+                            shift.x, shift.y, shift.z);
+                    }
+
                     // Auto-disengage cruise/warp on terrain activation.
                     // Without this, cruise speed (~55,000 km/s) overshoots the
                     // planet surface in a fraction of a second, landing the camera
@@ -2783,6 +2790,11 @@ impl ApplicationHandler for App {
                                 [t.x, t.y, t.z]
                             })
                             .unwrap_or([0.0; 3]);
+                        let rebase_bodies = terrain_colliders::RebaseBodies {
+                            ship: self.ship.as_ref().map(|s| s.body_handle),
+                            player: self.player.as_ref().map(|p| p.body_handle),
+                            interior: ship_colliders::interior_body_handle(),
+                        };
                         let result = terrain_mgr.update(
                             self.galactic_position,
                             planet_pos,
@@ -2791,6 +2803,7 @@ impl ApplicationHandler for App {
                             &mut self.physics,
                             ship_down,
                             ship_phys_pos,
+                            &rebase_bodies,
                         );
                         if let Some(sys) = &mut self.active_system {
                             if sys.hidden_body_index != result.hidden_body_index {
