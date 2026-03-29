@@ -11,6 +11,7 @@ fastnoise-lite.workspace = true
 crossbeam-channel = "0.5"
 glam.workspace = true
 log.workspace = true
+profiling.workspace = true
 
 [dev-dependencies]
 approx = "0.5"

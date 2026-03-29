@@ -152,6 +152,7 @@ impl TerrainColliders {
     /// Unified anchor system: the terrain body stays at (0,0,0). All physics
     /// bodies (ship, player, interior) are positioned relative to the anchor.
     /// When the ship drifts >100m from origin, all bodies are shifted back.
+    #[profiling::function]
     pub fn update(
         &mut self,
         physics: &mut PhysicsWorld,

@@ -1306,7 +1306,7 @@ impl ApplicationHandler for App {
                 }
 
                 // --- PLAYING PHASE ---
-                puffin::profile_scope!("playing_frame");
+                profiling::scope!("playing_frame");
 
                 self.schedule
                     .run(&mut self.world, &mut self.events, &self.time);
@@ -1632,7 +1632,7 @@ impl ApplicationHandler for App {
                     // Physics step
                     let physics_dt = dt.min(1.0 / 30.0);
                     if physics_dt > 0.0 {
-                        puffin::profile_scope!("physics_step");
+                        profiling::scope!("physics_step");
                         self.physics.step(physics_dt);
                     }
 
@@ -2842,11 +2842,11 @@ impl ApplicationHandler for App {
                 }
 
                 // --- Render ---
-                puffin::profile_scope!("render");
+                profiling::scope!("render");
                 let t3 = Instant::now();
 
                 // --- Terrain streaming (before immutable renderer borrow) ---
-                puffin::profile_scope!("terrain_update");
+                profiling::scope!("terrain_update");
                 // Deactivation check
                 // Check deactivation separately to avoid borrow issues
                 let should_deactivate_terrain = self.terrain.as_ref()

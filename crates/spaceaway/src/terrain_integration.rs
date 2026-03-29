@@ -110,6 +110,7 @@ impl TerrainManager {
 
     /// Run one frame of terrain streaming and produce draw commands.
     #[allow(clippy::too_many_arguments)]
+    #[profiling::function]
     pub fn update(
         &mut self,
         camera_galactic_ly: WorldPos,
@@ -337,6 +338,7 @@ impl TerrainManager {
         self.body_index
     }
 
+    #[profiling::function]
     fn build_draw_commands(
         &self,
         visible: &[sa_terrain::quadtree::VisibleNode],

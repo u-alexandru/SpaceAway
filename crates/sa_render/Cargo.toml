@@ -16,3 +16,4 @@ fastnoise-lite.workspace = true
 gltf.workspace = true
 sa_universe.workspace = true
 wgpu-profiler.workspace = true
+profiling.workspace = true

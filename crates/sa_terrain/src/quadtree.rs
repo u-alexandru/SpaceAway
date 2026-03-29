@@ -47,6 +47,7 @@ pub fn max_lod_levels(face_size_m: f64) -> u8 {
 /// `camera_pos`: camera position in planet-relative meters.
 /// `planet_radius_m`: planet radius for sphere-surface calculations.
 /// `max_lod`: finest LOD level (from `max_lod_levels`).
+#[profiling::function]
 pub fn select_visible_nodes(
     camera_pos: [f64; 3],
     planet_radius_m: f64,

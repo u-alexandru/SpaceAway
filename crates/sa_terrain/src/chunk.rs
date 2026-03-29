@@ -14,6 +14,7 @@ pub const CELLS: u32 = 32;
 ///
 /// The chunk occupies a (CELLS × CELLS) patch on the cube face identified by
 /// `key`. Positions are stored patch-local (f32, relative to the chunk center).
+#[profiling::function]
 pub fn generate_chunk(key: ChunkKey, config: &TerrainConfig) -> ChunkData {
     let face = CubeFace::ALL[key.face as usize];
 

@@ -71,3 +71,4 @@ crossbeam-channel = "0.5"
 puffin = "0.20"
 puffin_http = "0.17"
 wgpu-profiler = "0.22"
+profiling = { version = "1", features = ["profile-with-puffin"] }
