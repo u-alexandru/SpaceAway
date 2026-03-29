@@ -856,6 +856,9 @@ impl ApplicationHandler for App {
                                 body.set_linvel(nalgebra::Vector3::zeros(), true);
                             }
                             self.drive.request_disengage();
+                            // Look down toward surface so the player can see terrain
+                            self.camera.pitch = -0.5;
+                            self.helm_look_pitch = -0.5;
                             log::info!("Teleported 1km above planet surface (radius {:.0}km, alt 1km)", radius_m / 1000.0);
                         } else {
                             log::warn!("No planet found — press 8 to enter a system first");
