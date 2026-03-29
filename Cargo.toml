@@ -70,3 +70,4 @@ sa_terrain = { path = "crates/sa_terrain" }
 crossbeam-channel = "0.5"
 puffin = "0.20"
 puffin_http = "0.17"
+wgpu-profiler = "0.22"

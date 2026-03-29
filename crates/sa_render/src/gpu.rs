@@ -24,10 +24,23 @@ impl GpuContext {
         }))
         .expect("Failed to find a suitable GPU adapter");
 
+        // Request timestamp query features for GPU profiling (optional — works without).
+        let mut features = wgpu::Features::empty();
+        let supported = adapter.features();
+        if supported.contains(wgpu::Features::TIMESTAMP_QUERY) {
+            features |= wgpu::Features::TIMESTAMP_QUERY;
+        }
+        if supported.contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS) {
+            features |= wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
+        }
+        if supported.contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES) {
+            features |= wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES;
+        }
+
         let (device, queue) = pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("SpaceAway Device"),
-                required_features: wgpu::Features::empty(),
+                required_features: features,
                 required_limits: wgpu::Limits::default(),
                 ..Default::default()
             },

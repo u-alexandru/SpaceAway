@@ -9,6 +9,7 @@ use crate::star_field::{StarField, StarUniforms};
 use glam::{Mat4, Vec3};
 use sa_core::Handle;
 use wgpu::util::DeviceExt;
+use wgpu_profiler::{GpuProfiler, GpuProfilerSettings};
 
 pub struct DrawCommand {
     pub mesh: Handle<MeshMarker>,
@@ -61,6 +62,10 @@ pub struct Renderer {
     instance_buffer: wgpu::Buffer,
     /// Current capacity of the instance buffer in number of instances.
     instance_buffer_capacity: u64,
+    /// GPU profiler for render pass timing (optional — needs TIMESTAMP_QUERY).
+    pub gpu_profiler: GpuProfiler,
+    /// Latest GPU timing results (label, duration_ms) from the previous frame.
+    pub gpu_timings: Vec<(String, f64)>,
 }
 
 impl Renderer {
@@ -92,6 +97,12 @@ impl Renderer {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let gpu_profiler = GpuProfiler::new(&gpu.device, GpuProfilerSettings {
+            enable_timer_queries: true,
+            enable_debug_groups: true,
+            max_num_pending_frames: 4,
+        })
+        .expect("Failed to create GPU profiler");
         Self {
             geometry_pipeline,
             screen_pipeline,
@@ -102,6 +113,8 @@ impl Renderer {
             mesh_store: MeshStore::new(),
             instance_buffer,
             instance_buffer_capacity: INITIAL_INSTANCE_CAPACITY,
+            gpu_profiler,
+            gpu_timings: Vec::new(),
         }
     }
 
@@ -113,9 +126,31 @@ impl Renderer {
     }
 
     /// Submit a frame after all render passes are complete.
-    pub fn submit_frame(gpu: &GpuContext, ctx: FrameContext) {
+    pub fn submit_frame(&mut self, gpu: &GpuContext, ctx: FrameContext) {
         gpu.queue.submit(std::iter::once(ctx.encoder.finish()));
         ctx.frame.present();
+
+        // End the GPU profiler frame and collect results.
+        if let Err(e) = self.gpu_profiler.end_frame() {
+            log::warn!("GPU profiler end_frame error: {e:?}");
+        }
+        let ts_period = gpu.queue.get_timestamp_period();
+        if let Some(results) = self.gpu_profiler.process_finished_frame(ts_period) {
+            self.gpu_timings.clear();
+            fn flatten(
+                out: &mut Vec<(String, f64)>,
+                results: &[wgpu_profiler::GpuTimerQueryResult],
+            ) {
+                for r in results {
+                    if let Some(ref time) = r.time {
+                        let ms = (time.end - time.start) * 1000.0;
+                        out.push((r.label.to_string(), ms));
+                    }
+                    flatten(out, &r.nested_queries);
+                }
+            }
+            flatten(&mut self.gpu_timings, &results);
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -244,7 +279,11 @@ impl Renderer {
                 });
 
         // Pass 1: Render sky to half-res offscreen texture
-        self.sky_renderer.render_to_texture(&mut encoder);
+        {
+            let sky_query = self.gpu_profiler.begin_query("sky_pass", &mut encoder);
+            self.sky_renderer.render_to_texture(&mut encoder);
+            self.gpu_profiler.end_query(&mut encoder, sky_query);
+        }
 
         // Pass 2: Main scene pass — blit sky + geometry + stars + nebulae + screens
         {
@@ -284,19 +323,26 @@ impl Renderer {
             // at any distance has depth > 0 and overwrites via GreaterEqual.)
 
             // Stars
-            pass.set_pipeline(&self.star_field.pipeline);
-            pass.set_bind_group(0, &self.star_field.bind_group, &[]);
-            pass.set_vertex_buffer(0, self.star_field.vertex_buffer.slice(..));
-            pass.draw(0..6, 0..self.star_field.star_count);
+            {
+                let q = self.gpu_profiler.begin_query("star_field", &mut pass);
+                pass.set_pipeline(&self.star_field.pipeline);
+                pass.set_bind_group(0, &self.star_field.bind_group, &[]);
+                pass.set_vertex_buffer(0, self.star_field.vertex_buffer.slice(..));
+                pass.draw(0..6, 0..self.star_field.star_count);
+                self.gpu_profiler.end_query(&mut pass, q);
+            }
 
             // Nebulae (alpha blended, no depth write)
-            self.nebula_renderer.render(&mut pass);
-
-            // Distant galaxies (same pipeline as nebulae)
-            self.galaxy_renderer.render(&mut pass);
+            {
+                let q = self.gpu_profiler.begin_query("nebula", &mut pass);
+                self.nebula_renderer.render(&mut pass);
+                self.galaxy_renderer.render(&mut pass);
+                self.gpu_profiler.end_query(&mut pass, q);
+            }
 
             // Draw geometry — batched: sort by mesh handle, write all instances
             // into a single persistent buffer, issue one draw_indexed per batch.
+            let geom_query = self.gpu_profiler.begin_query("geometry_pass", &mut pass);
             if !draw_commands.is_empty() {
                 // Build (mesh_handle_id, instance) pairs, sorted by mesh for batching.
                 let mut entries: Vec<(u64, InstanceRaw)> = draw_commands
@@ -434,7 +480,11 @@ impl Renderer {
             }
 
             // Stars, nebulae, and galaxies were rendered before geometry (above).
+            self.gpu_profiler.end_query(&mut pass, geom_query);
         }
+
+        // Resolve GPU profiler queries before submitting.
+        self.gpu_profiler.resolve_queries(&mut encoder);
 
         Some(FrameContext {
             encoder,

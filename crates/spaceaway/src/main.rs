@@ -1294,7 +1294,7 @@ impl ApplicationHandler for App {
                                 }
                             }
 
-                            Renderer::submit_frame(gpu, frame_ctx);
+                            renderer.submit_frame(gpu, frame_ctx);
                         }
                     }
 
@@ -3444,7 +3444,7 @@ impl ApplicationHandler for App {
                             );
                         }
                         // 6. Submit and present
-                        Renderer::submit_frame(gpu, frame_ctx);
+                        renderer.submit_frame(gpu, frame_ctx);
                     }
                 }
                 self.perf.render_us = t3.elapsed().as_micros() as u64;
