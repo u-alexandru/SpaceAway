@@ -115,6 +115,28 @@ impl PhysicsWorld {
         self.query_pipeline.update(&self.collider_set);
     }
 
+    /// Removes a collider from the physics world.
+    pub fn remove_collider(&mut self, handle: ColliderHandle) -> Option<Collider> {
+        self.collider_set.remove(
+            handle,
+            &mut self.island_manager,
+            &mut self.rigid_body_set,
+            true,
+        )
+    }
+
+    /// Removes a rigid body and all its attached colliders.
+    pub fn remove_rigid_body(&mut self, handle: RigidBodyHandle) -> Option<RigidBody> {
+        self.rigid_body_set.remove(
+            handle,
+            &mut self.island_manager,
+            &mut self.collider_set,
+            &mut self.impulse_joint_set,
+            &mut self.multibody_joint_set,
+            true,
+        )
+    }
+
     /// Cast a ray and return the first hit collider handle and distance.
     /// `filter` controls which colliders are considered (e.g., sensors only).
     /// Returns None if no hit within `max_toi`.
