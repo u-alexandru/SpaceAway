@@ -5,6 +5,7 @@ mod ship_colliders;
 mod ship_setup;
 mod solar_system;
 mod star_streaming;
+mod terrain_integration;
 mod ui;
 
 use glam::{Mat4, Vec3};
@@ -242,6 +243,8 @@ struct App {
     /// Deferred star lock-on flag — set by Tab key, consumed in RedrawRequested
     /// after camera orientation is fully updated for the current frame.
     wants_star_lock: bool,
+    /// Active terrain manager (when near a landable planet).
+    terrain: Option<terrain_integration::TerrainManager>,
 }
 
 impl App {
@@ -324,6 +327,7 @@ impl App {
             phase: GamePhase::Menu,
             menu: None,
             wants_star_lock: false,
+            terrain: None,
         }
     }
 
@@ -824,7 +828,7 @@ impl ApplicationHandler for App {
                                         let au_in_ly = 1.581e-5_f64;
                                         let meters_in_ly = 1.0 / 9.461e15_f64;
                                         let planet_radius_m = planet.radius_earth as f64 * 6_371_000.0;
-                                        let view_dist_m = planet_radius_m * 1.5;
+                                        let view_dist_m = planet_radius_m * 1.8; // inside terrain activation (2.0x)
                                         let planet_orbital_ly = planet.orbital_radius_au as f64 * au_in_ly;
                                         // Offset above orbital plane so rings are visible
                                         let above_ly = view_dist_m * 0.4 * meters_in_ly;
@@ -859,7 +863,7 @@ impl ApplicationHandler for App {
                                             let meters_in_ly = 1.0 / 9.461e15_f64;
                                             let (offset_ly, desc) = if let Some(p) = system.planets.first() {
                                                 let r_m = p.radius_earth as f64 * 6_371_000.0;
-                                                let view_m = r_m * 1.5;
+                                                let view_m = r_m * 1.8;
                                                 let orb_ly = p.orbital_radius_au as f64 * au_in_ly;
                                                 (orb_ly + view_m * meters_in_ly, format!(
                                                     "Planet 1: {:?} {:.0}km at {:.2}AU",
@@ -898,6 +902,7 @@ impl ApplicationHandler for App {
                             }
                             KeyCode::Digit9 => {
                                 // Debug: jump to a DIFFERENT star (skip nearest, pick next)
+                                self.terrain = None;
                                 self.active_system = None;
                                 self.navigation.update_nearby(self.galactic_position);
                                 let skip = (self.teleport_counter as usize) % self.navigation.nearby_stars.len().max(1);
@@ -1161,9 +1166,116 @@ impl ApplicationHandler for App {
                                 log::warn!("Cannot engage cruise: ship moving at {:.0} m/s (stop first)", ship_speed);
                             }
                         }
-                        // Tab: flag for deferred lock-on (projection happens after camera update)
+
+                        // Tab: lock nearest target to crosshair.
+                        // In a solar system: lock nearest PLANET. Otherwise: lock nearest STAR.
                         if self.input.keyboard.just_pressed(KeyCode::Tab) {
-                            self.wants_star_lock = true;
+                            if let Some(gpu) = &self.gpu {
+                                let sw = gpu.config.width as f32;
+                                let sh = gpu.config.height as f32;
+                                let cx = sw / 2.0;
+                                let cy = sh / 2.0;
+                                let aspect = sw / sh;
+                                let vp = self.camera.view_projection_matrix(aspect);
+                                let cam_fwd = self.camera.forward();
+
+                                let locked = if let Some(sys) = &self.active_system {
+                                    // In a solar system — lock nearest planet to crosshair
+                                    let positions = sys.compute_positions_ly_pub();
+                                    let mut best_dist = f32::MAX;
+                                    let mut best: Option<(usize, f32)> = None;
+
+                                    for (i, pos) in positions.iter().enumerate() {
+                                        if i == 0 { continue; } // skip star
+                                        let Some(radius_m) = sys.body_radius_m(i) else { continue };
+                                        let Some((_, sub_type, _, _, _)) = sys.planet_data(i) else { continue };
+                                        // Skip non-planets (atmosphere, rings)
+                                        if radius_m < 100_000.0 { continue; }
+
+                                        let dx = (pos.x - self.galactic_position.x) as f32;
+                                        let dy = (pos.y - self.galactic_position.y) as f32;
+                                        let dz = (pos.z - self.galactic_position.z) as f32;
+                                        let len = (dx*dx + dy*dy + dz*dz).sqrt();
+                                        if len < 1e-10 { continue; }
+                                        let dir_norm = glam::Vec3::new(dx/len, dy/len, dz/len);
+                                        // Only consider planets within ~60° of crosshair
+                                        if cam_fwd.dot(dir_norm) < 0.5 { continue; }
+                                        let dir = dir_norm * 90000.0;
+                                        let clip = vp * glam::Vec4::new(dir.x, dir.y, dir.z, 1.0);
+                                        if clip.w <= 0.0 { continue; }
+                                        let sx = (clip.x / clip.w * 0.5 + 0.5) * sw;
+                                        let sy = (1.0 - (clip.y / clip.w * 0.5 + 0.5)) * sh;
+                                        let sd = ((sx - cx).powi(2) + (sy - cy).powi(2)).sqrt();
+                                        if sd < best_dist {
+                                            best_dist = sd;
+                                            best = Some((i, sd));
+                                        }
+                                    }
+
+                                    if let Some((idx, px_dist)) = best {
+                                        let pos = positions[idx];
+                                        let dist_ly = self.galactic_position.distance_to(pos);
+                                        let radius_m = sys.body_radius_m(idx).unwrap_or(0.0);
+                                        let (_, sub_type, _, _, _) = sys.planet_data(idx).unwrap();
+                                        let name = format!("Planet {} ({:?}, {:.0}km)",
+                                            idx, sub_type, radius_m / 1000.0);
+                                        let nav = navigation::NavStar {
+                                            id: sa_universe::ObjectId(0),
+                                            galactic_pos: pos,
+                                            catalog_name: name.clone(),
+                                            distance_ly: dist_ly,
+                                            color: [1.0, 1.0, 1.0],
+                                            spectral_class: sa_universe::SpectralClass::G,
+                                            luminosity: 1.0,
+                                        };
+                                        self.navigation.lock_star(nav);
+                                        log::info!("LOCKED PLANET: {} ({:.6} ly, {:.0}px from center)",
+                                            name, dist_ly, px_dist);
+                                        self.audio.play_sfx(sa_audio::SfxId::Confirm, None);
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                } else {
+                                    false
+                                };
+
+                                // Fallback: lock nearest star if no planet was locked
+                                if !locked {
+                                    self.navigation.update_nearby(self.galactic_position);
+                                    let mut best_screen_dist = f32::MAX;
+                                    let mut best_idx: Option<usize> = None;
+                                    for (i, star) in self.navigation.nearby_stars.iter().enumerate() {
+                                        let dx = (star.galactic_pos.x - self.galactic_position.x) as f32;
+                                        let dy = (star.galactic_pos.y - self.galactic_position.y) as f32;
+                                        let dz = (star.galactic_pos.z - self.galactic_position.z) as f32;
+                                        let len = (dx*dx + dy*dy + dz*dz).sqrt();
+                                        if len < 0.001 { continue; }
+                                        let dir_norm = glam::Vec3::new(dx/len, dy/len, dz/len);
+                                        if cam_fwd.dot(dir_norm) < 0.866 { continue; }
+                                        let dir = dir_norm * 90000.0;
+                                        let clip = vp * glam::Vec4::new(dir.x, dir.y, dir.z, 1.0);
+                                        if clip.w <= 0.0 { continue; }
+                                        let sx = (clip.x / clip.w * 0.5 + 0.5) * sw;
+                                        let sy = (1.0 - (clip.y / clip.w * 0.5 + 0.5)) * sh;
+                                        let screen_dist = ((sx - cx).powi(2) + (sy - cy).powi(2)).sqrt();
+                                        if screen_dist < best_screen_dist {
+                                            best_screen_dist = screen_dist;
+                                            best_idx = Some(i);
+                                        }
+                                    }
+                                    if let Some(idx) = best_idx {
+                                        self.navigation.lock_target(idx);
+                                        if let Some(target) = &self.navigation.locked_target {
+                                            log::info!("LOCKED STAR: {} ({:.2} ly, {:.0}px from center)",
+                                                target.catalog_name, target.distance_ly, best_screen_dist);
+                                            self.audio.play_sfx(sa_audio::SfxId::Confirm, None);
+                                        }
+                                    } else {
+                                        log::warn!("No target visible on screen");
+                                    }
+                                }
+                            }
                         }
                         if self.input.keyboard.just_pressed(KeyCode::Digit3) {
                             if self.ship_resources.exotic_fuel > 0.0 {
@@ -1175,6 +1287,7 @@ impl ApplicationHandler for App {
                                     self.audio.announce(sa_audio::VoiceId::EngagingWarp);
                                     // Unload active system when entering warp
                                     if self.active_system.is_some() {
+                                        self.terrain = None;
                                         self.active_system = None;
                                         log::info!("Left solar system — entering warp");
                                     }
@@ -2070,6 +2183,67 @@ impl ApplicationHandler for App {
 
                 // --- Render ---
                 let t3 = Instant::now();
+
+                // --- Terrain streaming (before immutable renderer borrow) ---
+                // Deactivation check
+                if let Some(terrain_mgr) = &self.terrain {
+                    if terrain_mgr.should_deactivate(self.galactic_position) {
+                        if let Some(sys) = &mut self.active_system {
+                            sys.hidden_body_index = None;
+                        }
+                        self.terrain = None;
+                        log::info!("Terrain deactivated");
+                    }
+                }
+
+                // Activation check (only if no terrain active and in a solar system)
+                if self.terrain.is_none()
+                    && let Some(sys) = &self.active_system
+                    && let Some((body_idx, planet_pos, config)) =
+                        terrain_integration::find_terrain_planet(sys, self.galactic_position)
+                {
+                    log::info!(
+                        "Terrain activated for body {} (radius {:.0} km)",
+                        body_idx,
+                        config.radius_m / 1000.0,
+                    );
+                    self.terrain = Some(terrain_integration::TerrainManager::new(
+                        config, planet_pos, body_idx,
+                    ));
+                }
+
+                // Deactivate terrain if no solar system is active
+                if self.active_system.is_none() && self.terrain.is_some() {
+                    self.terrain = None;
+                    log::info!("Terrain deactivated (no solar system)");
+                }
+
+                // Update terrain and collect draw commands (needs &mut renderer)
+                let terrain_commands: Vec<DrawCommand> = if let Some(terrain_mgr) = &mut self.terrain {
+                    if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
+                        let planet_pos = self.active_system.as_ref()
+                            .and_then(|sys| {
+                                let positions = sys.compute_positions_ly_pub();
+                                positions.get(terrain_mgr.body_index()).copied()
+                            })
+                            .unwrap_or(WorldPos::ORIGIN);
+                        let result = terrain_mgr.update(
+                            self.galactic_position,
+                            planet_pos,
+                            &mut renderer.mesh_store,
+                            &gpu.device,
+                        );
+                        if let Some(sys) = &mut self.active_system {
+                            sys.hidden_body_index = result.hidden_body_index;
+                        }
+                        result.draw_commands
+                    } else {
+                        vec![]
+                    }
+                } else {
+                    vec![]
+                };
+
                 if let (Some(gpu), Some(renderer)) = (&self.gpu, &self.renderer) {
                     // 1. Render BOTH monitors to offscreen textures in ONE encoder
                     // (avoids multiple queue.submit() calls per frame)
@@ -2200,12 +2374,16 @@ impl ApplicationHandler for App {
                         commands.extend(system_commands);
                     }
 
+                    // Append terrain draw commands
+                    commands.extend(terrain_commands);
+
                     // Unload system if player has cruised far away (> 100 AU from star)
                     if let Some(system) = &self.active_system {
                         let dist = self.galactic_position.distance_to(system.star_galactic_pos);
                         let au_in_ly = 1.581e-5_f64;
                         if dist > 100.0 * au_in_ly {
                             log::info!("Left system boundary — unloading");
+                            self.terrain = None;
                             self.active_system = None;
                         }
                     }

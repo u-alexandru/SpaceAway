@@ -1,0 +1,196 @@
+//! CDLOD quadtree: LOD range selection, node traversal, frustum culling.
+//!
+//! Per the Strugar (2010) CDLOD paper: LOD ranges double per level,
+//! nodes subdivide when camera is closer than range, morph at 50%.
+
+use crate::cube_sphere::{CubeFace, cube_to_sphere};
+
+/// Minimum range for finest LOD level (meters).
+const MIN_RANGE: f64 = 50.0;
+
+/// A visible terrain node selected by the quadtree traversal.
+#[derive(Debug, Clone)]
+pub struct VisibleNode {
+    pub face: CubeFace,
+    pub lod: u8,
+    pub x: u32,
+    pub y: u32,
+    /// Node center on sphere surface (planet-relative meters).
+    pub center: [f64; 3],
+    /// Morph factor for this node (0.0 = full detail, 1.0 = fully morphed to parent).
+    pub morph_factor: f32,
+}
+
+/// Compute LOD range for a given level. Camera farther than this = LOD is sufficient.
+pub fn lod_range(level: u8) -> f64 {
+    MIN_RANGE * (1u64 << level) as f64
+}
+
+/// Compute the maximum number of LOD levels needed for a planet.
+/// `face_size_m`: approximate size of one cube face on the sphere surface.
+pub fn max_lod_levels(face_size_m: f64) -> u8 {
+    let ratio = face_size_m / MIN_RANGE;
+    if ratio <= 1.0 {
+        return 1;
+    }
+    (ratio.log2().ceil() as u8).max(1)
+}
+
+/// Select visible nodes for rendering. Returns nodes sorted coarsest-first.
+///
+/// `camera_pos`: camera position in planet-relative meters.
+/// `planet_radius_m`: planet radius for sphere-surface calculations.
+/// `max_lod`: finest LOD level (from `max_lod_levels`).
+pub fn select_visible_nodes(
+    camera_pos: [f64; 3],
+    planet_radius_m: f64,
+    max_lod: u8,
+    max_displacement: f64,
+) -> Vec<VisibleNode> {
+    let mut nodes = Vec::with_capacity(256);
+    for face in CubeFace::ALL {
+        select_recursive(
+            face, 0, 0, 0,
+            camera_pos, planet_radius_m, max_lod, max_displacement,
+            &mut nodes,
+        );
+    }
+    nodes
+}
+
+#[allow(clippy::too_many_arguments)]
+fn select_recursive(
+    face: CubeFace,
+    lod: u8,
+    x: u32,
+    y: u32,
+    camera_pos: [f64; 3],
+    radius: f64,
+    max_lod: u8,
+    max_displacement: f64,
+    out: &mut Vec<VisibleNode>,
+) {
+    // Compute node center on sphere surface
+    let subdivs = 1u32 << lod;
+    let u = -1.0 + (2.0 * x as f64 + 1.0) / subdivs as f64;
+    let v = -1.0 + (2.0 * y as f64 + 1.0) / subdivs as f64;
+    let dir = cube_to_sphere(face, u, v);
+    let center = [dir[0] * radius, dir[1] * radius, dir[2] * radius];
+
+    // Distance from camera to node center
+    let dx = camera_pos[0] - center[0];
+    let dy = camera_pos[1] - center[1];
+    let dz = camera_pos[2] - center[2];
+    let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+
+    // Node bounding radius: half the face-diagonal at this LOD, inflated by displacement
+    let face_size = 2.0 * radius / subdivs as f64;
+    let node_radius = face_size * std::f64::consts::FRAC_1_SQRT_2 + max_displacement;
+
+    let range = lod_range(lod);
+
+    // If far enough, or at finest level, emit this node
+    if dist > range + node_radius || lod == max_lod {
+        let morph_start = range * 0.5;
+        let morph = if dist > morph_start {
+            ((dist - morph_start) / (range - morph_start)).min(1.0) as f32
+        } else {
+            0.0
+        };
+
+        out.push(VisibleNode {
+            face,
+            lod,
+            x,
+            y,
+            center,
+            morph_factor: morph,
+        });
+        return;
+    }
+
+    // Subdivide into 4 children
+    let child_lod = lod + 1;
+    let cx = x * 2;
+    let cy = y * 2;
+    select_recursive(face, child_lod, cx,     cy,     camera_pos, radius, max_lod, max_displacement, out);
+    select_recursive(face, child_lod, cx + 1, cy,     camera_pos, radius, max_lod, max_displacement, out);
+    select_recursive(face, child_lod, cx,     cy + 1, camera_pos, radius, max_lod, max_displacement, out);
+    select_recursive(face, child_lod, cx + 1, cy + 1, camera_pos, radius, max_lod, max_displacement, out);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lod_range_doubles_per_level() {
+        assert!((lod_range(0) - 50.0).abs() < 1e-6);
+        assert!((lod_range(1) - 100.0).abs() < 1e-6);
+        assert!((lod_range(2) - 200.0).abs() < 1e-6);
+        assert!((lod_range(17) - 50.0 * 131072.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn max_lod_for_earth() {
+        let levels = max_lod_levels(10_000_000.0);
+        assert_eq!(levels, 18);
+    }
+
+    #[test]
+    fn max_lod_for_small_moon() {
+        let levels = max_lod_levels(500_000.0);
+        assert_eq!(levels, 14);
+    }
+
+    #[test]
+    fn camera_at_surface_produces_finest_nodes() {
+        let radius = 6_371_000.0;
+        let camera = [0.0, 0.0, radius];
+        let max_lod = max_lod_levels(radius * 1.57);
+        let nodes = select_visible_nodes(camera, radius, max_lod, radius * 0.02);
+        let finest = nodes.iter().filter(|n| n.lod == max_lod).count();
+        assert!(finest > 0, "expected finest-LOD nodes near camera, got 0");
+    }
+
+    #[test]
+    fn camera_far_away_produces_coarse_nodes() {
+        let radius = 6_371_000.0;
+        let camera = [0.0, 0.0, radius * 10.0];
+        let max_lod = max_lod_levels(radius * 1.57);
+        let nodes = select_visible_nodes(camera, radius, max_lod, radius * 0.02);
+        let max_lod_seen = nodes.iter().map(|n| n.lod).max().unwrap_or(0);
+        assert!(max_lod_seen < 5, "expected coarse nodes far away, got max lod {max_lod_seen}");
+    }
+
+    #[test]
+    fn all_six_faces_represented() {
+        let radius = 1_000_000.0;
+        let camera = [0.0, 0.0, 0.0];
+        let max_lod = 10;
+        let nodes = select_visible_nodes(camera, radius, max_lod, 0.0);
+        let mut faces_seen = std::collections::HashSet::new();
+        for n in &nodes {
+            faces_seen.insert(n.face);
+        }
+        assert_eq!(faces_seen.len(), 6, "expected all 6 faces, got {}", faces_seen.len());
+    }
+
+    #[test]
+    fn morph_factor_zero_near_camera() {
+        let radius = 6_371_000.0;
+        let camera = [0.0, 0.0, radius];
+        let max_lod = 18;
+        let nodes = select_visible_nodes(camera, radius, max_lod, radius * 0.02);
+        let nearest = nodes.iter()
+            .filter(|n| n.lod == max_lod)
+            .min_by(|a, b| {
+                let da = (a.center[2] - camera[2]).abs();
+                let db = (b.center[2] - camera[2]).abs();
+                da.partial_cmp(&db).unwrap()
+            });
+        if let Some(n) = nearest {
+            assert!(n.morph_factor < 0.5, "nearest finest node should have low morph, got {}", n.morph_factor);
+        }
+    }
+}

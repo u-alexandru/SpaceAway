@@ -2700,6 +2700,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "sa_terrain"
+version = "0.1.0"
+dependencies = [
+ "approx",
+ "crossbeam-channel",
+ "fastnoise-lite",
+ "glam",
+ "log",
+ "sa_core",
+ "sa_math",
+ "sa_universe",
+]
+
+[[package]]
 name = "sa_universe"
 version = "0.1.0"
 dependencies = [
@@ -2904,6 +2918,7 @@ name = "spaceaway"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "crossbeam-channel",
  "egui",
  "egui-wgpu",
  "env_logger",
@@ -2923,6 +2938,7 @@ dependencies = [
  "sa_render",
  "sa_ship",
  "sa_survival",
+ "sa_terrain",
  "sa_universe",
  "wgpu",
  "winit",

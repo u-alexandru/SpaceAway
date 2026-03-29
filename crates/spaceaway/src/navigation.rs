@@ -106,7 +106,7 @@ impl Navigation {
         }
     }
 
-    /// Lock on to a specific NavStar directly.
+    /// Lock on to a specific NavStar directly (e.g. a planet).
     pub fn lock_star(&mut self, star: NavStar) {
         self.locked_target = Some(star);
     }
