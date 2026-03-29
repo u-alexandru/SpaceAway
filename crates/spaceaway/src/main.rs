@@ -836,24 +836,47 @@ impl ApplicationHandler for App {
                             }
                             KeyCode::Digit8 => {
                                 // Debug: cycle through planets in current system (or jump to nearest star)
-                                if let Some(system) = &self.active_system {
+                                if let Some(system) = &mut self.active_system {
                                     // Already in a system — cycle to next planet
                                     let planets = &system.system.planets;
                                     if !planets.is_empty() {
                                         let idx = self.teleport_counter as usize % planets.len();
                                         self.teleport_counter += 1;
                                         let planet = &planets[idx];
-                                        let au_in_ly = 1.581e-5_f64;
                                         let meters_in_ly = 1.0 / 9.461e15_f64;
                                         let planet_radius_m = planet.radius_earth as f64 * 6_371_000.0;
                                         let view_dist_m = planet_radius_m * 1.8; // inside terrain activation (2.0×)
-                                        let planet_orbital_ly = planet.orbital_radius_au as f64 * au_in_ly;
-                                        // Offset above orbital plane so rings are visible
+                                        // Use the planet's ACTUAL orbital position instead of
+                                        // assuming it's along +X from the star. Planets orbit
+                                        // with TIME_SCALE so their position depends on game_time.
+                                        let positions = system.compute_positions_ly_pub();
+                                        // Planet body index: star(0) + corona(1) + planets start at 2
+                                        // Count preceding bodies to find this planet's body index
+                                        let mut body_idx = 2; // skip star + corona
+                                        for pi in 0..idx {
+                                            body_idx += 1; // planet
+                                            let pp = &system.system.planets[pi];
+                                            if pp.atmosphere.is_some() { body_idx += 1; }
+                                            if pp.has_rings { body_idx += 1; }
+                                            body_idx += pp.moons.len();
+                                        }
+                                        let planet_pos = positions.get(body_idx)
+                                            .copied()
+                                            .unwrap_or(system.star_galactic_pos);
+                                        // Place camera at view_dist along the star→planet direction
+                                        let dx = planet_pos.x - system.star_galactic_pos.x;
+                                        let dz = planet_pos.z - system.star_galactic_pos.z;
+                                        let dist_ly = (dx * dx + dz * dz).sqrt();
+                                        let (dir_x, dir_z) = if dist_ly > 1e-20 {
+                                            (dx / dist_ly, dz / dist_ly)
+                                        } else {
+                                            (1.0, 0.0)
+                                        };
                                         let above_ly = view_dist_m * 0.4 * meters_in_ly;
                                         self.galactic_position = WorldPos::new(
-                                            system.star_galactic_pos.x + planet_orbital_ly + view_dist_m * meters_in_ly,
-                                            system.star_galactic_pos.y + above_ly,
-                                            system.star_galactic_pos.z,
+                                            planet_pos.x + dir_x * view_dist_m * meters_in_ly,
+                                            planet_pos.y + above_ly,
+                                            planet_pos.z + dir_z * view_dist_m * meters_in_ly,
                                         );
                                         self.camera.position = self.galactic_position;
                                         self.camera.orientation_override = None;
@@ -911,6 +934,26 @@ impl ApplicationHandler for App {
                                                     star.id, placed, &mut renderer.mesh_store, &gpu.device);
                                                 log::info!("System: {} bodies — {}", sys.body_count(), desc);
                                                 for line in sys.body_summary() { log::info!("  {}", line); }
+                                                // Re-teleport to the planet's actual orbital position
+                                                // (the position computed above assumed +X axis, but
+                                                // planets orbit at initial_phase angle).
+                                                if let Some(p) = system.planets.first() {
+                                                    let positions = sys.compute_positions_ly_pub();
+                                                    if let Some(&planet_pos) = positions.get(2) {
+                                                        let r_m = p.radius_earth as f64 * 6_371_000.0;
+                                                        let view_m = r_m * 1.8;
+                                                        let dx = planet_pos.x - star.galactic_pos.x;
+                                                        let dz = planet_pos.z - star.galactic_pos.z;
+                                                        let d = (dx * dx + dz * dz).sqrt();
+                                                        let (nx, nz) = if d > 1e-20 { (dx/d, dz/d) } else { (1.0, 0.0) };
+                                                        self.galactic_position = WorldPos::new(
+                                                            planet_pos.x + nx * view_m * meters_in_ly,
+                                                            planet_pos.y + view_m * 0.4 * meters_in_ly,
+                                                            planet_pos.z + nz * view_m * meters_in_ly,
+                                                        );
+                                                        self.camera.position = self.galactic_position;
+                                                    }
+                                                }
                                                 // Clean up terrain before switching system
                                                 if let Some(t) = &mut self.terrain { t.cleanup(&mut self.physics); }
                                                 self.terrain = None;
