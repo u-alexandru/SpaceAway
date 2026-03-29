@@ -129,12 +129,21 @@ impl TerrainManager {
 
         // Upload newly generated chunks to GPU and cache for colliders.
         for chunk in &new_chunks {
+            let is_new = !self.gpu_meshes.contains_key(&chunk.key);
             self.gpu_meshes.entry(chunk.key).or_insert_with(|| {
                 let mesh_data = chunk_to_mesh_data(chunk);
                 let handle = mesh_store.upload(device, &mesh_data);
                 (handle, chunk.center_f64)
             });
             self.col.cache_chunk(chunk.key, chunk);
+            if is_new && self.gpu_meshes.len() <= 3 {
+                // Diagnostic: log first few chunk positions to verify radius
+                let c = chunk.center_f64;
+                let dist_from_center = (c[0]*c[0] + c[1]*c[1] + c[2]*c[2]).sqrt();
+                log::info!("Terrain chunk LOD={} center dist={:.0}m (expected ~{:.0}m), pos=({:.0},{:.0},{:.0})",
+                    chunk.key.lod, dist_from_center, self.config.radius_m,
+                    c[0], c[1], c[2]);
+            }
         }
 
         // Only remove GPU meshes for chunks that are truly evicted from the
