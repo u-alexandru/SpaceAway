@@ -187,7 +187,7 @@ impl TerrainColliders {
             .sqrt();
         let altitude = cam_len - radius_m;
 
-        if altitude < 50_000.0 && cam_len > 0.01 {
+        if altitude < 500_000.0 && cam_len > 0.01 {
             if self.surface_barrier.is_none() {
                 let iso = self.compute_barrier_isometry(cam_rel_m, radius_m);
                 // 10km x 100m x 10km cuboid — top face at surface level
