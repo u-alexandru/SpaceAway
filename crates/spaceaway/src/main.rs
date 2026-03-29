@@ -897,6 +897,10 @@ impl ApplicationHandler for App {
                                                     star.id, placed, &mut renderer.mesh_store, &gpu.device);
                                                 log::info!("System: {} bodies — {}", sys.body_count(), desc);
                                                 for line in sys.body_summary() { log::info!("  {}", line); }
+                                                // Clean up terrain before switching system
+                                                if let Some(t) = &mut self.terrain { t.cleanup(&mut self.physics); }
+                                                self.terrain = None;
+                                                self.terrain_gravity = None;
                                                 self.active_system = Some(sys);
                                             }
                                         }
@@ -976,6 +980,10 @@ impl ApplicationHandler for App {
                                                     planet.has_rings, planet.atmosphere.is_some());
                                                 log::info!("System: {} bodies total", loaded.body_count());
                                                 for line in loaded.body_summary() { log::info!("  {}", line); }
+                                                // Clean up terrain before switching system
+                                                if let Some(t) = &mut self.terrain { t.cleanup(&mut self.physics); }
+                                                self.terrain = None;
+                                                self.terrain_gravity = None;
                                                 self.active_system = Some(loaded);
                                             }
                                             self.navigation.clear_target();
@@ -1548,6 +1556,10 @@ impl ApplicationHandler for App {
                                         );
                                         log::info!("System loaded: {} bodies ({})", system.body_count(), nav_name);
                                         self.audio.announce(sa_audio::VoiceId::AllSystemsReady);
+                                        // Clean up terrain before switching system
+                                        if let Some(t) = &mut self.terrain { t.cleanup(&mut self.physics); }
+                                        self.terrain = None;
+                                        self.terrain_gravity = None;
                                         self.active_system = Some(system);
                                     }
                                 }

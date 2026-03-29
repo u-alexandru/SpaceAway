@@ -29,9 +29,10 @@ pub fn generate_chunk(key: ChunkKey, config: &TerrainConfig) -> ChunkData {
     let noise = make_terrain_noise(config.noise_seed);
     let warp = make_warp_noise(config.noise_seed);
 
-    // Frequency scale: higher LOD → higher frequency detail.
-    // At lod 0 the whole face is one chunk, lod 5 → 32 chunks/axis.
-    let freq_scale = 2.0 * (1u64 << key.lod) as f64;
+    // Frequency scale: MUST be constant across all LOD levels so the same
+    // world point produces the same height regardless of LOD. Variable freq
+    // causes height mismatches and visible seams at LOD boundaries.
+    let freq_scale = 2.0;
 
     let amplitude = config.radius_m * config.displacement_fraction as f64;
 
@@ -219,15 +220,13 @@ pub fn generate_chunk(key: ChunkKey, config: &TerrainConfig) -> ChunkData {
     for (grid_indices, _skirt_start) in &edge_passes {
         for &gi in grid_indices {
             let lp = local_pos[gi];
-            // Direction toward planet centre in local space (invert the
-            // vector from centre to vertex).
-            let dx = -lp[0];
-            let dy = -lp[1];
-            let dz = -lp[2];
-            let dist = (dx * dx + dy * dy + dz * dz).sqrt().max(1e-8);
-            let nx = dx / dist;
-            let ny = dy / dist;
-            let nz = dz / dist;
+            // Direction toward planet centre = -sphere_direction (radially inward).
+            // Using dirs[gi] (unit sphere direction) ensures the drop is radial,
+            // not tangential. Previous code used -local_pos which is toward the
+            // chunk center (tangential), not toward the planet center.
+            let nx = -dirs[gi][0] as f32;
+            let ny = -dirs[gi][1] as f32;
+            let nz = -dirs[gi][2] as f32;
 
             let drop = (config.radius_m as f32 * skirt_drop_fraction).max(skirt_drop_min);
 

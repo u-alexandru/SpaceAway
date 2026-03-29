@@ -95,11 +95,11 @@ impl LruCache {
 
     /// Remove a key from the cache, returning the data if present.
     pub fn remove(&mut self, key: &ChunkKey) -> Option<ChunkData> {
-        if self.map.remove(key).is_some() {
+        let data = self.map.remove(key);
+        if data.is_some() {
             self.order.retain(|k| k != key);
         }
-        // Return value already consumed above; callers only need eviction info.
-        None
+        data
     }
 }
 

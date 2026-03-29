@@ -186,8 +186,11 @@ fn build_heightfield(
         return None;
     }
 
+    // Heights are raw noise [0,1]. Chunk center is already displaced by avg_h * amplitude.
+    // HeightField needs heights relative to center, so subtract average to avoid double-counting.
+    let avg_h: f32 = cached.heights.iter().sum::<f32>() / (gs * gs) as f32;
     let heights =
-        nalgebra::DMatrix::from_fn(gs, gs, |r, c| cached.heights[r * gs + c]);
+        nalgebra::DMatrix::from_fn(gs, gs, |r, c| cached.heights[r * gs + c] - avg_h);
 
     let face_size_m = radius_m * std::f64::consts::FRAC_PI_2;
     let chunk_size_m = (face_size_m / (1u64 << cached.lod) as f64) as f32;

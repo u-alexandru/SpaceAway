@@ -133,8 +133,11 @@ impl TerrainManager {
             self.col.cache_chunk(chunk.key, chunk);
         }
 
-        // Remove colliders for evicted chunks.
+        // Remove colliders and GPU meshes for evicted chunks.
         self.col.remove_evicted(physics, &removed_keys);
+        for key in &removed_keys {
+            self.gpu_meshes.remove(key);
+        }
 
         // --- Gravity computation ---
         let gravity = sa_terrain::gravity::compute_gravity(

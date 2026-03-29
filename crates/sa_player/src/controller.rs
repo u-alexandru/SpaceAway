@@ -47,7 +47,7 @@ impl PlayerController {
             .restitution(0.0)
             .collision_groups(InteractionGroups::new(
                 Group::GROUP_3,  // PLAYER group
-                Group::GROUP_2,  // collide with SHIP_INTERIOR only
+                Group::GROUP_2.union(Group::GROUP_5),  // SHIP_INTERIOR + TERRAIN
             ))
             .build();
         let collider_handle = physics.add_collider(collider, body_handle);
