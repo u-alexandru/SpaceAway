@@ -99,10 +99,12 @@ pub enum LandingState {
 pub struct LandingUpdate {
     /// Current state after this update.
     pub state: LandingState,
+    /// State before this update (for detecting transitions).
+    pub previous_state: LandingState,
     /// Minimum clearance across all skids, or `None` when no terrain is detected.
-    // Stored for future use by altitude HUD display (Task 7).
-    #[allow(dead_code)]
     pub min_clearance: Option<f32>,
+    /// Whether any skid raycast detected terrain contact (clearance < SLIDING_THRESHOLD).
+    pub skid_contact: bool,
     /// Impact event if the state transitioned to `Sliding` (first ground contact) this frame, else `None`.
     pub impact: Option<LandingImpactEvent>,
 }
@@ -160,13 +162,17 @@ impl LandingSystem {
 
     /// Advance the state machine one tick.
     pub fn update(&mut self, p: LandingParams<'_>) -> LandingUpdate {
+        let previous_state = self.state;
+
         // If terrain is no longer active, immediately reset to Flying.
         if !p.terrain_active {
             self.state = LandingState::Flying;
             self.lock_requested = false;
             return LandingUpdate {
                 state: self.state,
+                previous_state,
                 min_clearance: None,
+                skid_contact: false,
                 impact: None,
             };
         }
@@ -174,6 +180,7 @@ impl LandingSystem {
         // Cast downward rays from each skid position.
         let clearances = self.cast_skid_rays(p.physics, p.ship_iso, &p.gravity_dir);
         let min_clearance = clearances.iter().copied().reduce(f32::min);
+        let skid_contact = min_clearance.is_some_and(|c| c < SLIDING_THRESHOLD);
 
         let mut impact_event: Option<LandingImpactEvent> = None;
         let consume_lock = self.lock_requested;
@@ -223,7 +230,9 @@ impl LandingSystem {
 
         LandingUpdate {
             state: self.state,
+            previous_state,
             min_clearance,
+            skid_contact,
             impact: impact_event,
         }
     }

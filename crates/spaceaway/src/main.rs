@@ -1472,7 +1472,9 @@ impl ApplicationHandler for App {
                     }
 
                     // Apply terrain gravity + atmospheric drag to ship body before step.
-                    if let Some(ref grav) = self.terrain_gravity
+                    // Skip when LANDED — ship is frozen on the surface.
+                    if self.landing.state() != landing::LandingState::Landed
+                        && let Some(ref grav) = self.terrain_gravity
                         && grav.blend > 0.01
                         && let Some(ship) = &self.ship
                         && let Some(body) = self.physics.get_body_mut(ship.body_handle)
@@ -1776,11 +1778,35 @@ impl ApplicationHandler for App {
                             throttle: ship.throttle,
                         });
                         self.last_clearance = landing_result.min_clearance;
+
+                        // Diagnostic logging when terrain is active.
+                        if terrain_active {
+                            log::info!(
+                                "LANDING_DIAG: state={:?}, speed={:.1}m/s, vertical={:.1}m/s, clearance={:.1}m, skid_contact={}",
+                                landing_result.state,
+                                ship_speed_ms,
+                                ship_velocity.dot(&gravity_dir).abs(),
+                                landing_result.min_clearance.unwrap_or(100.0),
+                                landing_result.skid_contact,
+                            );
+                        }
+
+                        // Freeze ship when LANDED; restore on unlock.
                         if landing_result.state == landing::LandingState::Landed
                             && let Some(body) = self.physics.get_body_mut(ship.body_handle)
                         {
                             body.set_linvel(nalgebra::Vector3::zeros(), true);
                             body.set_angvel(nalgebra::Vector3::zeros(), true);
+                            body.set_gravity_scale(0.0, true);
+                        }
+                        // Restore gravity_scale when transitioning OUT of Landed.
+                        if landing_result.previous_state == landing::LandingState::Landed
+                            && landing_result.state != landing::LandingState::Landed
+                            && let Some(body) = self.physics.get_body_mut(ship.body_handle)
+                        {
+                            // Ship gravity_scale is always 0 (gravity applied manually).
+                            body.set_gravity_scale(0.0, true);
+                            body.set_linvel(nalgebra::Vector3::zeros(), true);
                         }
                         if let Some(ref impact) = landing_result.impact {
                             log::info!(
@@ -1911,6 +1937,33 @@ impl ApplicationHandler for App {
                                 let vel = body.linvel() * (1.0 - atmo_drag * physics_dt).max(0.0);
                                 body.set_linvel(vel, true);
                             }
+                            // Ground contact response (walk-mode substitute for
+                            // rapier contact solving, since physics.step() is skipped).
+                            // When SLIDING, cancel downward velocity and apply friction.
+                            if self.landing.state() == landing::LandingState::Sliding
+                                && let Some(ref grav) = self.terrain_gravity
+                            {
+                                let gdir = nalgebra::Vector3::new(
+                                    grav.direction[0], grav.direction[1], grav.direction[2],
+                                );
+                                let vel = *body.linvel();
+                                let down_speed = vel.dot(&gdir);
+                                if down_speed > 0.0 {
+                                    // Cancel velocity into ground (normal reaction).
+                                    let corrected = vel - gdir * down_speed;
+                                    body.set_linvel(corrected, true);
+                                }
+                                // Ground friction: combined friction 0.6 * 0.8 = 0.48.
+                                // Deceleration = friction * gravity.
+                                let friction_decel = 0.48 * grav.magnitude;
+                                let tangent_vel = *body.linvel();
+                                let tangent_speed = tangent_vel.magnitude();
+                                if tangent_speed > 0.01 {
+                                    let decel = (friction_decel * physics_dt).min(tangent_speed);
+                                    let braked = tangent_vel * (1.0 - decel / tangent_speed);
+                                    body.set_linvel(braked, true);
+                                }
+                            }
                             // Angular damping ALWAYS applies (not just when engine on).
                             // Without this, Q/E roll torques create permanent spin.
                             let angvel = body.angvel() * (1.0 - 5.0 * physics_dt).max(0.0);
@@ -2009,11 +2062,34 @@ impl ApplicationHandler for App {
                             throttle: ship.throttle,
                         });
                         self.last_clearance = landing_result.min_clearance;
+
+                        // Diagnostic logging when terrain is active.
+                        if terrain_active {
+                            log::info!(
+                                "LANDING_DIAG: state={:?}, speed={:.1}m/s, vertical={:.1}m/s, clearance={:.1}m, skid_contact={}",
+                                landing_result.state,
+                                ship_speed_ms,
+                                ship_velocity.dot(&gravity_dir).abs(),
+                                landing_result.min_clearance.unwrap_or(100.0),
+                                landing_result.skid_contact,
+                            );
+                        }
+
+                        // Freeze ship when LANDED; restore on unlock.
                         if landing_result.state == landing::LandingState::Landed
                             && let Some(body) = self.physics.get_body_mut(ship.body_handle)
                         {
                             body.set_linvel(nalgebra::Vector3::zeros(), true);
                             body.set_angvel(nalgebra::Vector3::zeros(), true);
+                            body.set_gravity_scale(0.0, true);
+                        }
+                        // Restore gravity_scale when transitioning OUT of Landed.
+                        if landing_result.previous_state == landing::LandingState::Landed
+                            && landing_result.state != landing::LandingState::Landed
+                            && let Some(body) = self.physics.get_body_mut(ship.body_handle)
+                        {
+                            body.set_gravity_scale(0.0, true);
+                            body.set_linvel(nalgebra::Vector3::zeros(), true);
                         }
                         if let Some(ref impact) = landing_result.impact {
                             log::info!(
