@@ -158,15 +158,15 @@ impl TerrainColliders {
                 }
             }
             // Shift sphere barrier to planet center relative to new anchor
-            if let Some(sh) = self.sphere_barrier {
-                if let Some(coll) = physics.collider_set.get_mut(sh) {
-                    let cx = (-cam_rel_m[0]) as f32;
-                    let cy = (-cam_rel_m[1]) as f32;
-                    let cz = (-cam_rel_m[2]) as f32;
-                    coll.set_position_wrt_parent(
-                        nalgebra::Isometry3::translation(cx, cy, cz)
-                    );
-                }
+            if let Some(sh) = self.sphere_barrier
+                && let Some(coll) = physics.collider_set.get_mut(sh)
+            {
+                let cx = (-cam_rel_m[0]) as f32;
+                let cy = (-cam_rel_m[1]) as f32;
+                let cz = (-cam_rel_m[2]) as f32;
+                coll.set_position_wrt_parent(
+                    nalgebra::Isometry3::translation(cx, cy, cz)
+                );
             }
             physics.sync_collider_positions();
             physics.update_query_pipeline();

@@ -2502,7 +2502,7 @@ impl ApplicationHandler for App {
                             self.galactic_position,
                         );
                         // Log every 60 frames when terrain is active
-                        if self.terrain.is_some() && self.time.frame_count() % 60 == 0 {
+                        if self.terrain.is_some() && self.time.frame_count().is_multiple_of(60) {
                             log::info!("RENDER: {} solar cmds (hidden={:?}, bodies={}), {} terrain cmds",
                                 system_commands.len(), hidden, total_bodies, terrain_commands.len());
                         }
@@ -2511,6 +2511,21 @@ impl ApplicationHandler for App {
 
                     // Append terrain draw commands
                     commands.extend(terrain_commands);
+
+                    // DIAGNOSTIC: dump every draw command's position once per second
+                    if self.terrain.is_some() && self.time.frame_count().is_multiple_of(60) {
+                        for (i, cmd) in commands.iter().enumerate() {
+                            let t = cmd.model_matrix.col(3);
+                            let dist = ((t.x * t.x + t.y * t.y + t.z * t.z) as f64).sqrt();
+                            let mesh_info = if let (Some(_gpu), Some(renderer)) = (&self.gpu, &self.renderer) {
+                                renderer.mesh_store.get(cmd.mesh)
+                                    .map(|m| m.index_count)
+                                    .unwrap_or(0)
+                            } else { 0 };
+                            log::info!("CMD[{}]: pos=({:.0},{:.0},{:.0}) dist={:.0}m tris={} pre_rebased={}",
+                                i, t.x, t.y, t.z, dist, mesh_info / 3, cmd.pre_rebased);
+                        }
+                    }
 
                     // Unload system if player has cruised far away (> 100 AU from star)
                     if let Some(system) = &self.active_system {
