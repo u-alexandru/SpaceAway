@@ -157,11 +157,16 @@ impl TerrainColliders {
                 cam_rel_m[2] * inv_len,
             ];
 
-            // In rapier space (ship near origin): surface is altitude meters
-            // below the ship along the normal direction.
-            let surface_x = -(normal[0] * altitude) as f32 + ship_rapier_pos.x;
-            let surface_y = -(normal[1] * altitude) as f32 + ship_rapier_pos.y;
-            let surface_z = -(normal[2] * altitude) as f32 + ship_rapier_pos.z;
+            // Surface position in rapier space: the point on the planet
+            // surface directly below the ship, expressed relative to the
+            // physics anchor. This is a FIXED point — it does NOT track
+            // the ship body. The ship descends toward it and collides.
+            //
+            // surface_planet_relative = normalize(cam_rel_m) * radius_m
+            // surface_rapier = (surface_planet_relative - anchor) as f32
+            let surface_x = (normal[0] * radius_m - self.anchor_f64[0]) as f32;
+            let surface_y = (normal[1] * radius_m - self.anchor_f64[1]) as f32;
+            let surface_z = (normal[2] * radius_m - self.anchor_f64[2]) as f32;
 
             // Rotation: map Y-up to the surface normal direction
             let up = nalgebra::Vector3::new(0.0_f32, 1.0, 0.0);
