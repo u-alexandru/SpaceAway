@@ -8,3 +8,4 @@
 *.ogg
 *.flac
 !/resources/sounds/**/*.wav
+.worktrees/
