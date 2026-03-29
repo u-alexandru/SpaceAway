@@ -793,6 +793,59 @@ impl ApplicationHandler for App {
                         }
                     }
 
+                    // Debug teleport: 0 = 1km above nearest planet (works seated or standing)
+                    if event.state.is_pressed() && code == KeyCode::Digit0 && self.phase == GamePhase::Playing {
+                        let ly_to_m = 9.461e15_f64;
+                        let m_to_ly = 1.0 / ly_to_m;
+                        let planet_info: Option<(WorldPos, f64)> = if let Some(terrain_mgr) = &self.terrain {
+                            Some((terrain_mgr.frozen_planet_center_ly(), terrain_mgr.planet_radius_m()))
+                        } else if let Some(sys) = &self.active_system {
+                            let positions = sys.compute_positions_ly_pub();
+                            let mut best: Option<(usize, f64)> = None;
+                            for (i, pos) in positions.iter().enumerate() {
+                                if sys.body_radius_m(i).is_some() && sys.planet_data(i).is_some() {
+                                    let dx = (self.galactic_position.x - pos.x) * ly_to_m;
+                                    let dy = (self.galactic_position.y - pos.y) * ly_to_m;
+                                    let dz = (self.galactic_position.z - pos.z) * ly_to_m;
+                                    let d = (dx*dx + dy*dy + dz*dz).sqrt();
+                                    if best.as_ref().is_none_or(|(_, bd)| d < *bd) {
+                                        best = Some((i, d));
+                                    }
+                                }
+                            }
+                            best.and_then(|(i, _)| {
+                                let r = sys.body_radius_m(i)?;
+                                Some((*positions.get(i)?, r))
+                            })
+                        } else {
+                            None
+                        };
+                        if let Some((planet_pos, radius_m)) = planet_info {
+                            let dx = (self.galactic_position.x - planet_pos.x) * ly_to_m;
+                            let dy = (self.galactic_position.y - planet_pos.y) * ly_to_m;
+                            let dz = (self.galactic_position.z - planet_pos.z) * ly_to_m;
+                            let dist = (dx*dx + dy*dy + dz*dz).sqrt().max(1.0);
+                            let target_dist = radius_m + 1000.0;
+                            let scale = target_dist / dist;
+                            self.galactic_position = WorldPos::new(
+                                planet_pos.x + dx * scale * m_to_ly,
+                                planet_pos.y + dy * scale * m_to_ly,
+                                planet_pos.z + dz * scale * m_to_ly,
+                            );
+                            self.camera.position = self.galactic_position;
+                            if let Some(ship) = &self.ship
+                                && let Some(body) = self.physics.rigid_body_set.get_mut(ship.body_handle)
+                            {
+                                body.set_linvel(nalgebra::Vector3::zeros(), true);
+                                body.set_angvel(nalgebra::Vector3::zeros(), true);
+                            }
+                            self.drive.request_disengage();
+                            log::info!("Teleported 1km above planet surface (radius {:.0}km)", radius_m / 1000.0);
+                        } else {
+                            log::warn!("No planet found — press 8 to enter a system first");
+                        }
+                    }
+
                     // Teleport keys: only when NOT seated at helm (1/2/3 are drive keys when seated)
                     let is_seated = self.helm.as_ref().map(|h| h.is_seated()).unwrap_or(false);
                     if event.state.is_pressed() && !is_seated && self.phase == GamePhase::Playing {
