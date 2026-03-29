@@ -163,14 +163,11 @@ impl TerrainManager {
             }
         }
 
-        // Only remove GPU meshes for chunks that are truly evicted from the
-        // streaming cache (not just off-screen). Off-screen chunks may come
-        // back when the player turns around.
-        // removed_keys from streaming = chunks no longer in the visible set.
-        // We keep GPU meshes alive as long as the chunk exists in the LRU cache.
-        // Only remove when gpu_meshes has keys that aren't in visible AND aren't
-        // expected to return soon. For now, let GPU meshes accumulate up to a
-        // budget and evict the oldest.
+        // Remove GPU meshes for chunks evicted from the LRU cache.
+        // These are truly gone and won't be re-used without re-generation.
+        for key in &removed_keys {
+            self.gpu_meshes.remove(key);
+        }
         self.col.remove_evicted(physics, &removed_keys);
 
         // --- Gravity computation ---

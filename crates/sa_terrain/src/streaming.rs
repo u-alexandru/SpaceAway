@@ -17,7 +17,8 @@ use crate::quadtree::VisibleNode;
 const WORKER_COUNT: usize = 4;
 
 /// Maximum number of chunks held in the LRU cache.
-const LRU_CAPACITY: usize = 500;
+/// Must be >= MAX_VISIBLE_NODES (800) so all visible chunks can be cached.
+const LRU_CAPACITY: usize = 1000;
 
 // ---------------------------------------------------------------------------
 // LRU cache

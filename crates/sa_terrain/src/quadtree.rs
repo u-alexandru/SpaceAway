@@ -9,7 +9,9 @@ use crate::cube_sphere::{CubeFace, cube_to_sphere};
 const MIN_RANGE: f64 = 50.0;
 
 /// Hard cap on total visible nodes to prevent runaway subdivision.
-const MAX_VISIBLE_NODES: usize = 500;
+/// 800 ensures the face under the camera gets enough fine-LOD nodes
+/// even after other faces consume nodes for the far hemisphere.
+const MAX_VISIBLE_NODES: usize = 800;
 
 /// A visible terrain node selected by the quadtree traversal.
 #[derive(Debug, Clone)]
@@ -67,8 +69,22 @@ pub fn select_visible_nodes(
         camera_pos
     };
 
+    // Sort faces by proximity to camera so the face directly under the
+    // camera is visited first. Without this, the fixed iteration order
+    // (PosX, NegX, PosY, NegY, PosZ, NegZ) can exhaust the node cap on
+    // other faces before reaching the critical face, producing gaps.
+    let mut face_dists: [(CubeFace, f64); 6] = CubeFace::ALL.map(|face| {
+        let dir = cube_to_sphere(face, 0.0, 0.0);
+        let center = [dir[0] * planet_radius_m, dir[1] * planet_radius_m, dir[2] * planet_radius_m];
+        let dx = effective_cam[0] - center[0];
+        let dy = effective_cam[1] - center[1];
+        let dz = effective_cam[2] - center[2];
+        (face, dx * dx + dy * dy + dz * dz)
+    });
+    face_dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
     let mut nodes = Vec::with_capacity(512);
-    for face in CubeFace::ALL {
+    for &(face, _) in &face_dists {
         if nodes.len() >= MAX_VISIBLE_NODES { break; }
         select_recursive(
             face, 0, 0, 0,
@@ -138,14 +154,29 @@ fn select_recursive(
         return;
     }
 
-    // Subdivide into 4 children
+    // Subdivide into 4 children, nearest-first so the node cap doesn't
+    // starve the quadrant directly under the camera.
     let child_lod = lod + 1;
     let cx = x * 2;
     let cy = y * 2;
-    select_recursive(face, child_lod, cx,     cy,     camera_pos, radius, max_lod, max_displacement, out);
-    select_recursive(face, child_lod, cx + 1, cy,     camera_pos, radius, max_lod, max_displacement, out);
-    select_recursive(face, child_lod, cx,     cy + 1, camera_pos, radius, max_lod, max_displacement, out);
-    select_recursive(face, child_lod, cx + 1, cy + 1, camera_pos, radius, max_lod, max_displacement, out);
+    let child_subdivs = 1u32 << child_lod;
+    let children = [(cx, cy), (cx + 1, cy), (cx, cy + 1), (cx + 1, cy + 1)];
+    let mut child_dists: [(u32, u32, f64); 4] = children.map(|(cxi, cyi)| {
+        let cu = -1.0 + (2.0 * cxi as f64 + 1.0) / child_subdivs as f64;
+        let cv = -1.0 + (2.0 * cyi as f64 + 1.0) / child_subdivs as f64;
+        let cdir = cube_to_sphere(face, cu, cv);
+        let ccx = cdir[0] * radius;
+        let ccy = cdir[1] * radius;
+        let ccz = cdir[2] * radius;
+        let ddx = camera_pos[0] - ccx;
+        let ddy = camera_pos[1] - ccy;
+        let ddz = camera_pos[2] - ccz;
+        (cxi, cyi, ddx * ddx + ddy * ddy + ddz * ddz)
+    });
+    child_dists.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
+    for &(cxi, cyi, _) in &child_dists {
+        select_recursive(face, child_lod, cxi, cyi, camera_pos, radius, max_lod, max_displacement, out);
+    }
 }
 
 #[cfg(test)]
