@@ -1495,6 +1495,25 @@ impl ApplicationHandler for App {
                         .and_then(|s| self.physics.get_body(s.body_handle))
                         .map(|b| b.translation().clone_owned());
 
+                    // Move terrain body to ship's current physics position BEFORE
+                    // physics.step() so rapier resolves contacts between the ship's
+                    // skid colliders and terrain colliders in the same frame.
+                    // Without this, the terrain body lags one frame behind and
+                    // at descent speeds the gap exceeds the 0.3m skid radius.
+                    if let Some(terrain_mgr) = &self.terrain
+                        && let Some(tb) = terrain_mgr.terrain_body_handle()
+                    {
+                        // Read ship position first, then mutably borrow terrain body.
+                        let ship_pos = self.ship.as_ref()
+                            .and_then(|s| self.physics.get_body(s.body_handle))
+                            .map(|b| *b.translation());
+                        if let Some(sp) = ship_pos
+                            && let Some(body) = self.physics.rigid_body_set.get_mut(tb)
+                        {
+                            body.set_translation(sp, true);
+                        }
+                    }
+
                     // Physics step
                     let physics_dt = dt.min(1.0 / 30.0);
                     if physics_dt > 0.0 {

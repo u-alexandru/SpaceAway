@@ -223,6 +223,11 @@ impl TerrainManager {
         self.col.cleanup(physics);
     }
 
+    /// Terrain rigid body handle (for repositioning before physics step).
+    pub fn terrain_body_handle(&self) -> Option<rapier3d::prelude::RigidBodyHandle> {
+        self.col.terrain_body
+    }
+
     /// Returns true when the camera has moved far enough to deactivate terrain.
     pub fn should_deactivate(&self, camera_ly: WorldPos) -> bool {
         let dx = (camera_ly.x - self.planet_center_ly.x) * LY_TO_M;
