@@ -4,3 +4,13 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+sa_math.workspace = true
+sa_core.workspace = true
+sa_universe.workspace = true
+fastnoise-lite.workspace = true
+crossbeam-channel = "0.5"
+glam.workspace = true
+log.workspace = true
+
+[dev-dependencies]
+approx = "0.5"
