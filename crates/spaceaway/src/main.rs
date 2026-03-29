@@ -836,7 +836,7 @@ impl ApplicationHandler for App {
                                         let au_in_ly = 1.581e-5_f64;
                                         let meters_in_ly = 1.0 / 9.461e15_f64;
                                         let planet_radius_m = planet.radius_earth as f64 * 6_371_000.0;
-                                        let view_dist_m = planet_radius_m * 1.8; // inside terrain activation (2.0x)
+                                        let view_dist_m = planet_radius_m * 1.8; // inside terrain activation (2.0×)
                                         let planet_orbital_ly = planet.orbital_radius_au as f64 * au_in_ly;
                                         // Offset above orbital plane so rings are visible
                                         let above_ly = view_dist_m * 0.4 * meters_in_ly;
@@ -1409,10 +1409,32 @@ impl ApplicationHandler for App {
                         body.set_linvel(vel, true);
                     }
 
+                    // Record ship position before physics step (for galactic tracking).
+                    let ship_pos_pre_helm = self.ship.as_ref()
+                        .and_then(|s| self.physics.get_body(s.body_handle))
+                        .map(|b| b.translation().clone_owned());
+
                     // Physics step
                     let physics_dt = dt.min(1.0 / 30.0);
                     if physics_dt > 0.0 {
                         self.physics.step(physics_dt);
+                    }
+
+                    // Track ship physics delta into galactic_position (impulse only).
+                    // In cruise/warp, galactic_position is updated by the drive system
+                    // below. In impulse, the ship moves via rapier but galactic_position
+                    // was previously frozen — causing the player to be unable to visually
+                    // approach planets (pre-rebased rendering uses galactic_position).
+                    if self.drive.mode() == sa_ship::DriveMode::Impulse
+                        && let Some(pre) = ship_pos_pre_helm
+                        && let Some(ship) = &self.ship
+                        && let Some(body) = self.physics.get_body(ship.body_handle)
+                    {
+                        let post = body.translation();
+                        let m_to_ly = 1.0 / 9.461e15_f64;
+                        self.galactic_position.x += (post.x as f64 - pre.x as f64) * m_to_ly;
+                        self.galactic_position.y += (post.y as f64 - pre.y as f64) * m_to_ly;
+                        self.galactic_position.z += (post.z as f64 - pre.z as f64) * m_to_ly;
                     }
 
                     // Auto-orient ship toward locked target in cruise/warp.
@@ -1733,6 +1755,18 @@ impl ApplicationHandler for App {
                         .and_then(|s| self.physics.get_body(s.body_handle))
                         .map(|b| (b.translation().clone_owned(), *b.rotation()))
                         .unwrap_or((nalgebra::Vector3::zeros(), nalgebra::UnitQuaternion::identity()));
+
+                    // Track ship physics delta into galactic_position (impulse only).
+                    // Same as the helm-mode tracking above — keeps pre-rebased
+                    // rendering (planets, terrain) in sync with the ship's movement.
+                    if self.drive.mode() == sa_ship::DriveMode::Impulse
+                        && self.ship.is_some()
+                    {
+                        let m_to_ly = 1.0 / 9.461e15_f64;
+                        self.galactic_position.x += (ship_pos_after.x as f64 - ship_pos_before.x as f64) * m_to_ly;
+                        self.galactic_position.y += (ship_pos_after.y as f64 - ship_pos_before.y as f64) * m_to_ly;
+                        self.galactic_position.z += (ship_pos_after.z as f64 - ship_pos_before.z as f64) * m_to_ly;
+                    }
 
                     // Step 4: Carry player with ship.
                     // The player's world position is relative to the OLD ship position.
@@ -2282,6 +2316,34 @@ impl ApplicationHandler for App {
                     log::info!("Terrain deactivated");
                 }
 
+                // Diagnostic: log planet distances every 60 frames to debug terrain activation
+                if let Some(sys) = &self.active_system
+                    && self.time.frame_count().is_multiple_of(60)
+                {
+                    let positions = sys.compute_positions_ly_pub();
+                    let ly_to_m = 9.461e15_f64;
+                    for (i, pos) in positions.iter().enumerate() {
+                        if let Some(r_m) = sys.body_radius_m(i)
+                            && sys.planet_data(i).is_some()
+                        {
+                            let dx = (self.galactic_position.x - pos.x) * ly_to_m;
+                            let dy = (self.galactic_position.y - pos.y) * ly_to_m;
+                            let dz = (self.galactic_position.z - pos.z) * ly_to_m;
+                            let dist_m = (dx * dx + dy * dy + dz * dz).sqrt();
+                            let ratio = dist_m / r_m;
+                            log::info!(
+                                "DIAG body[{}]: dist={:.0}km, radius={:.0}km, ratio={:.2}x, \
+                                 terrain={}, hidden={:?}, galactic=({:.12},{:.12},{:.12}), \
+                                 planet=({:.12},{:.12},{:.12})",
+                                i, dist_m / 1000.0, r_m / 1000.0, ratio,
+                                self.terrain.is_some(), sys.hidden_body_index,
+                                self.galactic_position.x, self.galactic_position.y, self.galactic_position.z,
+                                pos.x, pos.y, pos.z,
+                            );
+                        }
+                    }
+                }
+
                 // Activation check (only if no terrain active and in a solar system)
                 if self.terrain.is_none()
                     && let Some(sys) = &self.active_system
@@ -2299,6 +2361,14 @@ impl ApplicationHandler for App {
                     self.terrain = Some(terrain_integration::TerrainManager::new(
                         config, planet_pos, body_idx, surface_grav,
                     ));
+                    // Auto-disengage cruise/warp on terrain activation.
+                    // Without this, cruise speed (~55,000 km/s) overshoots the
+                    // planet surface in a fraction of a second, landing the camera
+                    // deep inside where only LOD 0 chunks are visible.
+                    if self.drive.mode() != sa_ship::DriveMode::Impulse {
+                        log::info!("Auto-disengage drive: terrain activation");
+                        self.drive.request_disengage();
+                    }
                 }
 
                 // Deactivate terrain if no solar system is active
@@ -2487,7 +2557,7 @@ impl ApplicationHandler for App {
                             self.galactic_position,
                         );
                         // Log every 60 frames when terrain is active
-                        if self.terrain.is_some() && self.time.frame_count() % 60 == 0 {
+                        if self.terrain.is_some() && self.time.frame_count().is_multiple_of(60) {
                             log::info!("RENDER: {} solar cmds (hidden={:?}, bodies={}), {} terrain cmds",
                                 system_commands.len(), hidden, total_bodies, terrain_commands.len());
                         }

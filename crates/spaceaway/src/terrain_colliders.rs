@@ -103,6 +103,14 @@ impl TerrainColliders {
         max_displacement_m: f64,
         visible_keys: &std::collections::HashSet<ChunkKey>,
     ) {
+        // On first call, initialize anchor to the camera position so the
+        // sphere barrier is placed correctly. Without this, anchor stays at
+        // [0,0,0] from the constructor and the barrier ends up at the physics
+        // origin instead of at the planet center relative to the camera.
+        if self.terrain_body.is_none() {
+            self.anchor_f64 = cam_rel_m;
+        }
+
         let terrain_body = *self.terrain_body.get_or_insert_with(|| {
             let rb = RigidBodyBuilder::fixed().build();
             physics.add_rigid_body(rb)
@@ -158,15 +166,15 @@ impl TerrainColliders {
                 }
             }
             // Shift sphere barrier to planet center relative to new anchor
-            if let Some(sh) = self.sphere_barrier {
-                if let Some(coll) = physics.collider_set.get_mut(sh) {
-                    let cx = (-cam_rel_m[0]) as f32;
-                    let cy = (-cam_rel_m[1]) as f32;
-                    let cz = (-cam_rel_m[2]) as f32;
-                    coll.set_position_wrt_parent(
-                        nalgebra::Isometry3::translation(cx, cy, cz)
-                    );
-                }
+            if let Some(sh) = self.sphere_barrier
+                && let Some(coll) = physics.collider_set.get_mut(sh)
+            {
+                let cx = (-cam_rel_m[0]) as f32;
+                let cy = (-cam_rel_m[1]) as f32;
+                let cz = (-cam_rel_m[2]) as f32;
+                coll.set_position_wrt_parent(
+                    nalgebra::Isometry3::translation(cx, cy, cz)
+                );
             }
             physics.sync_collider_positions();
             physics.update_query_pipeline();

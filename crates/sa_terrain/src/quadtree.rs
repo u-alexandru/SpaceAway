@@ -51,32 +51,28 @@ pub fn select_visible_nodes(
     max_lod: u8,
     max_displacement: f64,
 ) -> Vec<VisibleNode> {
-    // Guard: camera inside the planet (e.g., physics glitch) would cause
-    // every node to subdivide to max_lod — trillions of calls, stack overflow.
-    // Return coarsest LOD only (6 nodes, one per face).
+    // When the camera is inside the planet (e.g., cruise overshoot or physics
+    // glitch), project it onto the surface so LOD selection still produces
+    // fine nodes for the nearest terrain. Without this, the camera-to-node
+    // distances are all ~radius and the quadtree returns only coarse LOD 0-1
+    // nodes, making the terrain look like a smaller sphere of flat panels.
+    // The MAX_VISIBLE_NODES cap (500) prevents runaway subdivision.
     let cam_dist = (camera_pos[0] * camera_pos[0]
         + camera_pos[1] * camera_pos[1]
         + camera_pos[2] * camera_pos[2]).sqrt();
-    if cam_dist < planet_radius_m * 0.5 {
-        return CubeFace::ALL.iter().map(|&face| {
-            let dir = cube_to_sphere(face, 0.0, 0.0);
-            VisibleNode {
-                face,
-                lod: 0,
-                x: 0,
-                y: 0,
-                center: [dir[0] * planet_radius_m, dir[1] * planet_radius_m, dir[2] * planet_radius_m],
-                morph_factor: 0.0,
-            }
-        }).collect();
-    }
+    let effective_cam = if cam_dist < planet_radius_m && cam_dist > 1.0 {
+        let scale = (planet_radius_m * 1.01) / cam_dist;
+        [camera_pos[0] * scale, camera_pos[1] * scale, camera_pos[2] * scale]
+    } else {
+        camera_pos
+    };
 
     let mut nodes = Vec::with_capacity(512);
     for face in CubeFace::ALL {
         if nodes.len() >= MAX_VISIBLE_NODES { break; }
         select_recursive(
             face, 0, 0, 0,
-            camera_pos, planet_radius_m, max_lod, max_displacement,
+            effective_cam, planet_radius_m, max_lod, max_displacement,
             &mut nodes,
         );
     }

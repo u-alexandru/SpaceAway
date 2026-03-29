@@ -178,10 +178,10 @@ impl ActiveSystem {
         let mut commands = Vec::with_capacity(self.bodies.len());
         for (i, body) in self.bodies.iter().enumerate() {
             // Skip body hidden by terrain (and its children: atmosphere, rings)
-            if let Some(hidden) = self.hidden_body_index {
-                if i == hidden || body.parent_index == hidden as i32 {
-                    continue;
-                }
+            if let Some(hidden) = self.hidden_body_index
+                && (i == hidden || body.parent_index == hidden as i32)
+            {
+                continue;
             }
 
             let pos = world_positions[i];
