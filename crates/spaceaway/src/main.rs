@@ -3,6 +3,8 @@ mod drive_integration;
 mod frame_update;
 mod game_helpers;
 mod game_systems;
+#[allow(clippy::too_many_lines)]
+mod helm_mode;
 mod input_handler;
 mod landing;
 mod menu;
@@ -11,6 +13,7 @@ mod mesh_utils;
 mod navigation;
 #[allow(clippy::too_many_lines)]
 mod render_frame;
+mod walk_mode;
 mod ship_setup;
 mod sky;
 mod solar_system;
