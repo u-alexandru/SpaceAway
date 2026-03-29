@@ -187,8 +187,19 @@ impl TerrainColliders {
             .sqrt();
         let altitude = cam_len - radius_m;
 
+        // Log barrier state every frame when close to surface
+        if altitude < 500_000.0 {
+            log::debug!(
+                "BARRIER_TICK: alt={:.0}m, barrier={}, ship=({:.1},{:.1},{:.1})",
+                altitude,
+                self.surface_barrier.is_some(),
+                ship_rapier_pos.x, ship_rapier_pos.y, ship_rapier_pos.z,
+            );
+        }
+
         if altitude < 500_000.0 && cam_len > 0.01 {
             if self.surface_barrier.is_none() {
+                log::info!("BARRIER_CREATE: altitude={:.0}m, creating surface barrier", altitude);
                 let iso = self.compute_barrier_isometry(cam_rel_m, radius_m);
                 // 10km x 100m x 10km cuboid — top face at surface level
                 let collider = ColliderBuilder::cuboid(5000.0, 50.0, 5000.0)
