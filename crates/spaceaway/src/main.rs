@@ -2339,6 +2339,21 @@ impl ApplicationHandler for App {
                     // Collision groups handle filtering: exclude_solids()
                     // limits to sensors, and only interactable sensors are
                     // registered in the collider_to_id map.
+                    // Debug: log ray origin + ship position every 120 frames
+                    if self.time.frame_count().is_multiple_of(120) {
+                        let st = self.ship.as_ref()
+                            .and_then(|s| self.physics.get_body(s.body_handle))
+                            .map(|b| *b.translation())
+                            .unwrap_or(nalgebra::Vector3::zeros());
+                        log::info!(
+                            "INTERACT_DIAG: ray_origin=({:.2},{:.2},{:.2}), ship_pos=({:.1},{:.1},{:.1}), cam=({:.1},{:.1},{:.1}), seated={}",
+                            ray_origin[0], ray_origin[1], ray_origin[2],
+                            st.x, st.y, st.z,
+                            self.camera.position.x, self.camera.position.y, self.camera.position.z,
+                            is_seated,
+                        );
+                    }
+
                     let helm_clicked = interaction.update(
                         ray_origin,
                         ray_dir,
