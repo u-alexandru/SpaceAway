@@ -145,9 +145,22 @@ impl ChunkStreaming {
             thread::spawn(move || {
                 // Block on incoming requests until the sender is dropped.
                 while let Ok(key) = rx.recv() {
-                    let data = generate_chunk(key, &cfg);
-                    // Ignore send errors — main thread may have shut down.
-                    let _ = tx.send(data);
+                    // Catch panics in chunk generation so one bad chunk
+                    // doesn't kill the worker thread permanently.
+                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        generate_chunk(key, &cfg)
+                    })) {
+                        Ok(data) => {
+                            let _ = tx.send(data);
+                        }
+                        Err(_) => {
+                            log::error!(
+                                "Terrain worker panic generating chunk face={} lod={} x={} y={}",
+                                key.face, key.lod, key.x, key.y
+                            );
+                            // Worker continues — it does not die.
+                        }
+                    }
                 }
             });
         }

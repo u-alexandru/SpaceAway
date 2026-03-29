@@ -1379,17 +1379,21 @@ impl ApplicationHandler for App {
                         }
                     }
 
-                    // Apply terrain gravity to ship body before step.
+                    // Apply terrain gravity + atmospheric drag to ship body before step.
                     if let Some(ref grav) = self.terrain_gravity {
                         if grav.blend > 0.01 {
                             if let Some(ship) = &self.ship {
                                 if let Some(body) = self.physics.get_body_mut(ship.body_handle) {
+                                    let helm_dt = dt.min(1.0 / 30.0);
                                     let grav_accel = nalgebra::Vector3::new(
                                         grav.direction[0] * grav.magnitude,
                                         grav.direction[1] * grav.magnitude,
                                         grav.direction[2] * grav.magnitude,
                                     );
-                                    let vel = body.linvel() + grav_accel * dt.min(1.0 / 30.0);
+                                    let vel = body.linvel() + grav_accel * helm_dt;
+                                    // Atmospheric drag: terminal velocity ~200 m/s at surface
+                                    let atmo_drag = 0.05 * grav.blend;
+                                    let vel = vel * (1.0 - atmo_drag * helm_dt).max(0.0);
                                     body.set_linvel(vel, true);
                                 }
                             }
@@ -1679,6 +1683,14 @@ impl ApplicationHandler for App {
                                         grav.direction[2] * grav.magnitude,
                                     );
                                     let vel = body.linvel() + grav_accel * physics_dt;
+                                    body.set_linvel(vel, true);
+
+                                    // Atmospheric drag: increases with gravity blend.
+                                    // At full blend (surface), drag = 0.05/s → terminal velocity
+                                    // ~200 m/s under Earth gravity (9.81/0.05 = 196 m/s).
+                                    // At atmosphere edge (blend ~0), negligible drag.
+                                    let atmo_drag = 0.05 * grav.blend;
+                                    let vel = body.linvel() * (1.0 - atmo_drag * physics_dt).max(0.0);
                                     body.set_linvel(vel, true);
                                 }
                             }

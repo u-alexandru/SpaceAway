@@ -42,11 +42,14 @@ pub fn compute_gravity(
     }
 
     // Blend factor: 0 at atmosphere top, 1 at surface (altitude <= 0).
-    let t = if atmosphere_top > 0.0 {
+    // Uses smoothstep (3t²-2t³) instead of linear for natural feel —
+    // eases in at the boundary and eases out near the surface.
+    let t_linear = if atmosphere_top > 0.0 {
         (1.0 - (altitude / atmosphere_top).max(0.0) as f32).clamp(0.0, 1.0)
     } else {
         1.0
     };
+    let t = t_linear * t_linear * (3.0 - 2.0 * t_linear); // smoothstep
 
     // Planet "down" = toward center = -normalize(position).
     let planet_down = negate(normalize_f64_to_f32(ship_pos_planet_relative));

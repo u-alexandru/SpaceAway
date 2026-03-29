@@ -48,6 +48,26 @@ pub fn select_visible_nodes(
     max_lod: u8,
     max_displacement: f64,
 ) -> Vec<VisibleNode> {
+    // Guard: camera inside the planet (e.g., physics glitch) would cause
+    // every node to subdivide to max_lod — trillions of calls, stack overflow.
+    // Return coarsest LOD only (6 nodes, one per face).
+    let cam_dist = (camera_pos[0] * camera_pos[0]
+        + camera_pos[1] * camera_pos[1]
+        + camera_pos[2] * camera_pos[2]).sqrt();
+    if cam_dist < planet_radius_m * 0.5 {
+        return CubeFace::ALL.iter().map(|&face| {
+            let dir = cube_to_sphere(face, 0.0, 0.0);
+            VisibleNode {
+                face,
+                lod: 0,
+                x: 0,
+                y: 0,
+                center: [dir[0] * planet_radius_m, dir[1] * planet_radius_m, dir[2] * planet_radius_m],
+                morph_factor: 0.0,
+            }
+        }).collect();
+    }
+
     let mut nodes = Vec::with_capacity(256);
     for face in CubeFace::ALL {
         select_recursive(

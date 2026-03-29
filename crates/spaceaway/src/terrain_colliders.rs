@@ -109,11 +109,32 @@ impl TerrainColliders {
         let drift = (dx * dx + dy * dy + dz * dz).sqrt();
 
         if drift > ANCHOR_REBASE_THRESHOLD_M && !self.colliders.is_empty() {
+            // Shift existing collider positions instead of destroying them.
+            // This preserves collision during high-speed descent.
+            let old_anchor = self.anchor_f64;
             self.anchor_f64 = cam_rel_m;
+            let shift = nalgebra::Vector3::new(
+                (old_anchor[0] - cam_rel_m[0]) as f32,
+                (old_anchor[1] - cam_rel_m[1]) as f32,
+                (old_anchor[2] - cam_rel_m[2]) as f32,
+            );
             for handle in self.colliders.values() {
-                physics.remove_collider(*handle);
+                if let Some(coll) = physics.collider_set.get_mut(*handle) {
+                    if let Some(pos) = coll.position_wrt_parent() {
+                        let new_pos = nalgebra::Isometry3::from_parts(
+                            nalgebra::Translation3::new(
+                                pos.translation.x + shift.x,
+                                pos.translation.y + shift.y,
+                                pos.translation.z + shift.z,
+                            ),
+                            pos.rotation,
+                        );
+                        coll.set_position_wrt_parent(new_pos);
+                    }
+                }
             }
-            self.colliders.clear();
+            physics.sync_collider_positions();
+            physics.update_query_pipeline();
         }
 
         // Remove colliders that are out-of-range OR no longer in the visible set.
@@ -140,12 +161,18 @@ impl TerrainColliders {
         // Add colliders only for chunks in the CURRENT visible set that are nearby.
         // This prevents overlapping colliders from different LOD levels for the
         // same area (coarse + fine LOD chunks both in cache near a LOD boundary).
+        // Minimum LOD for collision: chunks must be fine enough that the
+        // flat HeightField approximation is accurate. At LOD 10, chunk covers
+        // ~10km — above this, curvature error is too large for reliable collision.
+        let min_collider_lod: u8 = 10;
+
         let keys_to_add: Vec<ChunkKey> = self
             .chunk_cache
             .iter()
             .filter(|(key, cached)| {
                 !self.colliders.contains_key(key)
                     && visible_keys.contains(key)
+                    && key.lod >= min_collider_lod
                     && chunk_dist(cached.center_f64, cam_rel_m) < COLLIDER_RANGE_M
             })
             .map(|(key, _)| *key)
