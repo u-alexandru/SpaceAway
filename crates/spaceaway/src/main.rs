@@ -258,6 +258,8 @@ struct App {
     /// Landing skid collider handles (created when ship is spawned).
     #[allow(dead_code)]
     landing_skids: Option<[rapier3d::prelude::ColliderHandle; 4]>,
+    /// Last computed minimum clearance from landing system for altitude HUD display.
+    last_clearance: Option<f32>,
 }
 
 impl App {
@@ -352,6 +354,7 @@ impl App {
             quit_requested: false,
             landing: landing::LandingSystem::new(),
             landing_skids,
+            last_clearance: None,
         }
     }
 
@@ -1734,6 +1737,7 @@ impl ApplicationHandler for App {
                             engine_on: ship.engine_on,
                             throttle: ship.throttle,
                         });
+                        self.last_clearance = landing_result.min_clearance;
                         if landing_result.state == landing::LandingState::Landed
                             && let Some(body) = self.physics.get_body_mut(ship.body_handle)
                         {
@@ -1920,6 +1924,7 @@ impl ApplicationHandler for App {
                             engine_on: ship.engine_on,
                             throttle: ship.throttle,
                         });
+                        self.last_clearance = landing_result.min_clearance;
                         if landing_result.state == landing::LandingState::Landed
                             && let Some(body) = self.physics.get_body_mut(ship.body_handle)
                         {
@@ -2635,6 +2640,7 @@ impl ApplicationHandler for App {
                             exotic_fuel: self.ship_resources.exotic_fuel,
                             system_info,
                             target_info,
+                            altitude_m: self.last_clearance,
                         };
 
                         let ship_pos = self.ship.as_ref()

@@ -20,6 +20,8 @@ pub struct HelmData {
     pub system_info: Option<Vec<String>>,
     /// Navigation target: (name, distance_ly, eta_seconds).
     pub target_info: Option<(String, f64, f64)>,
+    /// Altitude above terrain in meters (None if not near terrain).
+    pub altitude_m: Option<f32>,
 }
 
 /// Draw the helm monitor UI. Called within an egui context that targets
@@ -225,6 +227,22 @@ pub fn draw_helm_screen(ctx: &egui::Context, data: &HelmData) {
                     );
                     ui.painter().rect_filled(fill, 2.0, exotic_color);
                 }
+            }
+
+            // Altitude display (when near terrain)
+            if let Some(alt) = data.altitude_m {
+                ui.add_space(8.0);
+                let alt_text = if alt < 1000.0 {
+                    format!("ALT {:.0}m", alt)
+                } else {
+                    format!("ALT {:.1}km", alt / 1000.0)
+                };
+                ui.label(
+                    egui::RichText::new(alt_text)
+                        .color(HELM_BLUE)
+                        .size(16.0)
+                        .strong(),
+                );
             }
 
             // --- Navigation target ---
