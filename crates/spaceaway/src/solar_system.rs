@@ -280,13 +280,19 @@ impl ActiveSystem {
         for planet in &self.system.planets {
             let planet_radius_m = planet.radius_earth as f64 * 6_371_000.0;
             if (body.radius_m - planet_radius_m).abs() < 1000.0 {
-                let amplitude = match planet.sub_type {
+                // Displacement as fraction of radius, capped at 20km max.
+                // Without the cap, a 7706km desert planet gets 308km(!) mountains
+                // that extend above the camera during approach.
+                let frac: f32 = match planet.sub_type {
                     sa_universe::PlanetSubType::Molten => 0.01,
                     sa_universe::PlanetSubType::Barren | sa_universe::PlanetSubType::Frozen => 0.02,
-                    sa_universe::PlanetSubType::Temperate | sa_universe::PlanetSubType::Ocean => 0.03,
-                    sa_universe::PlanetSubType::Desert => 0.04,
-                    _ => 0.03,
+                    sa_universe::PlanetSubType::Temperate | sa_universe::PlanetSubType::Ocean => 0.015,
+                    sa_universe::PlanetSubType::Desert => 0.025,
+                    _ => 0.015,
                 };
+                let planet_radius_km = planet.radius_earth * 6371.0;
+                let max_disp_km = 20.0; // absolute cap: tallest feature ~20km
+                let amplitude = frac.min(max_disp_km / planet_radius_km);
                 return Some((planet.color_seed, planet.sub_type, amplitude, planet.mass_earth, planet.radius_earth));
             }
         }
