@@ -189,8 +189,18 @@ impl ChunkStreaming {
         visible_nodes: &[VisibleNode],
         _config: &TerrainConfig,
     ) -> (Vec<ChunkData>, Vec<ChunkKey>) {
-        /// Max chunks returned per frame to cap GPU upload cost.
-        const MAX_UPLOADS_PER_FRAME: usize = 8;
+        /// Max chunks returned per frame (steady state).
+        const MAX_UPLOADS_STEADY: usize = 8;
+        /// Max chunks on the first few frames after activation (burst fill).
+        const MAX_UPLOADS_BURST: usize = 64;
+        /// How many cached chunks before we switch from burst to steady.
+        const BURST_THRESHOLD: usize = 24;
+
+        let max_uploads = if self.cache.len() < BURST_THRESHOLD {
+            MAX_UPLOADS_BURST // initial fill: upload aggressively
+        } else {
+            MAX_UPLOADS_STEADY // steady state: cap at 8
+        };
 
         // Build the set of keys needed this frame.
         let needed: HashSet<ChunkKey> = visible_nodes
@@ -210,7 +220,7 @@ impl ChunkStreaming {
         // ---------------------------------------------------------------
         let mut new_chunks: Vec<ChunkData> = Vec::new();
 
-        while new_chunks.len() < MAX_UPLOADS_PER_FRAME {
+        while new_chunks.len() < max_uploads {
             match self.result_rx.try_recv() {
                 Ok(data) => {
                     self.in_flight.remove(&data.key);

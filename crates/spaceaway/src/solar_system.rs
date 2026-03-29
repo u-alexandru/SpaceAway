@@ -179,11 +179,7 @@ impl ActiveSystem {
         for (i, body) in self.bodies.iter().enumerate() {
             // Skip body hidden by terrain (and its children: atmosphere, rings)
             if let Some(hidden) = self.hidden_body_index {
-                if i == hidden {
-                    continue;
-                }
-                // Skip children of hidden body (atmosphere, rings share parent_index)
-                if body.parent_index == hidden as i32 {
+                if i == hidden || body.parent_index == hidden as i32 {
                     continue;
                 }
             }

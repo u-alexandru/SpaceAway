@@ -2287,10 +2287,12 @@ impl ApplicationHandler for App {
                         terrain_integration::find_terrain_planet(sys, self.galactic_position)
                 {
                     log::info!(
-                        "Terrain activated for body {} (radius {:.0} km, g={:.2} m/s2)",
+                        "Terrain activated for body {} (radius {:.0} km, g={:.2} m/s2, type={:?}, seed={})",
                         body_idx,
                         config.radius_m / 1000.0,
                         surface_grav,
+                        config.sub_type,
+                        config.noise_seed,
                     );
                     self.terrain = Some(terrain_integration::TerrainManager::new(
                         config, planet_pos, body_idx, surface_grav,
