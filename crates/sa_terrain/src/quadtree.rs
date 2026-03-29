@@ -58,6 +58,7 @@ pub fn select_visible_nodes(
     nodes
 }
 
+#[allow(clippy::too_many_arguments)]
 fn select_recursive(
     face: CubeFace,
     lod: u8,
@@ -84,7 +85,7 @@ fn select_recursive(
 
     // Node bounding radius: half the face-diagonal at this LOD, inflated by displacement
     let face_size = 2.0 * radius / subdivs as f64;
-    let node_radius = face_size * 0.7071 + max_displacement;
+    let node_radius = face_size * std::f64::consts::FRAC_1_SQRT_2 + max_displacement;
 
     let range = lod_range(lod);
 
