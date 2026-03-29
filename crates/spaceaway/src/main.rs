@@ -1495,22 +1495,31 @@ impl ApplicationHandler for App {
                         .and_then(|s| self.physics.get_body(s.body_handle))
                         .map(|b| b.translation().clone_owned());
 
-                    // Move terrain body to ship's current physics position BEFORE
+                    // Move terrain body to the drift-corrected position BEFORE
                     // physics.step() so rapier resolves contacts between the ship's
                     // skid colliders and terrain colliders in the same frame.
-                    // Without this, the terrain body lags one frame behind and
-                    // at descent speeds the gap exceeds the 0.3m skid radius.
+                    // The correction accounts for the offset between the current
+                    // cam_rel_m and the collider anchor, preventing terrain from
+                    // drifting with the ship between anchor rebases.
                     if let Some(terrain_mgr) = &self.terrain
                         && let Some(tb) = terrain_mgr.terrain_body_handle()
                     {
-                        // Read ship position first, then mutably borrow terrain body.
                         let ship_pos = self.ship.as_ref()
                             .and_then(|s| self.physics.get_body(s.body_handle))
-                            .map(|b| *b.translation());
+                            .map(|b| {
+                                let t = b.translation();
+                                [t.x, t.y, t.z]
+                            });
                         if let Some(sp) = ship_pos
                             && let Some(body) = self.physics.rigid_body_set.get_mut(tb)
                         {
-                            body.set_translation(sp, true);
+                            let corrected = terrain_mgr.corrected_terrain_body_pos(
+                                self.galactic_position, sp,
+                            );
+                            body.set_translation(
+                                nalgebra::Vector3::new(corrected[0], corrected[1], corrected[2]),
+                                true,
+                            );
                         }
                     }
 
@@ -1939,6 +1948,33 @@ impl ApplicationHandler for App {
                         self.galactic_position.x += (ship_pos_after.x as f64 - ship_pos_before.x as f64) * m_to_ly;
                         self.galactic_position.y += (ship_pos_after.y as f64 - ship_pos_before.y as f64) * m_to_ly;
                         self.galactic_position.z += (ship_pos_after.z as f64 - ship_pos_before.z as f64) * m_to_ly;
+                    }
+
+                    // Reposition terrain body before landing raycasts so
+                    // terrain colliders are at the correct rapier-space
+                    // positions after this frame's ship integration.
+                    if let Some(terrain_mgr) = &self.terrain
+                        && let Some(tb) = terrain_mgr.terrain_body_handle()
+                    {
+                        let sp = self.ship.as_ref()
+                            .and_then(|s| self.physics.get_body(s.body_handle))
+                            .map(|b| {
+                                let t = b.translation();
+                                [t.x, t.y, t.z]
+                            });
+                        if let Some(sp) = sp
+                            && let Some(body) = self.physics.rigid_body_set.get_mut(tb)
+                        {
+                            let corrected = terrain_mgr.corrected_terrain_body_pos(
+                                self.galactic_position, sp,
+                            );
+                            body.set_translation(
+                                nalgebra::Vector3::new(corrected[0], corrected[1], corrected[2]),
+                                true,
+                            );
+                        }
+                        self.physics.sync_collider_positions();
+                        self.physics.update_query_pipeline();
                     }
 
                     // --- Landing system update (walk mode) ---

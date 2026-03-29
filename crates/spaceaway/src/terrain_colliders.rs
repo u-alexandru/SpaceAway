@@ -122,17 +122,32 @@ impl TerrainColliders {
             physics.add_rigid_body(rb)
         });
 
-        // Move the terrain body to the ship's physics position each frame.
-        // Terrain colliders are positioned relative to this body using
-        // galactic-offset math (cam_rel_m). Without this, the colliders
-        // sit at the physics origin while the ship moves away — collision
-        // never occurs because they're in different regions of rapier space.
+        // Position the terrain body so that collider offsets (computed
+        // relative to the anchor) place chunks at the correct rapier-space
+        // positions relative to the ship.
+        //
+        // Collider offset = chunk_center - anchor  (planet-relative meters)
+        // Desired collider world = ship_phys + (chunk_center - cam_rel_m)
+        //
+        // So: body_pos + (chunk_center - anchor) = ship_phys + (chunk_center - cam_rel_m)
+        //     body_pos = ship_phys - cam_rel_m + anchor
+        //     body_pos = ship_phys - (cam_rel_m - anchor)
+        //
+        // Between rebases, (cam_rel_m - anchor) is the drift that would
+        // otherwise cause terrain to move with the ship. This formula
+        // cancels that drift so colliders stay at physically correct
+        // positions on every frame, not just at rebase boundaries.
+        let drift_from_anchor = [
+            (cam_rel_m[0] - self.anchor_f64[0]) as f32,
+            (cam_rel_m[1] - self.anchor_f64[1]) as f32,
+            (cam_rel_m[2] - self.anchor_f64[2]) as f32,
+        ];
         if let Some(body) = physics.rigid_body_set.get_mut(terrain_body) {
             body.set_translation(
                 nalgebra::Vector3::new(
-                    ship_physics_pos[0],
-                    ship_physics_pos[1],
-                    ship_physics_pos[2],
+                    ship_physics_pos[0] - drift_from_anchor[0],
+                    ship_physics_pos[1] - drift_from_anchor[1],
+                    ship_physics_pos[2] - drift_from_anchor[2],
                 ),
                 true,
             );

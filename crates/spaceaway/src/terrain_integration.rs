@@ -69,6 +69,8 @@ pub struct TerrainManager {
     surface_gravity_ms2: f32,
     /// Collider management state.
     col: TerrainColliders,
+    /// Frame counter for periodic diagnostics.
+    diag_frame: u64,
 }
 
 impl TerrainManager {
@@ -96,6 +98,7 @@ impl TerrainManager {
             max_displacement_m,
             surface_gravity_ms2,
             col: TerrainColliders::new(),
+            diag_frame: 0,
         }
     }
 
@@ -198,6 +201,46 @@ impl TerrainManager {
             ship_physics_pos,
         );
 
+        // --- Collision diagnostic (every 60 frames) ---
+        self.diag_frame += 1;
+        if self.diag_frame.is_multiple_of(60) && !self.col.colliders.is_empty() {
+            // Find the nearest terrain collider to the ship in rapier space.
+            let terrain_body_pos = self.col.terrain_body
+                .and_then(|h| physics.rigid_body_set.get(h))
+                .map(|b| *b.translation());
+            if terrain_body_pos.is_some() {
+                let mut nearest_dist = f32::MAX;
+                let mut nearest_pos = [0.0f32; 3];
+                for handle in self.col.colliders.values() {
+                    if let Some(coll) = physics.collider_set.get(*handle) {
+                        let world = coll.position().translation;
+                        let dx = world.x - ship_physics_pos[0];
+                        let dy = world.y - ship_physics_pos[1];
+                        let dz = world.z - ship_physics_pos[2];
+                        let d = (dx * dx + dy * dy + dz * dz).sqrt();
+                        if d < nearest_dist {
+                            nearest_dist = d;
+                            nearest_pos = [world.x, world.y, world.z];
+                        }
+                    }
+                }
+                // Expected surface distance: |cam_rel_m| - radius
+                let cam_dist = (cam_rel_m[0] * cam_rel_m[0]
+                    + cam_rel_m[1] * cam_rel_m[1]
+                    + cam_rel_m[2] * cam_rel_m[2]).sqrt();
+                let expected_surface = (cam_dist - self.config.radius_m) as f32;
+                log::info!(
+                    "COLLISION_DIAG: ship_phys=({:.1},{:.1},{:.1}), \
+                     nearest_terrain_collider=({:.1},{:.1},{:.1}), \
+                     distance={:.1}m, planet_radius={:.0}m, \
+                     expected_surface_dist={:.1}m",
+                    ship_physics_pos[0], ship_physics_pos[1], ship_physics_pos[2],
+                    nearest_pos[0], nearest_pos[1], nearest_pos[2],
+                    nearest_dist, self.config.radius_m, expected_surface,
+                );
+            }
+        }
+
         // Build draw commands using frozen planet position.
         let draw_commands = self.build_draw_commands(
             &visible,
@@ -226,6 +269,47 @@ impl TerrainManager {
     /// Terrain rigid body handle (for repositioning before physics step).
     pub fn terrain_body_handle(&self) -> Option<rapier3d::prelude::RigidBodyHandle> {
         self.col.terrain_body
+    }
+
+    /// Compute the correct terrain body position for a given ship rapier
+    /// position and camera galactic position.
+    ///
+    /// The terrain body must be offset from the ship by the drift between
+    /// `cam_rel_m` (current camera-to-planet displacement) and the collider
+    /// anchor. Without this correction, terrain colliders move with the
+    /// ship between anchor rebases, preventing collision.
+    pub fn corrected_terrain_body_pos(
+        &self,
+        camera_galactic_ly: WorldPos,
+        ship_physics_pos: [f32; 3],
+    ) -> [f32; 3] {
+        let cam_rel_m = [
+            (camera_galactic_ly.x - self.planet_center_ly.x) * LY_TO_M,
+            (camera_galactic_ly.y - self.planet_center_ly.y) * LY_TO_M,
+            (camera_galactic_ly.z - self.planet_center_ly.z) * LY_TO_M,
+        ];
+        let anchor = self.col.anchor_f64;
+        [
+            ship_physics_pos[0] - (cam_rel_m[0] - anchor[0]) as f32,
+            ship_physics_pos[1] - (cam_rel_m[1] - anchor[1]) as f32,
+            ship_physics_pos[2] - (cam_rel_m[2] - anchor[2]) as f32,
+        ]
+    }
+
+    /// Planet radius in meters.
+    #[allow(dead_code)]
+    pub fn planet_radius_m(&self) -> f64 {
+        self.config.radius_m
+    }
+
+    /// Current cam_rel_m: camera displacement from planet center in meters.
+    #[allow(dead_code)]
+    pub fn cam_rel_m(&self, camera_galactic_ly: WorldPos) -> [f64; 3] {
+        [
+            (camera_galactic_ly.x - self.planet_center_ly.x) * LY_TO_M,
+            (camera_galactic_ly.y - self.planet_center_ly.y) * LY_TO_M,
+            (camera_galactic_ly.z - self.planet_center_ly.z) * LY_TO_M,
+        ]
     }
 
     /// Returns true when the camera has moved far enough to deactivate terrain.
