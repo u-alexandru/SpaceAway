@@ -151,6 +151,32 @@ impl App {
                     ship: self.ship.as_ref().map(|s| s.body_handle),
                     player: self.player.as_ref().map(|p| p.body_handle),
                 };
+                // Build VP matrix in planet-relative coordinates for frustum culling.
+                let aspect = gpu.config.width as f32 / gpu.config.height as f32;
+                let vp_f32 = self.camera.view_projection_matrix(aspect);
+                // Convert camera-relative VP to planet-relative VP.
+                // The camera's view matrix is in world space (near origin due to rebase).
+                // Terrain coords are planet-relative meters: cam_rel_m = (cam_ly - planet_ly) * LY_TO_M.
+                // We translate the VP by the camera→planet offset so frustum planes
+                // are in the same coordinate system as terrain node centers.
+                let planet_ly = terrain_mgr.frozen_planet_center_ly();
+                let ly_to_m = 9.461e15_f64;
+                let cam_offset = [
+                    (self.galactic_position.x - planet_ly.x) * ly_to_m,
+                    (self.galactic_position.y - planet_ly.y) * ly_to_m,
+                    (self.galactic_position.z - planet_ly.z) * ly_to_m,
+                ];
+                // Build a translation matrix that shifts world origin to planet center.
+                // VP_planet = VP_camera * T(cam_offset)
+                // T shifts points from planet-relative → camera-relative.
+                let tx = cam_offset[0] as f32;
+                let ty = cam_offset[1] as f32;
+                let tz = cam_offset[2] as f32;
+                let translate = glam::Mat4::from_translation(Vec3::new(tx, ty, tz));
+                let vp_planet = vp_f32 * translate;
+                let cols = vp_planet.to_cols_array();
+                let vp_f64: [f64; 16] = std::array::from_fn(|i| cols[i] as f64);
+
                 let result = terrain_mgr.update(
                     self.galactic_position,
                     planet_pos,
@@ -159,6 +185,7 @@ impl App {
                     &mut self.physics,
                     ship_down,
                     &rebase_bodies,
+                    Some(vp_f64),
                 );
                 if let Some(sys) = &mut self.active_system {
                     if sys.hidden_body_index != result.hidden_body_index {

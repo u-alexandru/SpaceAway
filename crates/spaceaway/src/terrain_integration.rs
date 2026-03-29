@@ -109,6 +109,10 @@ impl TerrainManager {
     }
 
     /// Run one frame of terrain streaming and produce draw commands.
+    ///
+    /// `vp_matrix`: optional view-projection matrix (column-major f64) for
+    /// frustum culling. When provided, terrain chunks outside the camera's
+    /// view frustum are skipped during quadtree traversal.
     #[allow(clippy::too_many_arguments)]
     #[profiling::function]
     pub fn update(
@@ -120,6 +124,7 @@ impl TerrainManager {
         physics: &mut PhysicsWorld,
         ship_down: [f32; 3],
         rebase_bodies: &spaceaway::terrain_colliders::RebaseBodies,
+        vp_planet_relative: Option<[f64; 16]>,
     ) -> TerrainFrameResult {
         // DO NOT update planet_center_ly from orbital motion.
         // The planet orbits with TIME_SCALE=30 which can move it out of
@@ -135,12 +140,13 @@ impl TerrainManager {
             (camera_galactic_ly.z - self.planet_center_ly.z) * LY_TO_M,
         ];
 
+        let frustum = vp_planet_relative.map(sa_terrain::frustum::Frustum::from_vp_matrix);
         let visible = select_visible_nodes(
             cam_rel_m,
             self.config.radius_m,
             self.max_lod,
             self.max_displacement_m,
-            None, // TODO: pass frustum for culling
+            frustum.as_ref(),
         );
 
         let (new_chunks, removed_keys) =
