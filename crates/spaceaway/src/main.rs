@@ -1254,13 +1254,14 @@ impl ApplicationHandler for App {
                             log::info!("Drive: IMPULSE");
                         }
                         if self.input.keyboard.just_pressed(KeyCode::Digit2) {
-                            // Block cruise when terrain is active. In cruise mode
-                            // the rapier body doesn't move — only galactic_position
-                            // changes — so terrain colliders teleport through the
-                            // ship and no collision is detected. The player must
-                            // use impulse for the final approach.
-                            if self.terrain.is_some() {
-                                log::warn!("Cannot engage cruise: terrain active (use impulse)");
+                            // Block cruise inside the atmosphere (blend > 0.1).
+                            // Above atmosphere with terrain active: cruise is allowed
+                            // for approach but auto-disengages at atmosphere boundary.
+                            let in_atmosphere = self.terrain_gravity
+                                .as_ref()
+                                .is_some_and(|g| g.blend > 0.1);
+                            if in_atmosphere {
+                                log::warn!("Cannot engage cruise: inside atmosphere");
                             } else {
                                 let ship_speed = self.ship.as_ref()
                                     .map(|s| s.speed(&self.physics))
@@ -1383,8 +1384,12 @@ impl ApplicationHandler for App {
                                 }
                         }
                         if self.input.keyboard.just_pressed(KeyCode::Digit3) {
-                            if self.terrain.is_some() {
-                                log::warn!("Cannot engage warp: terrain active (use impulse)");
+                            // Block warp near planets (always — warp is for star-to-star).
+                            let in_atmosphere = self.terrain_gravity
+                                .as_ref()
+                                .is_some_and(|g| g.blend > 0.5);
+                            if self.terrain.is_some() || in_atmosphere {
+                                log::warn!("Cannot engage warp: too close to planet");
                             } else if self.ship_resources.exotic_fuel > 0.0 {
                                 let ship_speed = self.ship.as_ref()
                                     .map(|s| s.speed(&self.physics))
@@ -1600,7 +1605,53 @@ impl ApplicationHandler for App {
                         self.galactic_position.y += delta[1];
                         self.galactic_position.z += delta[2];
 
+                        // When terrain is active and in cruise/warp, sync the
+                        // ship's rapier position to match galactic_position.
+                        // This keeps the rebase system consistent and ensures
+                        // the sphere barrier is at the correct relative position.
+                        if let Some(terrain_mgr) = &self.terrain
+                            && let Some(ship) = &self.ship
+                            && let Some(body) = self.physics.rigid_body_set.get_mut(ship.body_handle)
+                        {
+                            let cam_rel = terrain_mgr.cam_rel_m(self.galactic_position);
+                            let anchor = terrain_mgr.anchor_f64();
+                            let new_rapier = [
+                                (cam_rel[0] - anchor[0]) as f32,
+                                (cam_rel[1] - anchor[1]) as f32,
+                                (cam_rel[2] - anchor[2]) as f32,
+                            ];
+                            body.set_translation(
+                                nalgebra::Vector3::new(new_rapier[0], new_rapier[1], new_rapier[2]),
+                                true,
+                            );
+                        }
+
                         let pos_after = self.galactic_position;
+
+                        // Auto-disengage cruise at atmosphere boundary when
+                        // terrain is active. Cruise doesn't move the rapier
+                        // body so the sphere barrier can't stop the ship.
+                        if self.drive.mode() == sa_ship::DriveMode::Cruise
+                            && let Some(terrain_mgr) = &self.terrain
+                        {
+                            let cam_rel = terrain_mgr.cam_rel_m(self.galactic_position);
+                            let dist_m = (cam_rel[0] * cam_rel[0]
+                                + cam_rel[1] * cam_rel[1]
+                                + cam_rel[2] * cam_rel[2]).sqrt();
+                            let atmo_boundary = terrain_mgr.planet_radius_m() * 1.2;
+                            if dist_m < atmo_boundary {
+                                // Clamp position to atmosphere boundary.
+                                let safe_dist = atmo_boundary / dist_m;
+                                let planet_ly = terrain_mgr.frozen_planet_center_ly();
+                                let ly_to_m = 9.461e15_f64;
+                                self.galactic_position.x = planet_ly.x + cam_rel[0] * safe_dist / ly_to_m;
+                                self.galactic_position.y = planet_ly.y + cam_rel[1] * safe_dist / ly_to_m;
+                                self.galactic_position.z = planet_ly.z + cam_rel[2] * safe_dist / ly_to_m;
+                                self.drive.request_disengage();
+                                log::info!("Cruise auto-disengage: entered atmosphere at {:.0}km altitude",
+                                    (dist_m - terrain_mgr.planet_radius_m()) / 1000.0);
+                            }
+                        }
 
                         // Approach voice + cascade auto-disengage
                         if let Some(dist) = target_dist {
@@ -2806,6 +2857,26 @@ impl ApplicationHandler for App {
                     self.terrain_gravity = None;
                     vec![]
                 };
+
+                // After terrain update (which may rebase physics origin), re-sync
+                // the camera position from the ship's current rapier position.
+                // Without this, the camera reads the pre-rebase position while the
+                // ship mesh uses the post-rebase position → one-frame flicker.
+                if self.terrain.is_some() {
+                    if self.helm.as_ref().is_some_and(|h| h.is_seated()) {
+                        if let (Some(helm), Some(ship)) = (&self.helm, &self.ship)
+                            && let Some((cx, cy, cz)) = helm.camera_position(&self.physics, ship)
+                        {
+                            self.camera.position = WorldPos::new(cx as f64, cy as f64, cz as f64);
+                        }
+                    } else if let Some(player) = &self.player
+                        && let Some(ship) = &self.ship
+                        && let Some(body) = self.physics.get_body(ship.body_handle)
+                    {
+                        let ship_rot = *body.rotation();
+                        self.camera.position = player.position_ship_up(&self.physics, ship_rot);
+                    }
+                }
 
                 // APPROACH_DIAG: consolidated approach diagnostic (every 60 frames)
                 if self.active_system.is_some()
