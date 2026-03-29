@@ -3104,13 +3104,13 @@ impl ApplicationHandler for App {
                                 // and heading toward it (dot product check).
                                 let ly_to_m = 9.461e15_f64;
                                 let mut best: Option<f32> = None;
+                                // Always show when terrain is active (any altitude).
+                                // In a system without terrain, show within 50,000km.
                                 if let Some(terrain_mgr) = &self.terrain {
                                     let cam_rel = terrain_mgr.cam_rel_m(self.galactic_position);
                                     let dist_m = (cam_rel[0]*cam_rel[0] + cam_rel[1]*cam_rel[1] + cam_rel[2]*cam_rel[2]).sqrt();
                                     let alt_km = ((dist_m - terrain_mgr.planet_radius_m()) / 1000.0) as f32;
-                                    if alt_km < 1000.0 {
-                                        best = Some(alt_km.max(0.0));
-                                    }
+                                    best = Some(alt_km.max(0.0));
                                 } else if let Some(sys) = &self.active_system {
                                     let positions = sys.compute_positions_ly_pub();
                                     for (i, pos) in positions.iter().enumerate() {
@@ -3122,7 +3122,7 @@ impl ApplicationHandler for App {
                                             let dz = (self.galactic_position.z - pos.z) * ly_to_m;
                                             let dist_m = (dx*dx + dy*dy + dz*dz).sqrt();
                                             let alt_km = ((dist_m - r_m) / 1000.0) as f32;
-                                            if (0.0..1000.0).contains(&alt_km) && best.is_none_or(|b| alt_km < b) {
+                                            if (0.0..50_000.0).contains(&alt_km) && best.is_none_or(|b| alt_km < b) {
                                                 best = Some(alt_km);
                                             }
                                         }
