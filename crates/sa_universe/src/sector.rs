@@ -248,11 +248,11 @@ mod tests {
         let mut rng = Rng64::new(99);
         let pts = poisson_disk_3d(&mut rng, 30, 1.0);
         for (i, p) in pts.iter().enumerate() {
-            for d in 0..3 {
+            for (d, &coord) in p.iter().enumerate().take(3) {
                 assert!(
-                    (0.0..=SECTOR_SIZE_LY).contains(&p[d]),
+                    (0.0..=SECTOR_SIZE_LY).contains(&coord),
                     "Point {i} dim {d} out of bounds: {}",
-                    p[d]
+                    coord
                 );
             }
         }

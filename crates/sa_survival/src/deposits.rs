@@ -160,7 +160,7 @@ mod tests {
         for d in &deposits {
             let dist = (d.position[0] * d.position[0] + d.position[2] * d.position[2]).sqrt();
             assert!(
-                dist >= 400.0 && dist <= 6000.0,
+                (400.0..=6000.0).contains(&dist),
                 "Deposit at distance {dist} outside expected range"
             );
             assert!(

@@ -65,7 +65,7 @@ mod tests {
             let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
             let dir = [dir[0] / len, dir[1] / len, dir[2] / len];
             let h = sample_height(&noise, &warp, dir, 2.0);
-            assert!(h >= 0.0 && h <= 1.0, "height out of range: {h}");
+            assert!((0.0..=1.0).contains(&h), "height out of range: {h}");
         }
     }
 

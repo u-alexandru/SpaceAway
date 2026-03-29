@@ -156,18 +156,18 @@ fn ship_descends_and_stops_at_surface_barrier() {
             // Shift only the barrier collider (child of terrain body).
             // Ship child colliders (skids, hull sensor) move with the ship
             // body automatically — never shift them manually.
-            if let Some(coll) = physics.collider_set.get_mut(barrier_handle) {
-                if let Some(pos) = coll.position_wrt_parent() {
-                    let new_pos = nalgebra::Isometry3::from_parts(
-                        nalgebra::Translation3::new(
-                            pos.translation.x,
-                            pos.translation.y + shift,
-                            pos.translation.z,
-                        ),
-                        pos.rotation,
-                    );
-                    coll.set_position_wrt_parent(new_pos);
-                }
+            if let Some(coll) = physics.collider_set.get_mut(barrier_handle)
+                && let Some(pos) = coll.position_wrt_parent()
+            {
+                let new_pos = nalgebra::Isometry3::from_parts(
+                    nalgebra::Translation3::new(
+                        pos.translation.x,
+                        pos.translation.y + shift,
+                        pos.translation.z,
+                    ),
+                    pos.rotation,
+                );
+                coll.set_position_wrt_parent(new_pos);
             }
 
             physics.sync_collider_positions();

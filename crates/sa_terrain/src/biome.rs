@@ -77,9 +77,9 @@ mod tests {
             for h in [0.0, 0.25, 0.5, 0.75, 1.0] {
                 for lat in [0.0, 0.5, 1.0] {
                     let [r, g, b] = biome_color(sub, h, lat);
-                    assert!(r >= 0.0 && r <= 1.5, "{sub:?} h={h} lat={lat}: r={r}");
-                    assert!(g >= 0.0 && g <= 1.5, "{sub:?} h={h} lat={lat}: g={g}");
-                    assert!(b >= 0.0 && b <= 1.5, "{sub:?} h={h} lat={lat}: b={b}");
+                    assert!((0.0..=1.5).contains(&r), "{sub:?} h={h} lat={lat}: r={r}");
+                    assert!((0.0..=1.5).contains(&g), "{sub:?} h={h} lat={lat}: g={g}");
+                    assert!((0.0..=1.5).contains(&b), "{sub:?} h={h} lat={lat}: b={b}");
                 }
             }
         }

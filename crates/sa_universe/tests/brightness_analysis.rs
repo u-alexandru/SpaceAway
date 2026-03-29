@@ -33,7 +33,7 @@ fn brightness_pipeline_analysis() {
             .filter(|&&b| b >= buckets[i] && b < buckets[i + 1])
             .count();
         let pct = count as f64 / brightnesses.len() as f64 * 100.0;
-        let bar: String = std::iter::repeat('#').take((pct * 0.5) as usize).collect();
+        let bar: String = "#".repeat((pct * 0.5) as usize);
         println!(
             "[{:.2}-{:.2}): {:>5} ({:>5.1}%) {}",
             buckets[i],
@@ -110,7 +110,7 @@ fn brightness_pipeline_analysis() {
     let dim_count = brightnesses.iter().filter(|&&b| b < 0.20).count();
     let medium_count = brightnesses
         .iter()
-        .filter(|&&b| b >= 0.20 && b < 0.40)
+        .filter(|&&b| (0.20..0.40).contains(&b))
         .count();
     let bright_count = brightnesses.iter().filter(|&&b| b >= 0.40).count();
     println!("--- Summary ---");
