@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-rodio = { version = "0.19", default-features = false, features = ["wav"] }
+rodio = { version = "0.19", default-features = false, features = ["wav", "vorbis"] }
 glam = { workspace = true }
 rand = "0.8"
 log = { workspace = true }

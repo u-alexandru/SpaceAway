@@ -339,23 +339,27 @@ impl Channels {
                 let tracks = music_tracks(self.music_context);
                 if !tracks.is_empty() {
                     let idx = rand::thread_rng().gen_range(0..tracks.len());
-                    let path = sounds_root.join(tracks[idx]);
-                    match File::open(&path) {
-                        Ok(file) => match Decoder::new(BufReader::new(file)) {
-                            Ok(source) => {
-                                if let Ok(sink) = Sink::try_new(&self.stream_handle) {
-                                    self.music_volume = 0.0; // start silent, fade in
-                                    self.music_target_volume = 1.0;
-                                    sink.set_volume(0.0);
-                                    sink.append(source);
-                                    self.music_sink = Some(sink);
-                                    self.music_playing = true;
-                                    log::info!("Music: {}", tracks[idx]);
+                    let stem = tracks[idx];
+                    if let Some(path) = crate::catalog::resolve_music_path(sounds_root, stem) {
+                        match File::open(&path) {
+                            Ok(file) => match Decoder::new(BufReader::new(file)) {
+                                Ok(source) => {
+                                    if let Ok(sink) = Sink::try_new(&self.stream_handle) {
+                                        self.music_volume = 0.0; // start silent, fade in
+                                        self.music_target_volume = 1.0;
+                                        sink.set_volume(0.0);
+                                        sink.append(source);
+                                        self.music_sink = Some(sink);
+                                        self.music_playing = true;
+                                        log::info!("Music: {}", path.display());
+                                    }
                                 }
-                            }
-                            Err(e) => log::warn!("Music decode error {:?}: {}", path, e),
-                        },
-                        Err(e) => log::warn!("Music file not found {:?}: {}", path, e),
+                                Err(e) => log::warn!("Music decode error {:?}: {}", path, e),
+                            },
+                            Err(e) => log::warn!("Music file not found {:?}: {}", path, e),
+                        }
+                    } else {
+                        log::warn!("Music not found (tried .ogg/.wav): {stem}");
                     }
                 }
             }
