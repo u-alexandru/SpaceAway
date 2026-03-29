@@ -263,6 +263,11 @@ struct App {
     last_clearance: Option<f32>,
     /// Countdown timer for altitude proximity beeps (seconds until next beep).
     altitude_beep_timer: f32,
+    /// Whether puffin profiling is active (toggled with F3).
+    show_profiler: bool,
+    /// Puffin HTTP server (streams profiler data to puffin_viewer on port 8585).
+    #[allow(dead_code)]
+    puffin_server: Option<puffin_http::Server>,
 }
 
 impl App {
@@ -359,6 +364,8 @@ impl App {
             landing_skids,
             last_clearance: None,
             altitude_beep_timer: 0.0,
+            show_profiler: false,
+            puffin_server: None,
         }
     }
 
@@ -908,6 +915,22 @@ impl ApplicationHandler for App {
                                     log::info!("VSync: {}", if vsync { "ON (60 FPS cap)" } else { "OFF (uncapped — benchmark mode)" });
                                 }
                             }
+                            KeyCode::F3 => {
+                                self.show_profiler = !self.show_profiler;
+                                puffin::set_scopes_on(self.show_profiler);
+                                if self.show_profiler && self.puffin_server.is_none() {
+                                    match puffin_http::Server::new("0.0.0.0:8585") {
+                                        Ok(server) => {
+                                            log::info!("Puffin profiler ON — connect puffin_viewer to 127.0.0.1:8585");
+                                            self.puffin_server = Some(server);
+                                        }
+                                        Err(e) => log::warn!("Failed to start puffin server: {e}"),
+                                    }
+                                } else if !self.show_profiler {
+                                    self.puffin_server = None;
+                                    log::info!("Puffin profiler OFF");
+                                }
+                            }
                             KeyCode::Digit6 => {
                                 // Cycle through individual ship parts
                                 let parts = all_ship_parts();
@@ -1191,6 +1214,8 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
+                puffin::GlobalProfiler::lock().new_frame();
+
                 let frame_start = Instant::now();
                 let now = frame_start;
                 self.time.advance(now - self.last_frame);
@@ -1281,6 +1306,8 @@ impl ApplicationHandler for App {
                 }
 
                 // --- PLAYING PHASE ---
+                puffin::profile_scope!("playing_frame");
+
                 self.schedule
                     .run(&mut self.world, &mut self.events, &self.time);
 
@@ -1605,6 +1632,7 @@ impl ApplicationHandler for App {
                     // Physics step
                     let physics_dt = dt.min(1.0 / 30.0);
                     if physics_dt > 0.0 {
+                        puffin::profile_scope!("physics_step");
                         self.physics.step(physics_dt);
                     }
 
@@ -2814,9 +2842,11 @@ impl ApplicationHandler for App {
                 }
 
                 // --- Render ---
+                puffin::profile_scope!("render");
                 let t3 = Instant::now();
 
                 // --- Terrain streaming (before immutable renderer borrow) ---
+                puffin::profile_scope!("terrain_update");
                 // Deactivation check
                 // Check deactivation separately to avoid borrow issues
                 let should_deactivate_terrain = self.terrain.as_ref()

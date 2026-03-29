@@ -29,3 +29,5 @@ egui.workspace = true
 egui-wgpu.workspace = true
 sa_terrain.workspace = true
 crossbeam-channel.workspace = true
+puffin.workspace = true
+puffin_http.workspace = true

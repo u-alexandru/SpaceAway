@@ -68,3 +68,5 @@ rand = "0.8"
 sa_audio = { path = "crates/sa_audio" }
 sa_terrain = { path = "crates/sa_terrain" }
 crossbeam-channel = "0.5"
+puffin = "0.20"
+puffin_http = "0.17"
