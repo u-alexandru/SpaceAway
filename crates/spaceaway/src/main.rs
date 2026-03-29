@@ -2327,6 +2327,13 @@ impl ApplicationHandler for App {
                             ship_down,
                         );
                         if let Some(sys) = &mut self.active_system {
+                            if sys.hidden_body_index != result.hidden_body_index {
+                                log::info!(
+                                    "Hidden body index: {:?}, system has {} bodies",
+                                    result.hidden_body_index,
+                                    sys.body_count(),
+                                );
+                            }
                             sys.hidden_body_index = result.hidden_body_index;
                         }
                         self.terrain_gravity = result.gravity;

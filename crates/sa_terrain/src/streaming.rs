@@ -174,19 +174,24 @@ impl ChunkStreaming {
 
     /// Update streaming state for the current frame.
     ///
-    /// * Drains all completed chunks from the result channel into the cache.
+    /// * Drains completed chunks from the result channel into the cache
+    ///   (up to `MAX_UPLOADS_PER_FRAME` to avoid GPU upload stalls).
     /// * Requests generation for any visible node that is neither cached nor
     ///   in-flight.
     /// * Computes which cached keys are no longer visible.
     ///
     /// Returns `(new_chunks, removed_keys)`:
-    /// - `new_chunks`: chunks that arrived this frame and are now cached.
-    /// - `removed_keys`: keys previously cached but no longer visible.
+    /// - `new_chunks`: freshly generated chunks (NOT cached re-deliveries).
+    ///   The caller tracks which chunks it has already uploaded to the GPU.
+    /// - `removed_keys`: keys evicted from the LRU cache by capacity overflow.
     pub fn update(
         &mut self,
         visible_nodes: &[VisibleNode],
         _config: &TerrainConfig,
     ) -> (Vec<ChunkData>, Vec<ChunkKey>) {
+        /// Max chunks returned per frame to cap GPU upload cost.
+        const MAX_UPLOADS_PER_FRAME: usize = 8;
+
         // Build the set of keys needed this frame.
         let needed: HashSet<ChunkKey> = visible_nodes
             .iter()
@@ -199,32 +204,33 @@ impl ChunkStreaming {
             .collect();
 
         // ---------------------------------------------------------------
-        // 1. Drain completed chunks from the result channel.
+        // 1. Drain completed chunks from the result channel (capped).
+        //    Only freshly generated chunks are returned — the caller's
+        //    gpu_meshes HashMap already tracks what has been uploaded.
         // ---------------------------------------------------------------
         let mut new_chunks: Vec<ChunkData> = Vec::new();
 
-        while let Ok(data) = self.result_rx.try_recv() {
-            let key = data.key;
-            self.in_flight.remove(&key);
-            // Clone data before inserting into cache so we can return it.
-            let data_copy = data.clone();
-            self.cache.insert(data);
-            new_chunks.push(data_copy);
+        while new_chunks.len() < MAX_UPLOADS_PER_FRAME {
+            match self.result_rx.try_recv() {
+                Ok(data) => {
+                    self.in_flight.remove(&data.key);
+                    let data_copy = data.clone();
+                    self.cache.insert(data);
+                    new_chunks.push(data_copy);
+                }
+                Err(_) => break,
+            }
         }
 
         // ---------------------------------------------------------------
-        // 2. For needed chunks in cache but not yet in new_chunks,
-        //    return them as cache hits (caller needs to re-upload GPU mesh).
+        // 2. Request generation for needed chunks not yet cached or
+        //    in-flight. No re-delivery of cached chunks — the caller
+        //    retains GPU meshes independently.
         // ---------------------------------------------------------------
         for key in &needed {
-            let already_new = new_chunks.iter().any(|c| c.key == *key);
-            if !already_new {
-                if let Some(data) = self.cache.get(key) {
-                    new_chunks.push(data.clone());
-                } else if !self.in_flight.contains(key) {
-                    self.in_flight.insert(*key);
-                    let _ = self.request_tx.send(*key);
-                }
+            if !self.cache.contains(key) && !self.in_flight.contains(key) {
+                self.in_flight.insert(*key);
+                let _ = self.request_tx.send(*key);
             }
         }
 
