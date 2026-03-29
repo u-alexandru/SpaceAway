@@ -17,14 +17,12 @@ use sa_physics::PhysicsWorld;
 // ---------------------------------------------------------------------------
 
 /// Ship hull sensor: mass/inertia only, no contact forces.
-#[allow(dead_code)]
 pub const SHIP_HULL: Group = Group::GROUP_1; // 0x0001
 
 /// Interior walkable surfaces (walls, floors, ceilings, bulkheads).
 pub const SHIP_INTERIOR: Group = Group::GROUP_2; // 0x0002
 
 /// Player capsule collider.
-#[allow(dead_code)]
 pub const PLAYER: Group = Group::GROUP_3; // 0x0004
 
 /// Interactable sensor volumes (raycast-only detection).
@@ -34,7 +32,6 @@ pub const INTERACTABLE: Group = Group::GROUP_4; // 0x0008
 pub const TERRAIN: Group = Group::GROUP_5;     // 0x0010
 
 /// Landing skid colliders — interact with TERRAIN only.
-#[allow(dead_code)]
 pub const SHIP_EXTERIOR: Group = Group::GROUP_6; // 0x0020
 
 // Membership + filter helpers:
@@ -46,10 +43,6 @@ fn interior_groups() -> InteractionGroups {
     InteractionGroups::new(SHIP_INTERIOR, PLAYER)
 }
 
-#[allow(dead_code)]
-fn interactable_groups() -> InteractionGroups {
-    InteractionGroups::new(INTERACTABLE, Group::NONE)
-}
 
 // ---------------------------------------------------------------------------
 // Ship section definitions
