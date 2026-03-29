@@ -1742,10 +1742,9 @@ impl ApplicationHandler for App {
                             let dist_m = (cam_rel[0] * cam_rel[0]
                                 + cam_rel[1] * cam_rel[1]
                                 + cam_rel[2] * cam_rel[2]).sqrt();
-                            // Disengage at 1.05× radius (~385km for Earth-sized planet).
-                            // Close enough that the surface is visible and impulse
-                            // feels responsive, but high enough to decelerate safely.
-                            let atmo_boundary = terrain_mgr.planet_radius_m() * 1.05;
+                            // Disengage ~100km above surface. Close enough that
+                            // impulse descent takes ~2 minutes, not 20.
+                            let atmo_boundary = terrain_mgr.planet_radius_m() + 100_000.0;
                             if dist_m < atmo_boundary {
                                 // Clamp position to atmosphere boundary.
                                 let safe_dist = atmo_boundary / dist_m;
