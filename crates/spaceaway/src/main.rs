@@ -240,6 +240,8 @@ struct App {
     phase: GamePhase,
     /// Main menu state (only present during Menu phase).
     menu: Option<menu::MainMenu>,
+    /// Active terrain manager (when near a landable planet).
+    terrain: Option<terrain_integration::TerrainManager>,
 }
 
 impl App {
@@ -321,6 +323,7 @@ impl App {
             prev_target_dist: None,
             phase: GamePhase::Menu,
             menu: None,
+            terrain: None,
         }
     }
 
@@ -935,6 +938,7 @@ impl ApplicationHandler for App {
                             }
                             KeyCode::Digit9 => {
                                 // Debug: jump to a DIFFERENT star (skip nearest, pick next)
+                                self.terrain = None;
                                 self.active_system = None;
                                 self.navigation.update_nearby(self.galactic_position);
                                 let skip = (self.teleport_counter as usize) % self.navigation.nearby_stars.len().max(1);
@@ -1245,6 +1249,7 @@ impl ApplicationHandler for App {
                                     self.audio.announce(sa_audio::VoiceId::EngagingWarp);
                                     // Unload active system when entering warp
                                     if self.active_system.is_some() {
+                                        self.terrain = None;
                                         self.active_system = None;
                                         log::info!("Left solar system — entering warp");
                                     }
@@ -2002,6 +2007,67 @@ impl ApplicationHandler for App {
 
                 // --- Render ---
                 let t3 = Instant::now();
+
+                // --- Terrain streaming (before immutable renderer borrow) ---
+                // Deactivation check
+                if let Some(terrain_mgr) = &self.terrain {
+                    if terrain_mgr.should_deactivate(self.galactic_position) {
+                        if let Some(sys) = &mut self.active_system {
+                            sys.hidden_body_index = None;
+                        }
+                        self.terrain = None;
+                        log::info!("Terrain deactivated");
+                    }
+                }
+
+                // Activation check (only if no terrain active and in a solar system)
+                if self.terrain.is_none()
+                    && let Some(sys) = &self.active_system
+                    && let Some((body_idx, planet_pos, config)) =
+                        terrain_integration::find_terrain_planet(sys, self.galactic_position)
+                {
+                    log::info!(
+                        "Terrain activated for body {} (radius {:.0} km)",
+                        body_idx,
+                        config.radius_m / 1000.0,
+                    );
+                    self.terrain = Some(terrain_integration::TerrainManager::new(
+                        config, planet_pos, body_idx,
+                    ));
+                }
+
+                // Deactivate terrain if no solar system is active
+                if self.active_system.is_none() && self.terrain.is_some() {
+                    self.terrain = None;
+                    log::info!("Terrain deactivated (no solar system)");
+                }
+
+                // Update terrain and collect draw commands (needs &mut renderer)
+                let terrain_commands: Vec<DrawCommand> = if let Some(terrain_mgr) = &mut self.terrain {
+                    if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
+                        let planet_pos = self.active_system.as_ref()
+                            .and_then(|sys| {
+                                let positions = sys.compute_positions_ly_pub();
+                                positions.get(terrain_mgr.body_index()).copied()
+                            })
+                            .unwrap_or(WorldPos::ORIGIN);
+                        let result = terrain_mgr.update(
+                            self.galactic_position,
+                            planet_pos,
+                            &mut renderer.mesh_store,
+                            &gpu.device,
+                        );
+                        if let Some(sys) = &mut self.active_system {
+                            sys.hidden_body_index = result.hidden_body_index;
+                        }
+                        result.draw_commands
+                    } else {
+                        vec![]
+                    }
+                } else {
+                    vec![]
+                };
+
                 if let (Some(gpu), Some(renderer)) = (&self.gpu, &self.renderer) {
                     // 1. Render BOTH monitors to offscreen textures in ONE encoder
                     // (avoids multiple queue.submit() calls per frame)
@@ -2132,12 +2198,16 @@ impl ApplicationHandler for App {
                         commands.extend(system_commands);
                     }
 
+                    // Append terrain draw commands
+                    commands.extend(terrain_commands);
+
                     // Unload system if player has cruised far away (> 100 AU from star)
                     if let Some(system) = &self.active_system {
                         let dist = self.galactic_position.distance_to(system.star_galactic_pos);
                         let au_in_ly = 1.581e-5_f64;
                         if dist > 100.0 * au_in_ly {
                             log::info!("Left system boundary — unloading");
+                            self.terrain = None;
                             self.active_system = None;
                         }
                     }
