@@ -152,7 +152,7 @@ pub fn create_ship_and_interactables(
 /// Generate all meshes for the ship scene.
 pub fn generate_ship_meshes() -> ShipMeshes {
     // Assemble the hull
-    let hull = crate::assemble_ship();
+    let hull = crate::mesh_utils::assemble_ship();
 
     // Generate interactable meshes at cockpit positions
     let layout = cockpit_layout();
