@@ -176,9 +176,10 @@ Audited terrain_colliders.rs end-to-end. Findings:
 13. `aea4974` refactor(spaceaway): split frame_update into helm/walk
 14. `32b8284` fix(colliders): remove false dead_code attributes
 15. `e3a45e6` feat(terrain): wire frustum culling through terrain pipeline
+16. `ac34b7e` test(terrain): add frustum sphere rejection test
 
 ### Build verification
 - `cargo clippy --workspace -- -D warnings`: CLEAN
-- `cargo test --workspace`: 437 tests, all passing
-- `cargo build -p spaceaway --release`: SUCCESS (1m 13s)
-- All 13 crates: 392 lib tests passing
+- `cargo test --workspace`: 440 tests, all passing
+- `cargo build -p spaceaway --release`: SUCCESS
+- All 13 crates clean
