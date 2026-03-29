@@ -39,6 +39,8 @@ pub(crate) struct TerrainColliders {
     pub anchor_f64: [f64; 3],
     /// Chunk data retained for collider creation (heights + center).
     pub chunk_cache: HashMap<ChunkKey, CachedChunk>,
+    /// Sphere barrier collider at planet radius (prevents flythrough at coarse LODs).
+    pub sphere_barrier: Option<ColliderHandle>,
 }
 
 impl TerrainColliders {
@@ -48,6 +50,7 @@ impl TerrainColliders {
             colliders: HashMap::new(),
             anchor_f64: [0.0; 3],
             chunk_cache: HashMap::new(),
+            sphere_barrier: None,
         }
     }
 
@@ -57,6 +60,9 @@ impl TerrainColliders {
             physics.remove_collider(*handle);
         }
         self.colliders.clear();
+        if let Some(sh) = self.sphere_barrier.take() {
+            physics.remove_collider(sh);
+        }
         if let Some(bh) = self.terrain_body.take() {
             physics.remove_rigid_body(bh);
         }
@@ -102,13 +108,30 @@ impl TerrainColliders {
             physics.add_rigid_body(rb)
         });
 
+        // Sphere barrier: a ball collider at planet radius that prevents
+        // flying through the planet at coarse LODs (where HeightField
+        // colliders don't exist). Positioned at planet center relative to anchor.
+        if self.sphere_barrier.is_none() {
+            let cx = (-self.anchor_f64[0]) as f32;
+            let cy = (-self.anchor_f64[1]) as f32;
+            let cz = (-self.anchor_f64[2]) as f32;
+            let collider = ColliderBuilder::ball(radius_m as f32)
+                .collision_groups(InteractionGroups::new(
+                    ship_colliders::TERRAIN,
+                    ship_colliders::PLAYER.union(ship_colliders::SHIP_HULL),
+                ))
+                .position(nalgebra::Isometry3::translation(cx, cy, cz))
+                .build();
+            self.sphere_barrier = Some(physics.add_collider(collider, terrain_body));
+        }
+
         // Anchor rebasing.
         let dx = cam_rel_m[0] - self.anchor_f64[0];
         let dy = cam_rel_m[1] - self.anchor_f64[1];
         let dz = cam_rel_m[2] - self.anchor_f64[2];
         let drift = (dx * dx + dy * dy + dz * dz).sqrt();
 
-        if drift > ANCHOR_REBASE_THRESHOLD_M && !self.colliders.is_empty() {
+        if drift > ANCHOR_REBASE_THRESHOLD_M {
             // Shift existing collider positions instead of destroying them.
             // This preserves collision during high-speed descent.
             let old_anchor = self.anchor_f64;
@@ -118,6 +141,7 @@ impl TerrainColliders {
                 (old_anchor[1] - cam_rel_m[1]) as f32,
                 (old_anchor[2] - cam_rel_m[2]) as f32,
             );
+            // Shift HeightField colliders
             for handle in self.colliders.values() {
                 if let Some(coll) = physics.collider_set.get_mut(*handle)
                     && let Some(pos) = coll.position_wrt_parent()
@@ -131,6 +155,17 @@ impl TerrainColliders {
                         pos.rotation,
                     );
                     coll.set_position_wrt_parent(new_pos);
+                }
+            }
+            // Shift sphere barrier to planet center relative to new anchor
+            if let Some(sh) = self.sphere_barrier {
+                if let Some(coll) = physics.collider_set.get_mut(sh) {
+                    let cx = (-cam_rel_m[0]) as f32;
+                    let cy = (-cam_rel_m[1]) as f32;
+                    let cz = (-cam_rel_m[2]) as f32;
+                    coll.set_position_wrt_parent(
+                        nalgebra::Isometry3::translation(cx, cy, cz)
+                    );
                 }
             }
             physics.sync_collider_positions();
