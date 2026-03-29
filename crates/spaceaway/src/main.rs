@@ -1254,15 +1254,15 @@ impl ApplicationHandler for App {
                             log::info!("Drive: IMPULSE");
                         }
                         if self.input.keyboard.just_pressed(KeyCode::Digit2) {
-                            // Block cruise when terrain is active (near planet surface)
-                            // or deep in atmosphere. Cruise at planetary distances
-                            // overshoots the surface and bypasses collision.
-                            let terrain_active = self.terrain.is_some();
+                            // Block cruise only in atmosphere (gravity blend > 0.2).
+                            // Terrain activates at 2.0× radius which is still far from
+                            // the surface — player needs cruise to close that distance.
+                            // Atmosphere starts at ~1.2× radius (blend > 0).
                             let in_atmosphere = self.terrain_gravity
                                 .as_ref()
-                                .is_some_and(|g| g.blend > 0.5);
-                            if terrain_active || in_atmosphere {
-                                log::warn!("Cannot engage cruise: too close to planet surface");
+                                .is_some_and(|g| g.blend > 0.2);
+                            if in_atmosphere {
+                                log::warn!("Cannot engage cruise: inside atmosphere");
                             } else {
                                 let ship_speed = self.ship.as_ref()
                                     .map(|s| s.speed(&self.physics))
