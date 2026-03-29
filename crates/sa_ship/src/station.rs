@@ -5,6 +5,9 @@
 
 use glam::Vec3;
 
+/// Index of the landing gear lock button in the cockpit layout.
+pub const LANDING_LOCK_BUTTON: usize = 5;
+
 /// Named stations aboard the ship.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Station {
@@ -105,6 +108,13 @@ pub fn cockpit_layout() -> StationConfig {
                 label: "Speed Display".into(),
                 collider_half_extents: Vec3::new(0.225, 0.14, 0.02),
             },
+            // Landing gear lock button (on console, right of engine button)
+            InteractablePlacement {
+                kind: PlacementKind::ToggleButton,
+                position: Vec3::new(0.3, -0.15, 1.8),
+                label: "Landing Gear Lock".into(),
+                collider_half_extents: Vec3::new(0.15, 0.15, 0.15),
+            },
         ],
     }
 }
@@ -114,9 +124,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cockpit_has_five_interactables() {
+    fn cockpit_has_six_interactables() {
         let layout = cockpit_layout();
-        assert_eq!(layout.interactables.len(), 5);
+        assert_eq!(layout.interactables.len(), 6);
     }
 
     #[test]
@@ -157,6 +167,16 @@ mod tests {
             .iter()
             .any(|i| matches!(i.kind, PlacementKind::Screen { .. }) && i.label == "Speed Display");
         assert!(has_screen, "cockpit should have a speed display");
+    }
+
+    #[test]
+    fn cockpit_has_landing_gear_lock() {
+        let layout = cockpit_layout();
+        let has_button = layout
+            .interactables
+            .iter()
+            .any(|i| matches!(i.kind, PlacementKind::ToggleButton) && i.label == "Landing Gear Lock");
+        assert!(has_button, "cockpit should have a landing gear lock button");
     }
 
     #[test]
