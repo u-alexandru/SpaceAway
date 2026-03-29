@@ -105,6 +105,40 @@ impl TerrainColliders {
         });
     }
 
+    /// Compute the isometry for the surface barrier cuboid.
+    /// Top face at the planet surface, 50m below surface center.
+    fn compute_barrier_isometry(
+        &self,
+        cam_rel_m: [f64; 3],
+        radius_m: f64,
+    ) -> nalgebra::Isometry3<f32> {
+        let cam_len = (cam_rel_m[0] * cam_rel_m[0]
+            + cam_rel_m[1] * cam_rel_m[1]
+            + cam_rel_m[2] * cam_rel_m[2])
+            .sqrt()
+            .max(0.01);
+        let inv_len = 1.0 / cam_len;
+        let normal = [
+            cam_rel_m[0] * inv_len,
+            cam_rel_m[1] * inv_len,
+            cam_rel_m[2] * inv_len,
+        ];
+        // Surface point minus anchor, offset 50m inward (cuboid half-height)
+        let depth = radius_m - 50.0;
+        let sx = (normal[0] * depth - self.anchor_f64[0]) as f32;
+        let sy = (normal[1] * depth - self.anchor_f64[1]) as f32;
+        let sz = (normal[2] * depth - self.anchor_f64[2]) as f32;
+
+        let up = nalgebra::Vector3::new(0.0_f32, 1.0, 0.0);
+        let nf = nalgebra::Vector3::new(normal[0] as f32, normal[1] as f32, normal[2] as f32);
+        let rotation = nalgebra::UnitQuaternion::rotation_between(&up, &nf)
+            .unwrap_or(nalgebra::UnitQuaternion::identity());
+        nalgebra::Isometry3::from_parts(
+            nalgebra::Translation3::new(sx, sy, sz),
+            rotation,
+        )
+    }
+
     /// Update HeightField colliders for chunks near the camera.
     ///
     /// Unified anchor system: the terrain body stays at (0,0,0). All physics
@@ -138,10 +172,13 @@ impl TerrainColliders {
             .map(|b| *b.translation())
             .unwrap_or(nalgebra::Vector3::zeros());
 
-        // Flat surface barrier: a large cuboid positioned at the surface
-        // directly below the ship. Unlike the old sphere barrier (which was
-        // millions of meters from origin in rapier space and missed by
-        // broadphase), this sits within normal rapier range.
+        // Flat surface barrier: a large, thick cuboid at the planet surface.
+        // Positioned relative to the anchor (not tracking the ship). Only
+        // repositioned during creation and rebases — NOT every frame, as
+        // per-frame repositioning breaks rapier's CCD.
+        //
+        // 100m thick so the ship can't tunnel through at any speed.
+        // The top face is at the surface level.
         let cam_len = (cam_rel_m[0] * cam_rel_m[0]
             + cam_rel_m[1] * cam_rel_m[1]
             + cam_rel_m[2] * cam_rel_m[2])
@@ -149,49 +186,10 @@ impl TerrainColliders {
         let altitude = cam_len - radius_m;
 
         if altitude < 50_000.0 && cam_len > 0.01 {
-            // Surface normal: direction from planet center to ship
-            let inv_len = 1.0 / cam_len;
-            let normal = [
-                cam_rel_m[0] * inv_len,
-                cam_rel_m[1] * inv_len,
-                cam_rel_m[2] * inv_len,
-            ];
-
-            // Surface position in rapier space: the point on the planet
-            // surface directly below the ship, expressed relative to the
-            // physics anchor. This is a FIXED point — it does NOT track
-            // the ship body. The ship descends toward it and collides.
-            //
-            // surface_planet_relative = normalize(cam_rel_m) * radius_m
-            // surface_rapier = (surface_planet_relative - anchor) as f32
-            let surface_x = (normal[0] * radius_m - self.anchor_f64[0]) as f32;
-            let surface_y = (normal[1] * radius_m - self.anchor_f64[1]) as f32;
-            let surface_z = (normal[2] * radius_m - self.anchor_f64[2]) as f32;
-
-            // Rotation: map Y-up to the surface normal direction
-            let up = nalgebra::Vector3::new(0.0_f32, 1.0, 0.0);
-            let normal_f32 = nalgebra::Vector3::new(
-                normal[0] as f32,
-                normal[1] as f32,
-                normal[2] as f32,
-            );
-            let rotation =
-                nalgebra::UnitQuaternion::rotation_between(&up, &normal_f32)
-                    .unwrap_or(nalgebra::UnitQuaternion::identity());
-
-            let iso = nalgebra::Isometry3::from_parts(
-                nalgebra::Translation3::new(surface_x, surface_y, surface_z),
-                rotation,
-            );
-
-            if let Some(sh) = self.surface_barrier {
-                // Update existing barrier position each frame
-                if let Some(coll) = physics.collider_set.get_mut(sh) {
-                    coll.set_position_wrt_parent(iso);
-                }
-            } else {
-                // Create new barrier: 10km x 1m x 10km cuboid
-                let collider = ColliderBuilder::cuboid(5000.0, 0.5, 5000.0)
+            if self.surface_barrier.is_none() {
+                let iso = self.compute_barrier_isometry(cam_rel_m, radius_m);
+                // 10km x 100m x 10km cuboid — top face at surface level
+                let collider = ColliderBuilder::cuboid(5000.0, 50.0, 5000.0)
                     .collision_groups(InteractionGroups::new(
                         ship_colliders::TERRAIN,
                         ship_colliders::PLAYER
@@ -205,7 +203,6 @@ impl TerrainColliders {
                     Some(physics.add_collider(collider, terrain_body));
             }
         } else if let Some(sh) = self.surface_barrier.take() {
-            // Too high — remove barrier
             physics.remove_collider(sh);
         }
 
@@ -253,8 +250,13 @@ impl TerrainColliders {
                 }
             }
 
-            // Surface barrier position is recomputed every frame from
-            // cam_rel_m, so no explicit rebase needed for it.
+            // Reposition surface barrier for new anchor.
+            if let Some(sh) = self.surface_barrier
+                && let Some(coll) = physics.collider_set.get_mut(sh)
+            {
+                let iso = self.compute_barrier_isometry(cam_rel_m, radius_m);
+                coll.set_position_wrt_parent(iso);
+            }
 
             physics.sync_collider_positions();
             physics.update_query_pipeline();

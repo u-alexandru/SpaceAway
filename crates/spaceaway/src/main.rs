@@ -1553,12 +1553,21 @@ impl ApplicationHandler for App {
                         // Apply continuous thrust from throttle lever + engine button
                         ship.apply_thrust(&mut self.physics);
 
-                        // Vertical RCS: Space = thrust up, Shift = thrust down (ship-local)
+                        // Vertical thrust: Space = up, Shift = down (ship-local).
+                        // Uses main thrust magnitude (not RCS) so it can fight
+                        // planetary gravity (13+ m/s² on heavy planets).
                         let vert_up = self.input.keyboard.is_pressed(KeyCode::Space);
                         let vert_down = self.input.keyboard.is_pressed(KeyCode::ShiftLeft);
-                        let vertical: f32 = if vert_up { 1.0 } else if vert_down { -1.0 } else { 0.0 };
-                        if vertical.abs() > 0.01 {
-                            ship.apply_rcs(&mut self.physics, 0.0, vertical, 0.0);
+                        if vert_up || vert_down {
+                            let sign = if vert_up { 1.0_f32 } else { -1.0 };
+                            if let Some(body) = self.physics.get_body(ship.body_handle) {
+                                let rot = *body.rotation();
+                                let up = rot * nalgebra::Vector3::new(0.0, sign, 0.0);
+                                let force = up * ship.max_thrust;
+                                if let Some(body) = self.physics.get_body_mut(ship.body_handle) {
+                                    body.add_force(force, true);
+                                }
+                            }
                         }
 
                         if wants_stand
