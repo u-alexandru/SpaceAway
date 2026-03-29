@@ -14,6 +14,7 @@ members = [
     "crates/sa_survival",
     "crates/spaceaway",
     "crates/sa_audio",
+    "crates/sa_terrain",
 ]
 
 [workspace.package]
@@ -65,3 +66,5 @@ gltf = "1.4.1"
 rodio = { version = "0.19", default-features = false, features = ["wav"] }
 rand = "0.8"
 sa_audio = { path = "crates/sa_audio" }
+sa_terrain = { path = "crates/sa_terrain" }
+crossbeam-channel = "0.5"
