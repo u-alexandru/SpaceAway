@@ -180,7 +180,8 @@ pub const WARP_DISENGAGE_LY: f64 = 0.01;
 /// Distance at which cruise auto-disengages to impulse.
 /// ~100,000 km — reachable in ~3 minutes at impulse max speed (10 km/s).
 /// Previous value (50 AU = 7.5 billion km) was unreachable by impulse.
-pub const CRUISE_DISENGAGE_LY: f64 = 1.0e-11; // ~100,000 km in ly
+/// 100,000 km / 9.461e12 km/ly ≈ 1.057e-8 ly.
+pub const CRUISE_DISENGAGE_LY: f64 = 1.057e-8; // ~100,000 km in ly
 
 /// Cruise deceleration multiplier. Ramps down as we approach the target.
 pub fn cruise_deceleration(distance_to_target_ly: f64) -> f64 {

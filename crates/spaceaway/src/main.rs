@@ -2817,6 +2817,60 @@ impl ApplicationHandler for App {
                     vec![]
                 };
 
+                // APPROACH_DIAG: consolidated approach diagnostic (every 60 frames)
+                if self.active_system.is_some()
+                    && self.time.frame_count().is_multiple_of(60)
+                {
+                    let drive_mode = match self.drive.mode() {
+                        sa_ship::DriveMode::Impulse => "impulse",
+                        sa_ship::DriveMode::Cruise => "cruise",
+                        sa_ship::DriveMode::Warp => "warp",
+                    };
+                    let terrain_active = self.terrain.is_some();
+                    let gravity_blend = self.terrain_gravity
+                        .as_ref()
+                        .map(|g| g.blend)
+                        .unwrap_or(0.0);
+                    let vertical_speed = self.ship.as_ref()
+                        .and_then(|s| self.physics.get_body(s.body_handle))
+                        .map(|b| {
+                            let gdir = self.terrain_gravity
+                                .as_ref()
+                                .map(|g| nalgebra::Vector3::new(g.direction[0], g.direction[1], g.direction[2]))
+                                .unwrap_or(nalgebra::Vector3::new(0.0, -1.0, 0.0));
+                            b.linvel().dot(&gdir)
+                        })
+                        .unwrap_or(0.0);
+                    // Find nearest planet distance
+                    if let Some(sys) = &self.active_system {
+                        let positions = sys.compute_positions_ly_pub();
+                        let ly_to_m = 9.461e15_f64;
+                        let mut best_dist_km = f64::MAX;
+                        let mut best_ratio = f64::MAX;
+                        for (i, pos) in positions.iter().enumerate() {
+                            if let Some(r_m) = sys.body_radius_m(i)
+                                && sys.planet_data(i).is_some()
+                            {
+                                let dx = (self.galactic_position.x - pos.x) * ly_to_m;
+                                let dy = (self.galactic_position.y - pos.y) * ly_to_m;
+                                let dz = (self.galactic_position.z - pos.z) * ly_to_m;
+                                let dist_m = (dx * dx + dy * dy + dz * dz).sqrt();
+                                let ratio = dist_m / r_m;
+                                if ratio < best_ratio {
+                                    best_ratio = ratio;
+                                    best_dist_km = dist_m / 1000.0;
+                                }
+                            }
+                        }
+                        if best_dist_km < f64::MAX {
+                            log::info!(
+                                "APPROACH_DIAG: dist={:.0}km, ratio={:.2}x, drive={}, terrain={}, gravity_blend={:.2}, vertical_speed={:.1}m/s",
+                                best_dist_km, best_ratio, drive_mode, terrain_active, gravity_blend, vertical_speed,
+                            );
+                        }
+                    }
+                }
+
                 if let (Some(gpu), Some(renderer)) = (&self.gpu, &self.renderer) {
                     // 1. Render BOTH monitors to offscreen textures in ONE encoder
                     // (avoids multiple queue.submit() calls per frame)
