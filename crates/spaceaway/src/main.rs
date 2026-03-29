@@ -250,6 +250,8 @@ struct App {
     terrain: Option<terrain_integration::TerrainManager>,
     /// Gravity state from terrain (planet gravity blending).
     terrain_gravity: Option<sa_terrain::gravity::GravityState>,
+    /// Set by menu Quit action, checked in event loop to exit.
+    quit_requested: bool,
 }
 
 impl App {
@@ -334,6 +336,7 @@ impl App {
             wants_star_lock: false,
             terrain: None,
             terrain_gravity: None,
+            quit_requested: false,
         }
     }
 
@@ -723,7 +726,10 @@ impl ApplicationHandler for App {
         event: WindowEvent,
     ) {
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                event_loop.exit();
+                return;
+            }
             WindowEvent::KeyboardInput { event, .. } => {
                 if let winit::keyboard::PhysicalKey::Code(code) = event.physical_key {
                     self.input
@@ -746,16 +752,20 @@ impl ApplicationHandler for App {
                             KeyCode::ArrowUp | KeyCode::KeyW => menu.nav_up(),
                             KeyCode::ArrowDown | KeyCode::KeyS => menu.nav_down(),
                             KeyCode::Enter | KeyCode::Space => {
-                                if menu.selected == 0 { // Continue
-                                    self.phase = GamePhase::Playing;
-                                    self.menu = None;
-                                    self.star_streaming.force_load(self.galactic_position);
-                                    if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
-                                        let verts = self.star_streaming.build_vertices(self.galactic_position);
-                                        renderer.star_field.update_star_buffer(&gpu.device, &verts);
+                                match menu.selected {
+                                    0 => { // Continue
+                                        self.phase = GamePhase::Playing;
+                                        self.menu = None;
+                                        self.star_streaming.force_load(self.galactic_position);
+                                        if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
+                                            let verts = self.star_streaming.build_vertices(self.galactic_position);
+                                            renderer.star_field.update_star_buffer(&gpu.device, &verts);
+                                        }
+                                        self.audio.set_power(true);
+                                        log::info!("Starting game — entering ship");
                                     }
-                                    self.audio.set_power(true);
-                                    log::info!("Starting game — entering ship");
+                                    3 => self.quit_requested = true, // Quit
+                                    _ => {}
                                 }
                             }
                             _ => {}
@@ -1081,7 +1091,7 @@ impl ApplicationHandler for App {
                                 let mouse_pos = self.input.mouse.position()
                                     .map(|(x, y)| [x, y]);
                                 let mouse_clicked = self.input.mouse.left_just_pressed();
-                                let start_game = ui_sys.render_menu(
+                                let menu_action = ui_sys.render_menu(
                                     &gpu.device,
                                     &gpu.queue,
                                     &mut frame_ctx.encoder,
@@ -1090,15 +1100,20 @@ impl ApplicationHandler for App {
                                     mouse_pos,
                                     mouse_clicked,
                                 );
-                                if start_game {
-                                    self.phase = GamePhase::Playing;
-                                    self.menu = None;
-                                    // Reload stars for game starting position
-                                    self.star_streaming.force_load(self.galactic_position);
-                                    let verts = self.star_streaming.build_vertices(self.galactic_position);
-                                    renderer.star_field.update_star_buffer(&gpu.device, &verts);
-                                    self.audio.set_power(true);
-                                    log::info!("Starting game -- entering ship");
+                                match menu_action {
+                                    Some(menu::MenuAction::Continue) => {
+                                        self.phase = GamePhase::Playing;
+                                        self.menu = None;
+                                        self.star_streaming.force_load(self.galactic_position);
+                                        let verts = self.star_streaming.build_vertices(self.galactic_position);
+                                        renderer.star_field.update_star_buffer(&gpu.device, &verts);
+                                        self.audio.set_power(true);
+                                        log::info!("Starting game -- entering ship");
+                                    }
+                                    Some(menu::MenuAction::Quit) => {
+                                        self.quit_requested = true;
+                                    }
+                                    None => {}
                                 }
                             }
 
@@ -2567,6 +2582,21 @@ impl ApplicationHandler for App {
                     // Append terrain draw commands
                     commands.extend(terrain_commands);
 
+                    // DIAGNOSTIC: dump every draw command's position once per second
+                    if self.terrain.is_some() && self.time.frame_count().is_multiple_of(60) {
+                        for (i, cmd) in commands.iter().enumerate() {
+                            let t = cmd.model_matrix.col(3);
+                            let dist = ((t.x * t.x + t.y * t.y + t.z * t.z) as f64).sqrt();
+                            let mesh_info = if let (Some(_gpu), Some(renderer)) = (&self.gpu, &self.renderer) {
+                                renderer.mesh_store.get(cmd.mesh)
+                                    .map(|m| m.index_count)
+                                    .unwrap_or(0)
+                            } else { 0 };
+                            log::info!("CMD[{}]: pos=({:.0},{:.0},{:.0}) dist={:.0}m tris={} pre_rebased={}",
+                                i, t.x, t.y, t.z, dist, mesh_info / 3, cmd.pre_rebased);
+                        }
+                    }
+
                     // Unload system if player has cruised far away (> 100 AU from star)
                     if let Some(system) = &self.active_system {
                         let dist = self.galactic_position.distance_to(system.star_galactic_pos);
@@ -2780,6 +2810,10 @@ impl ApplicationHandler for App {
                 }
             }
             _ => {}
+        }
+
+        if self.quit_requested {
+            event_loop.exit();
         }
     }
 

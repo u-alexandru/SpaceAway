@@ -29,6 +29,20 @@ jobs:
       - name: Build release binary
         run: cargo build -p spaceaway --release --target x86_64-pc-windows-msvc
 
+      - name: Convert music WAV to OGG (shrink release ~1 GB → ~100 MB)
+        shell: pwsh
+        run: |
+          choco install ffmpeg -y --no-progress
+          $musicDir = "resources/sounds/music"
+          if (Test-Path $musicDir) {
+            Get-ChildItem "$musicDir/*.wav" | ForEach-Object {
+              $ogg = [System.IO.Path]::ChangeExtension($_.FullName, ".ogg")
+              Write-Host "Converting $($_.Name) -> $(Split-Path $ogg -Leaf)"
+              ffmpeg -i $_.FullName -c:a libvorbis -q:a 6 $ogg -y -loglevel warning
+              Remove-Item $_.FullName
+            }
+          }
+
       - name: Package release
         shell: pwsh
         run: |

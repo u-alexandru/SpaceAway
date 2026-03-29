@@ -357,7 +357,7 @@ fn push_planet_body(
         orbital_period_s: planet.orbital_period_years as f64 * SECONDS_PER_YEAR,
         initial_phase: planet.initial_phase as f64,
         radius_m: planet_radius_m,
-        parent_index: -1, // orbits star
+        parent_index: 0, // orbits star (index 0 in bodies vec)
         label: format!("Planet {}", index + 1),
     });
 

@@ -434,7 +434,7 @@ impl UiSystem {
         }
     }
 
-    /// Render the main menu overlay. Returns true if "Continue" was clicked.
+    /// Render the main menu overlay. Returns the menu action if one was triggered.
     #[allow(clippy::too_many_arguments)]
     pub fn render_menu(
         &mut self,
@@ -445,7 +445,7 @@ impl UiSystem {
         menu: &mut crate::menu::MainMenu,
         mouse_pos: Option<[f32; 2]>,
         mouse_clicked: bool,
-    ) -> bool {
+    ) -> Option<crate::menu::MenuAction> {
         let screen_descriptor = ScreenDescriptor {
             size_in_pixels: [self.screen_width, self.screen_height],
             pixels_per_point: 1.0,
@@ -481,9 +481,9 @@ impl UiSystem {
             });
         }
 
-        let mut start_game = false;
+        let mut menu_action = None;
         let full_output = self.egui_ctx.run(raw_input, |ctx| {
-            start_game = menu.render_egui(ctx, self.font_scale());
+            menu_action = menu.render_egui(ctx, self.font_scale());
         });
 
         let paint_jobs = self
@@ -530,6 +530,6 @@ impl UiSystem {
             self.egui_renderer.free_texture(id);
         }
 
-        start_game
+        menu_action
     }
 }
