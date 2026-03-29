@@ -2527,7 +2527,7 @@ impl ApplicationHandler for App {
                             self.audio.play_sfx(sa_audio::SfxId::AltitudeBeep, None);
                             // Reset timer: interval shrinks as altitude drops.
                             self.altitude_beep_timer = if clearance < 5.0 {
-                                0.0 // continuous — fire every frame
+                                0.05 // near-continuous (20/sec) — avoids 60 overlapping samples
                             } else if clearance < 10.0 {
                                 1.0 / 8.0
                             } else if clearance < 20.0 {
