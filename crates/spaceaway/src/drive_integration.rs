@@ -177,22 +177,25 @@ pub fn warp_deceleration(distance_to_target_ly: f64) -> f64 {
 /// Cruise can comfortably cover this distance.
 pub const WARP_DISENGAGE_LY: f64 = 0.01;
 
-/// Distance at which cruise auto-disengages to impulse (~50 AU).
-/// This is the gravity well radius — impulse handles the final approach.
-pub const CRUISE_DISENGAGE_LY: f64 = 50.0 * 1.581e-5; // 50 AU in ly
+/// Distance at which cruise auto-disengages to impulse.
+/// ~100,000 km — reachable in ~3 minutes at impulse max speed (10 km/s).
+/// Previous value (50 AU = 7.5 billion km) was unreachable by impulse.
+pub const CRUISE_DISENGAGE_LY: f64 = 1.0e-11; // ~100,000 km in ly
 
 /// Cruise deceleration multiplier. Ramps down as we approach the target.
 pub fn cruise_deceleration(distance_to_target_ly: f64) -> f64 {
-    let au_in_ly: f64 = 1.581e-5;
-    let dist_au = distance_to_target_ly / au_in_ly;
-    if dist_au > 500.0 {
-        1.0
-    } else if dist_au > 100.0 {
-        0.2 + 0.8 * ((dist_au - 100.0) / 400.0)
-    } else if dist_au > 50.0 {
-        0.05 + 0.15 * ((dist_au - 50.0) / 50.0)
+    let km_in_ly: f64 = 9.461e12; // km per light-year
+    let dist_km = distance_to_target_ly * km_in_ly;
+    if dist_km > 10_000_000.0 {
+        1.0 // > 10M km: full speed
+    } else if dist_km > 1_000_000.0 {
+        // 10M → 1M km: ramp from 100% to 20%
+        0.2 + 0.8 * ((dist_km - 1_000_000.0) / 9_000_000.0)
+    } else if dist_km > 100_000.0 {
+        // 1M → 100K km: ramp from 20% to 5%
+        0.05 + 0.15 * ((dist_km - 100_000.0) / 900_000.0)
     } else {
-        0.05
+        0.05 // < 100K km: minimum cruise speed, about to disengage
     }
 }
 
