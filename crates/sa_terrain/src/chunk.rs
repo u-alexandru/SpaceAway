@@ -1,5 +1,7 @@
 //! Chunk mesh generation: 33×33 grid on a cube-sphere face, with skirt vertices.
 
+use std::sync::OnceLock;
+
 use crate::{ChunkData, ChunkKey, TerrainConfig, TerrainVertex};
 use crate::cube_sphere::{CubeFace, cube_to_sphere};
 use crate::heightmap::{make_terrain_noise, make_warp_noise, sample_height};
@@ -9,6 +11,74 @@ use crate::biome::biome_color;
 pub const GRID_SIZE: u32 = 33;
 /// Number of cells along one edge.
 pub const CELLS: u32 = 32;
+
+/// Cached shared index buffer — all terrain chunks use the same topology.
+/// Generated once on first access, then reused for every chunk.
+static SHARED_INDICES: OnceLock<Vec<u32>> = OnceLock::new();
+
+/// Generate the shared index buffer for all terrain chunks.
+/// All 33×33 grid chunks + skirts use identical index connectivity.
+fn generate_shared_indices() -> Vec<u32> {
+    let n = GRID_SIZE as usize;
+
+    // Grid indices: 32×32 quads, 2 triangles each
+    let mut indices: Vec<u32> = Vec::with_capacity(CELLS as usize * CELLS as usize * 6 + 4 * (n - 1) * 6);
+    for row in 0..CELLS as usize {
+        for col in 0..CELLS as usize {
+            let i00 = (row * n + col) as u32;
+            let i10 = ((row + 1) * n + col) as u32;
+            let i01 = (row * n + col + 1) as u32;
+            let i11 = ((row + 1) * n + col + 1) as u32;
+            indices.push(i00);
+            indices.push(i10);
+            indices.push(i01);
+            indices.push(i01);
+            indices.push(i10);
+            indices.push(i11);
+        }
+    }
+
+    // Skirt indices
+    let skirt_base = (n * n) as u32;
+    let skirt_bottom_base = skirt_base;
+    let skirt_top_base = skirt_bottom_base + n as u32;
+    let skirt_left_base = skirt_top_base + n as u32;
+    let skirt_right_base = skirt_left_base + n as u32;
+
+    fn add_skirt_quad(indices: &mut Vec<u32>, g0: u32, g1: u32, s0: u32, s1: u32) {
+        indices.push(g0); indices.push(s0); indices.push(g1);
+        indices.push(g1); indices.push(s0); indices.push(s1);
+    }
+
+    for col in 0..n - 1 {
+        let g0 = col as u32;
+        let g1 = (col + 1) as u32;
+        add_skirt_quad(&mut indices, g0, g1, skirt_bottom_base + col as u32, skirt_bottom_base + col as u32 + 1);
+    }
+    for col in 0..n - 1 {
+        let g0 = ((n - 1) * n + col) as u32;
+        let g1 = ((n - 1) * n + col + 1) as u32;
+        add_skirt_quad(&mut indices, g0, g1, skirt_top_base + col as u32, skirt_top_base + col as u32 + 1);
+    }
+    for row in 0..n - 1 {
+        let g0 = (row * n) as u32;
+        let g1 = ((row + 1) * n) as u32;
+        add_skirt_quad(&mut indices, g0, g1, skirt_left_base + row as u32, skirt_left_base + row as u32 + 1);
+    }
+    for row in 0..n - 1 {
+        let g0 = (row * n + (n - 1)) as u32;
+        let g1 = ((row + 1) * n + (n - 1)) as u32;
+        add_skirt_quad(&mut indices, g0, g1, skirt_right_base + row as u32, skirt_right_base + row as u32 + 1);
+    }
+
+    indices
+}
+
+/// Get the shared index buffer for all terrain chunks.
+/// Thread-safe, lazy-initialized on first call.
+pub fn shared_indices() -> &'static [u32] {
+    SHARED_INDICES.get_or_init(generate_shared_indices)
+}
 
 /// Generate the full mesh for a terrain chunk.
 ///
@@ -110,26 +180,8 @@ pub fn generate_chunk(key: ChunkKey, config: &TerrainConfig) -> ChunkData {
         colors[i] = biome_color(config.sub_type, heights[i], latitude);
     }
 
-    // -----------------------------------------------------------------------
-    // Grid indices (32×32 quads, 2 triangles each).
-    // -----------------------------------------------------------------------
-    let mut indices: Vec<u32> = Vec::with_capacity(CELLS as usize * CELLS as usize * 6);
-    for row in 0..CELLS as usize {
-        for col in 0..CELLS as usize {
-            let i00 = (row * n + col) as u32;
-            let i10 = ((row + 1) * n + col) as u32;
-            let i01 = (row * n + col + 1) as u32;
-            let i11 = ((row + 1) * n + col + 1) as u32;
-            // Triangle 1
-            indices.push(i00);
-            indices.push(i10);
-            indices.push(i01);
-            // Triangle 2
-            indices.push(i01);
-            indices.push(i10);
-            indices.push(i11);
-        }
-    }
+    // Grid + skirt indices are shared across all chunks (same topology).
+    // Cloned from the cached shared buffer instead of regenerated per chunk.
 
     // -----------------------------------------------------------------------
     // Smooth normals: accumulate face normals per vertex then normalise.
@@ -247,66 +299,11 @@ pub fn generate_chunk(key: ChunkKey, config: &TerrainConfig) -> ChunkData {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Skirt triangles.
-    // -----------------------------------------------------------------------
-    // For each edge pair (grid_edge[i], grid_edge[i+1]) and the matching skirt
-    // vertices, emit 2 triangles forming a quad.
-    fn add_skirt_quad(
-        indices: &mut Vec<u32>,
-        g0: u32, g1: u32,  // grid edge vertices
-        s0: u32, s1: u32,  // corresponding skirt vertices
-    ) {
-        indices.push(g0);
-        indices.push(s0);
-        indices.push(g1);
-
-        indices.push(g1);
-        indices.push(s0);
-        indices.push(s1);
-    }
-
-    // Bottom row (row 0, col 0..n-1)
-    for col in 0..n - 1 {
-        let g0 = col as u32;
-        let g1 = (col + 1) as u32;
-        let s0 = skirt_bottom_base + col as u32;
-        let s1 = skirt_bottom_base + col as u32 + 1;
-        add_skirt_quad(&mut indices, g0, g1, s0, s1);
-    }
-
-    // Top row (row n-1, col 0..n-1)
-    for col in 0..n - 1 {
-        let g0 = ((n - 1) * n + col) as u32;
-        let g1 = ((n - 1) * n + col + 1) as u32;
-        let s0 = skirt_top_base + col as u32;
-        let s1 = skirt_top_base + col as u32 + 1;
-        add_skirt_quad(&mut indices, g0, g1, s0, s1);
-    }
-
-    // Left column (col 0, row 0..n-1)
-    for row in 0..n - 1 {
-        let g0 = (row * n) as u32;
-        let g1 = ((row + 1) * n) as u32;
-        let s0 = skirt_left_base + row as u32;
-        let s1 = skirt_left_base + row as u32 + 1;
-        add_skirt_quad(&mut indices, g0, g1, s0, s1);
-    }
-
-    // Right column (col n-1, row 0..n-1)
-    for row in 0..n - 1 {
-        let g0 = (row * n + (n - 1)) as u32;
-        let g1 = ((row + 1) * n + (n - 1)) as u32;
-        let s0 = skirt_right_base + row as u32;
-        let s1 = skirt_right_base + row as u32 + 1;
-        add_skirt_quad(&mut indices, g0, g1, s0, s1);
-    }
-
     ChunkData {
         key,
         center_f64,
         vertices,
-        indices,
+        indices: shared_indices().to_vec(),
         heights,
         min_height,
         max_height,
