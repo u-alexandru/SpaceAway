@@ -109,6 +109,13 @@ impl LruCache {
         }
         data
     }
+
+    /// Remove all entries from the cache. Does NOT add them to evicted —
+    /// the caller is responsible for cleaning up GPU resources separately.
+    pub fn clear(&mut self) {
+        self.map.clear();
+        self.order.clear();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -266,6 +273,17 @@ impl ChunkStreaming {
     pub fn cached_count(&self) -> usize {
         self.cache.len()
     }
+
+    /// Clear the LRU cache and drain in-flight results. Call after
+    /// `flush_for_teleport()` so that chunks get re-generated from scratch
+    /// at the new position instead of silently staying cached.
+    pub fn flush(&mut self) {
+        self.cache.clear();
+        self.in_flight.clear();
+        // Drain any completed results sitting in the channel so stale
+        // chunks from the old position don't pollute the next update.
+        while self.result_rx.try_recv().is_ok() {}
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -377,5 +395,39 @@ mod tests {
         }
 
         assert!(received, "no chunk received within timeout");
+    }
+
+    #[test]
+    fn lru_cache_clear_empties_all_entries() {
+        let mut cache = LruCache::new(10);
+        let key1 = ChunkKey { face: 0, lod: 0, x: 0, y: 0 };
+        let key2 = ChunkKey { face: 1, lod: 0, x: 0, y: 0 };
+        let chunk1 = ChunkData {
+            key: key1,
+            vertices: vec![],
+            indices: vec![],
+            center_f64: [0.0, 0.0, 1.0],
+            heights: vec![],
+            min_height: 0.0,
+            max_height: 0.0,
+        };
+        let chunk2 = ChunkData {
+            key: key2,
+            vertices: vec![],
+            indices: vec![],
+            center_f64: [0.0, 1.0, 0.0],
+            heights: vec![],
+            min_height: 0.0,
+            max_height: 0.0,
+        };
+        cache.insert(chunk1);
+        cache.insert(chunk2);
+        assert_eq!(cache.len(), 2);
+        assert!(cache.contains(&key1));
+
+        cache.clear();
+        assert_eq!(cache.len(), 0);
+        assert!(!cache.contains(&key1));
+        assert!(!cache.contains(&key2));
     }
 }

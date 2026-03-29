@@ -295,10 +295,13 @@ impl TerrainManager {
         self.col.anchor_f64 = new_anchor;
     }
 
-    /// Clear stale GPU meshes and force burst uploads after a teleport.
-    /// Old chunks are at the previous position and must be discarded.
+    /// Clear stale GPU meshes, flush the streaming cache, and force burst
+    /// uploads after a teleport. Old chunks are at the previous position and
+    /// must be fully discarded — including the LRU cache, otherwise cached
+    /// chunks won't be re-requested and gpu_meshes stays empty.
     pub fn flush_for_teleport(&mut self) {
         self.gpu_meshes.clear();
+        self.streaming.flush();
         self.streaming.burst_frames_remaining = 120;
     }
 
