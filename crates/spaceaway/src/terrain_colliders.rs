@@ -95,6 +95,7 @@ impl TerrainColliders {
         cam_rel_m: [f64; 3],
         radius_m: f64,
         max_displacement_m: f64,
+        visible_keys: &std::collections::HashSet<ChunkKey>,
     ) {
         let terrain_body = *self.terrain_body.get_or_insert_with(|| {
             let rb = RigidBodyBuilder::fixed().build();
@@ -115,15 +116,17 @@ impl TerrainColliders {
             self.colliders.clear();
         }
 
-        // Remove out-of-range colliders.
+        // Remove colliders that are out-of-range OR no longer in the visible set.
+        // The visible set check prevents overlapping LOD colliders.
         let keys_to_remove: Vec<ChunkKey> = self
             .colliders
             .keys()
             .filter(|key| {
-                self.chunk_cache
-                    .get(key)
-                    .map(|c| chunk_dist(c.center_f64, cam_rel_m) > COLLIDER_RANGE_M * 1.2)
-                    .unwrap_or(true)
+                !visible_keys.contains(key)
+                    || self.chunk_cache
+                        .get(key)
+                        .map(|c| chunk_dist(c.center_f64, cam_rel_m) > COLLIDER_RANGE_M * 1.2)
+                        .unwrap_or(true)
             })
             .copied()
             .collect();
@@ -134,12 +137,15 @@ impl TerrainColliders {
             }
         }
 
-        // Add colliders for nearby chunks without one.
+        // Add colliders only for chunks in the CURRENT visible set that are nearby.
+        // This prevents overlapping colliders from different LOD levels for the
+        // same area (coarse + fine LOD chunks both in cache near a LOD boundary).
         let keys_to_add: Vec<ChunkKey> = self
             .chunk_cache
             .iter()
             .filter(|(key, cached)| {
                 !self.colliders.contains_key(key)
+                    && visible_keys.contains(key)
                     && chunk_dist(cached.center_f64, cam_rel_m) < COLLIDER_RANGE_M
             })
             .map(|(key, _)| *key)
@@ -200,7 +206,8 @@ fn build_heightfield(
 
     let face_size_m = radius_m * std::f64::consts::FRAC_PI_2;
     let chunk_size_m = (face_size_m / (1u64 << cached.lod) as f64) as f32;
-    let max_disp = max_displacement_m as f32;
+    // Clamp min displacement to 1m to prevent degenerate zero-thickness HeightField.
+    let max_disp = (max_displacement_m as f32).max(1.0);
     let scale = nalgebra::Vector3::new(chunk_size_m, max_disp, chunk_size_m);
 
     // Chunk center relative to anchor.
@@ -237,16 +244,18 @@ fn build_heightfield(
         (v_dir_f64[1] - center_dir_f64[1]) as f32,
         (v_dir_f64[2] - center_dir_f64[2]) as f32,
     ).normalize();
-    // Normal = cross(tangent_u, tangent_v), should point outward
+    // Gram-Schmidt orthogonalize: tu and tv from finite differences are
+    // not exactly orthogonal due to cube-to-sphere distortion.
     let normal = tu.cross(&tv).normalize();
+    let tv_ortho = normal.cross(&tu).normalize();
 
     // Build rotation: columns are the axes of the rotated frame.
     // HeightField local X → tu (chunk U axis)
     // HeightField local Y → normal (outward from sphere)
-    // HeightField local Z → tv (chunk V axis)
+    // HeightField local Z → tv_ortho (chunk V axis, orthogonalized)
     let rotation = nalgebra::UnitQuaternion::from_rotation_matrix(
         &nalgebra::Rotation3::from_matrix_unchecked(
-            nalgebra::Matrix3::from_columns(&[tu, normal, tv])
+            nalgebra::Matrix3::from_columns(&[tu, normal, tv_ortho])
         )
     );
 

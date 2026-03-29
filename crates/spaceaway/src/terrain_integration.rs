@@ -156,11 +156,21 @@ impl TerrainManager {
         );
 
         // --- Collider management ---
+        // Pass the current visible set to prevent overlapping LOD colliders.
+        let visible_keys: std::collections::HashSet<sa_terrain::ChunkKey> = visible.iter()
+            .map(|n| sa_terrain::ChunkKey {
+                face: n.face as u8,
+                lod: n.lod,
+                x: n.x,
+                y: n.y,
+            })
+            .collect();
         self.col.update(
             physics,
             cam_rel_m,
             self.config.radius_m,
             self.max_displacement_m,
+            &visible_keys,
         );
 
         // Build draw commands.
@@ -202,15 +212,14 @@ impl TerrainManager {
         planet_center_ly: WorldPos,
         camera_galactic_ly: WorldPos,
     ) -> Vec<DrawCommand> {
-        let planet_m = [
-            planet_center_ly.x * LY_TO_M,
-            planet_center_ly.y * LY_TO_M,
-            planet_center_ly.z * LY_TO_M,
-        ];
-        let camera_m = [
-            camera_galactic_ly.x * LY_TO_M,
-            camera_galactic_ly.y * LY_TO_M,
-            camera_galactic_ly.z * LY_TO_M,
+        // Compute planet-to-camera offset in f64 BEFORE scaling to meters.
+        // This avoids catastrophic cancellation: (planet_m + center - camera_m)
+        // would lose center precision at galactic scale (~20m jitter at 10,000 ly).
+        // Instead: (planet_ly - camera_ly) * LY_TO_M + center_f64.
+        let cam_offset_m = [
+            (planet_center_ly.x - camera_galactic_ly.x) * LY_TO_M,
+            (planet_center_ly.y - camera_galactic_ly.y) * LY_TO_M,
+            (planet_center_ly.z - camera_galactic_ly.z) * LY_TO_M,
         ];
 
         let mut cmds = Vec::with_capacity(visible.len());
@@ -222,12 +231,9 @@ impl TerrainManager {
                 y: node.y,
             };
             if let Some(&(handle, center_f64)) = self.gpu_meshes.get(&key) {
-                // Use the chunk's actual displaced center (not the quadtree
-                // node center which is on the undisplaced sphere surface).
-                // Difference is ~avg_h * amplitude radially.
-                let ox = (planet_m[0] + center_f64[0] - camera_m[0]) as f32;
-                let oy = (planet_m[1] + center_f64[1] - camera_m[1]) as f32;
-                let oz = (planet_m[2] + center_f64[2] - camera_m[2]) as f32;
+                let ox = (cam_offset_m[0] + center_f64[0]) as f32;
+                let oy = (cam_offset_m[1] + center_f64[1]) as f32;
+                let oz = (cam_offset_m[2] + center_f64[2]) as f32;
 
                 cmds.push(DrawCommand {
                     mesh: handle,

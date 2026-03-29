@@ -33,7 +33,8 @@ pub fn max_lod_levels(face_size_m: f64) -> u8 {
     if ratio <= 1.0 {
         return 1;
     }
-    (ratio.log2().ceil() as u8).max(1)
+    // Cap at 30 to prevent 1u32 << lod overflow (u32 max shift is 31).
+    (ratio.log2().ceil() as u8).clamp(1, 30)
 }
 
 /// Select visible nodes for rendering. Returns nodes sorted coarsest-first.
