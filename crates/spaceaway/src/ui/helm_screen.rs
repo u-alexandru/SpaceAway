@@ -22,6 +22,8 @@ pub struct HelmData {
     pub target_info: Option<(String, f64, f64)>,
     /// Altitude above terrain in meters (None if not near terrain).
     pub altitude_m: Option<f32>,
+    /// Distance to nearest planet surface in km (shown when < 1000km and heading toward it).
+    pub planet_dist_km: Option<f32>,
 }
 
 /// Draw the helm monitor UI. Called within an egui context that targets
@@ -229,17 +231,32 @@ pub fn draw_helm_screen(ctx: &egui::Context, data: &HelmData) {
                 }
             }
 
-            // Altitude display (when near terrain)
-            if let Some(alt) = data.altitude_m {
+            // Planet distance / altitude display
+            if let Some(dist_km) = data.planet_dist_km {
                 ui.add_space(8.0);
-                let alt_text = if alt < 1000.0 {
-                    format!("ALT {:.0}m", alt)
+                // Use altitude_m (raycast) when available (< 100m), otherwise
+                // use galactic-computed distance for longer range.
+                let (label, value_text, color) = if let Some(alt) = data.altitude_m {
+                    let c = if alt < 50.0 {
+                        egui::Color32::from_rgb(220, 50, 30) // red when close
+                    } else if alt < 200.0 {
+                        egui::Color32::from_rgb(220, 160, 30) // amber
+                    } else {
+                        HELM_BLUE
+                    };
+                    if alt < 1000.0 {
+                        ("ALT", format!("{:.0}m", alt), c)
+                    } else {
+                        ("ALT", format!("{:.1}km", alt / 1000.0), c)
+                    }
+                } else if dist_km < 10.0 {
+                    ("SURF", format!("{:.1}km", dist_km), egui::Color32::from_rgb(220, 160, 30))
                 } else {
-                    format!("ALT {:.1}km", alt / 1000.0)
+                    ("SURF", format!("{:.0}km", dist_km), HELM_BLUE)
                 };
                 ui.label(
-                    egui::RichText::new(alt_text)
-                        .color(HELM_BLUE)
+                    egui::RichText::new(format!("{label}  {value_text}"))
+                        .color(color)
                         .size(16.0)
                         .strong(),
                 );

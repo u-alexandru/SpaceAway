@@ -1514,8 +1514,8 @@ impl ApplicationHandler for App {
                         ship.apply_thrust(&mut self.physics);
 
                         // Vertical thrust: Space = up, Shift = down (ship-local).
-                        // Uses main thrust magnitude (not RCS) so it can fight
-                        // planetary gravity (13+ m/s² on heavy planets).
+                        // 2× main thrust so the pilot can decelerate from
+                        // terminal velocity (~270 m/s) against full gravity.
                         let vert_up = self.input.keyboard.is_pressed(KeyCode::Space);
                         let vert_down = self.input.keyboard.is_pressed(KeyCode::ShiftLeft);
                         if vert_up || vert_down {
@@ -1523,7 +1523,7 @@ impl ApplicationHandler for App {
                             if let Some(body) = self.physics.get_body(ship.body_handle) {
                                 let rot = *body.rotation();
                                 let up = rot * nalgebra::Vector3::new(0.0, sign, 0.0);
-                                let force = up * ship.max_thrust;
+                                let force = up * ship.max_thrust * 2.0;
                                 if let Some(body) = self.physics.get_body_mut(ship.body_handle) {
                                     body.add_force(force, true);
                                 }
@@ -3099,6 +3099,37 @@ impl ApplicationHandler for App {
                             system_info,
                             target_info,
                             altitude_m: self.last_clearance,
+                            planet_dist_km: {
+                                // Show distance to nearest planet surface when < 1000km
+                                // and heading toward it (dot product check).
+                                let ly_to_m = 9.461e15_f64;
+                                let mut best: Option<f32> = None;
+                                if let Some(terrain_mgr) = &self.terrain {
+                                    let cam_rel = terrain_mgr.cam_rel_m(self.galactic_position);
+                                    let dist_m = (cam_rel[0]*cam_rel[0] + cam_rel[1]*cam_rel[1] + cam_rel[2]*cam_rel[2]).sqrt();
+                                    let alt_km = ((dist_m - terrain_mgr.planet_radius_m()) / 1000.0) as f32;
+                                    if alt_km < 1000.0 {
+                                        best = Some(alt_km.max(0.0));
+                                    }
+                                } else if let Some(sys) = &self.active_system {
+                                    let positions = sys.compute_positions_ly_pub();
+                                    for (i, pos) in positions.iter().enumerate() {
+                                        if let Some(r_m) = sys.body_radius_m(i)
+                                            && sys.planet_data(i).is_some()
+                                        {
+                                            let dx = (self.galactic_position.x - pos.x) * ly_to_m;
+                                            let dy = (self.galactic_position.y - pos.y) * ly_to_m;
+                                            let dz = (self.galactic_position.z - pos.z) * ly_to_m;
+                                            let dist_m = (dx*dx + dy*dy + dz*dz).sqrt();
+                                            let alt_km = ((dist_m - r_m) / 1000.0) as f32;
+                                            if (0.0..1000.0).contains(&alt_km) && best.is_none_or(|b| alt_km < b) {
+                                                best = Some(alt_km);
+                                            }
+                                        }
+                                    }
+                                }
+                                best
+                            },
                         };
 
                         // Placeholder: deposits are positioned in rapier space at
