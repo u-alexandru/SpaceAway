@@ -103,6 +103,7 @@ impl Renderer {
         ctx.frame.present();
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn render_frame(
         &self,
         gpu: &GpuContext,

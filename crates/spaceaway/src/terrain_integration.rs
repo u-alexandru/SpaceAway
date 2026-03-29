@@ -94,6 +94,7 @@ impl TerrainManager {
     }
 
     /// Surface gravity of the planet in m/s^2.
+    #[allow(dead_code)]
     pub fn surface_gravity(&self) -> f32 {
         self.surface_gravity_ms2
     }
@@ -128,11 +129,11 @@ impl TerrainManager {
 
         // Upload newly generated chunks to GPU and cache for colliders.
         for chunk in &new_chunks {
-            if !self.gpu_meshes.contains_key(&chunk.key) {
+            self.gpu_meshes.entry(chunk.key).or_insert_with(|| {
                 let mesh_data = chunk_to_mesh_data(chunk);
                 let handle = mesh_store.upload(device, &mesh_data);
-                self.gpu_meshes.insert(chunk.key, (handle, chunk.center_f64));
-            }
+                (handle, chunk.center_f64)
+            });
             self.col.cache_chunk(chunk.key, chunk);
         }
 

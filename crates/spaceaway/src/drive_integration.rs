@@ -132,6 +132,7 @@ impl DriveVisualState {
 /// `dt`: frame delta time in seconds.
 ///
 /// Returns the delta to add to `galactic_position` in light-years.
+#[allow(dead_code)]
 pub fn galactic_position_delta(
     drive: &DriveController,
     direction: [f64; 3],

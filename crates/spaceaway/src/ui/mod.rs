@@ -21,8 +21,10 @@ pub struct HudState {
     pub screen_width: u32,
     pub screen_height: u32,
     /// Current fuel level (0.0 to 1.0).
+    #[allow(dead_code)]
     pub fuel: f32,
     /// Current oxygen level (0.0 to 1.0).
+    #[allow(dead_code)]
     pub oxygen: f32,
     /// Whether a gatherable deposit is within range.
     pub gather_available: bool,
@@ -433,6 +435,7 @@ impl UiSystem {
     }
 
     /// Render the main menu overlay. Returns true if "Continue" was clicked.
+    #[allow(clippy::too_many_arguments)]
     pub fn render_menu(
         &mut self,
         device: &wgpu::Device,
@@ -460,22 +463,22 @@ impl UiSystem {
         if let Some([mx, my]) = mouse_pos {
             raw_input.events.push(egui::Event::PointerMoved(egui::pos2(mx, my)));
         }
-        if mouse_clicked {
-            if let Some([mx, my]) = mouse_pos {
-                raw_input.events.push(egui::Event::PointerButton {
-                    pos: egui::pos2(mx, my),
-                    button: egui::PointerButton::Primary,
-                    pressed: true,
-                    modifiers: Default::default(),
-                });
-                // Also send release immediately for click detection
-                raw_input.events.push(egui::Event::PointerButton {
-                    pos: egui::pos2(mx, my),
-                    button: egui::PointerButton::Primary,
-                    pressed: false,
-                    modifiers: Default::default(),
-                });
-            }
+        if mouse_clicked
+            && let Some([mx, my]) = mouse_pos
+        {
+            raw_input.events.push(egui::Event::PointerButton {
+                pos: egui::pos2(mx, my),
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            });
+            // Also send release immediately for click detection
+            raw_input.events.push(egui::Event::PointerButton {
+                pos: egui::pos2(mx, my),
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            });
         }
 
         let mut start_game = false;

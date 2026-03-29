@@ -1,4 +1,5 @@
 //! HUD overlay: context-sensitive crosshair icons, warning bars, vignette.
+#![allow(dead_code)]
 //!
 //! Draws a small icon at screen center that changes based on what the player
 //! is looking at. Also renders fuel/O2 warning bars and low-oxygen vignette.

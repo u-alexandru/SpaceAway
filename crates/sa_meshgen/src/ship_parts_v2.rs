@@ -369,9 +369,6 @@ pub fn hull_engine_section_v2() -> Part {
 /// Two faces (fore and aft) with direct quads forming the door frame inner walls
 /// (no box_mesh overlaps — avoids Z-fighting at door edges).
 fn thick_bulkhead(hull_width: f32, hull_height: f32, z_pos: f32) -> Mesh {
-    use crate::mesh::MeshVertex;
-    use crate::primitives::face_normal;
-
     let half = BULKHEAD_DEPTH / 2.0;
     let z_fore = z_pos - half;
     let z_aft = z_pos + half;
@@ -455,7 +452,7 @@ fn thick_bulkhead(hull_width: f32, hull_height: f32, z_pos: f32) -> Mesh {
 /// - Eng room:    6.0m  (6.5 width)
 /// - Transition:  1.0m  (6.5→4.0)
 /// - Engine:      6.0m  (4.0→2.5)
-/// Total: ~37m
+///   Total: ~37m
 pub fn assemble_ship_v2() -> Mesh {
     use crate::assembly::attach;
 

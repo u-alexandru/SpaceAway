@@ -1,4 +1,5 @@
 //! Navigation: nearby star markers, lock-on targeting, gravity well detection.
+#![allow(dead_code)]
 
 use sa_math::WorldPos;
 use sa_universe::sector::{SectorCoord, generate_sector};

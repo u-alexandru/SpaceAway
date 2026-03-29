@@ -327,12 +327,11 @@ impl Channels {
                 }
             }
             // Check if track finished
-            if let Some(ref sink) = self.music_sink {
-                if sink.empty() {
+            if let Some(ref sink) = self.music_sink
+                && sink.empty() {
                     self.music_playing = false;
                     self.music_gap_timer = rand::thread_rng().gen_range(30.0..90.0);
                 }
-            }
         } else {
             // Not playing — count down gap timer, then start new track
             self.music_gap_timer -= dt;

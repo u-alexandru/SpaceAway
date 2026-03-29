@@ -119,18 +119,18 @@ impl TerrainColliders {
                 (old_anchor[2] - cam_rel_m[2]) as f32,
             );
             for handle in self.colliders.values() {
-                if let Some(coll) = physics.collider_set.get_mut(*handle) {
-                    if let Some(pos) = coll.position_wrt_parent() {
-                        let new_pos = nalgebra::Isometry3::from_parts(
-                            nalgebra::Translation3::new(
-                                pos.translation.x + shift.x,
-                                pos.translation.y + shift.y,
-                                pos.translation.z + shift.z,
-                            ),
-                            pos.rotation,
-                        );
-                        coll.set_position_wrt_parent(new_pos);
-                    }
+                if let Some(coll) = physics.collider_set.get_mut(*handle)
+                    && let Some(pos) = coll.position_wrt_parent()
+                {
+                    let new_pos = nalgebra::Isometry3::from_parts(
+                        nalgebra::Translation3::new(
+                            pos.translation.x + shift.x,
+                            pos.translation.y + shift.y,
+                            pos.translation.z + shift.z,
+                        ),
+                        pos.rotation,
+                    );
+                    coll.set_position_wrt_parent(new_pos);
                 }
             }
             physics.sync_collider_positions();
@@ -179,17 +179,17 @@ impl TerrainColliders {
             .collect();
 
         for key in keys_to_add {
-            if let Some(cached) = self.chunk_cache.get(&key) {
-                if let Some(handle) = build_heightfield(
+            if let Some(cached) = self.chunk_cache.get(&key)
+                && let Some(handle) = build_heightfield(
                     physics,
                     terrain_body,
                     cached,
                     &self.anchor_f64,
                     radius_m,
                     max_displacement_m,
-                ) {
-                    self.colliders.insert(key, handle);
-                }
+                )
+            {
+                self.colliders.insert(key, handle);
             }
         }
 

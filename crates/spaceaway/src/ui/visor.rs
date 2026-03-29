@@ -141,6 +141,7 @@ pub fn draw_visor(ctx: &egui::Context, state: &VisorState) {
 }
 
 /// Crosshair: context-sensitive icon with glow effect.
+#[allow(clippy::too_many_arguments)]
 fn draw_crosshair(
     painter: &egui::Painter,
     center: egui::Pos2,
@@ -286,6 +287,7 @@ fn draw_eye_visor(painter: &egui::Painter, c: egui::Pos2, s: f32, alpha: f32) {
 
 /// Suit vital text: `O2 98%` or `PWR 100%`.
 /// Dim when full, bright when draining, pulsing when critical.
+#[allow(clippy::too_many_arguments)]
 fn draw_suit_vital(
     painter: &egui::Painter,
     label: &str,

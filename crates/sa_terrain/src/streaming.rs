@@ -65,12 +65,11 @@ impl LruCache {
         self.order.push_back(key);
 
         // Evict LRU if over capacity.
-        if self.order.len() > self.capacity {
-            if let Some(evicted_key) = self.order.pop_front() {
+        if self.order.len() > self.capacity
+            && let Some(evicted_key) = self.order.pop_front() {
                 self.map.remove(&evicted_key);
                 self.evicted.push(evicted_key);
             }
-        }
     }
 
     /// Retrieve a chunk by key, promoting it to MRU. Returns `None` if not

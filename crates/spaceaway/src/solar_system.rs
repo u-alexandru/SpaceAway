@@ -42,12 +42,15 @@ struct LoadedBody {
     /// Index of parent body in `bodies` vec (-1 for star/planets that orbit the star).
     parent_index: i32,
     /// Human-readable label.
+    #[allow(dead_code)]
     pub label: String,
 }
 
 /// Active solar system state.
 pub struct ActiveSystem {
+    #[allow(dead_code)]
     pub star: Star,
+    #[allow(dead_code)]
     pub star_id: ObjectId,
     pub system: PlanetarySystem,
     /// Star's position in galactic coordinates (light-years).
@@ -57,6 +60,7 @@ pub struct ActiveSystem {
     /// Accumulated game time in seconds for orbital calculation.
     game_time_s: f64,
     /// Catalog name for display.
+    #[allow(dead_code)]
     pub catalog_name: String,
     /// Index of body whose icosphere is hidden (terrain active for this planet).
     pub hidden_body_index: Option<usize>,
@@ -204,7 +208,7 @@ impl ActiveSystem {
 
             // Scale up if too small to see (minimum 4 pixels on screen)
             let scale = if angular_pixels < MIN_PIXELS && angular_pixels > 0.001 {
-                (MIN_PIXELS / angular_pixels) as f32
+                MIN_PIXELS / angular_pixels
             } else {
                 1.0
             };
@@ -385,8 +389,8 @@ fn push_planet_body(
     }
 
     // Ring system (if planet has one)
-    if planet.has_rings {
-        if let Some(ref ring) = planet.ring_params {
+    if planet.has_rings
+        && let Some(ref ring) = planet.ring_params {
             log::info!("  + Rings for Planet {} (inner {:.1}x, outer {:.1}x)",
                 index + 1, ring.inner_ratio, ring.outer_ratio);
             let ring_mesh = planet_mesh::build_ring_mesh(
@@ -405,6 +409,5 @@ fn push_planet_body(
                 parent_index: planet_body_idx,
                 label: format!("Ring {}", index + 1),
             });
-        }
     }
 }

@@ -42,7 +42,9 @@ enum MenuScene {
 
 /// Menu items (indices).
 const MENU_CONTINUE: usize = 0;
+#[allow(dead_code)]
 const MENU_NEW_GAME: usize = 1;
+#[allow(dead_code)]
 const MENU_SETTINGS: usize = 2;
 const MENU_ITEM_COUNT: usize = 3;
 
