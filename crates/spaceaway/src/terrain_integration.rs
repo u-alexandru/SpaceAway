@@ -1,12 +1,13 @@
 //! Terrain integration: activates CDLOD terrain when camera approaches a
-//! landable planet, streams chunks, uploads meshes to GPU, and builds
-//! pre-rebased DrawCommands.
+//! landable planet, streams chunks, uploads meshes to GPU, computes gravity,
+//! and manages HeightField colliders for physics.
 
 use std::collections::HashMap;
 
 use glam::{Mat4, Vec3};
 use sa_core::Handle;
 use sa_math::WorldPos;
+use sa_physics::PhysicsWorld;
 use sa_render::{DrawCommand, MeshData, MeshMarker, MeshStore, Vertex};
 use sa_terrain::quadtree::{max_lod_levels, select_visible_nodes};
 use sa_terrain::streaming::ChunkStreaming;
@@ -14,6 +15,7 @@ use sa_terrain::{ChunkKey, TerrainConfig};
 use sa_universe::PlanetSubType;
 
 use crate::solar_system::ActiveSystem;
+use crate::terrain_colliders::TerrainColliders;
 
 /// Light-years to meters conversion factor.
 const LY_TO_M: f64 = 9.461e15;
@@ -34,6 +36,8 @@ pub struct TerrainFrameResult {
     pub draw_commands: Vec<DrawCommand>,
     /// Body index to hide in the solar system renderer (the icosphere).
     pub hidden_body_index: Option<usize>,
+    /// Blended gravity state (ship <-> planet transition).
+    pub gravity: Option<sa_terrain::gravity::GravityState>,
 }
 
 // ---------------------------------------------------------------------------
@@ -54,6 +58,10 @@ pub struct TerrainManager {
     max_lod: u8,
     /// Maximum terrain displacement in meters.
     max_displacement_m: f64,
+    /// Planet surface gravity in m/s^2.
+    surface_gravity_ms2: f32,
+    /// Collider management state.
+    col: TerrainColliders,
 }
 
 impl TerrainManager {
@@ -62,6 +70,7 @@ impl TerrainManager {
         config: TerrainConfig,
         planet_center_ly: WorldPos,
         body_index: usize,
+        surface_gravity_ms2: f32,
     ) -> Self {
         let face_size_m = config.radius_m * std::f64::consts::FRAC_PI_2;
         let max_lod = max_lod_levels(face_size_m);
@@ -78,31 +87,34 @@ impl TerrainManager {
             body_index,
             max_lod,
             max_displacement_m,
+            surface_gravity_ms2,
+            col: TerrainColliders::new(),
         }
     }
 
+    /// Surface gravity of the planet in m/s^2.
+    pub fn surface_gravity(&self) -> f32 {
+        self.surface_gravity_ms2
+    }
+
     /// Run one frame of terrain streaming and produce draw commands.
-    ///
-    /// `camera_galactic_ly`: camera position in galactic light-years.
-    /// Returns draw commands with `pre_rebased: true`.
     pub fn update(
         &mut self,
         camera_galactic_ly: WorldPos,
         planet_center_ly: WorldPos,
         mesh_store: &mut MeshStore,
         device: &wgpu::Device,
+        physics: &mut PhysicsWorld,
+        ship_down: [f32; 3],
     ) -> TerrainFrameResult {
-        // Update planet position (orbits move).
         self.planet_center_ly = planet_center_ly;
 
-        // Camera position relative to planet center, in meters (f64).
         let cam_rel_m = [
             (camera_galactic_ly.x - planet_center_ly.x) * LY_TO_M,
             (camera_galactic_ly.y - planet_center_ly.y) * LY_TO_M,
             (camera_galactic_ly.z - planet_center_ly.z) * LY_TO_M,
         ];
 
-        // Select visible quadtree nodes.
         let visible = select_visible_nodes(
             cam_rel_m,
             self.config.radius_m,
@@ -110,66 +122,54 @@ impl TerrainManager {
             self.max_displacement_m,
         );
 
-        // Stream chunks (request new, receive completed).
-        let (new_chunks, _removed_keys) =
+        let (new_chunks, removed_keys) =
             self.streaming.update(&visible, &self.config);
 
-        // Upload newly generated chunks to GPU.
+        // Upload newly generated chunks to GPU and cache for colliders.
         for chunk in &new_chunks {
             let mesh_data = chunk_to_mesh_data(chunk);
             let handle = mesh_store.upload(device, &mesh_data);
             self.gpu_meshes.insert(chunk.key, handle);
+            self.col.cache_chunk(chunk.key, chunk);
         }
 
-        // Note: we do NOT remove GPU meshes for _removed_keys because
-        // MeshStore has no remove API. The handles remain valid but unused;
-        // they will be cleaned up when the TerrainManager is dropped and
-        // a new one created.
+        // Remove colliders for evicted chunks.
+        self.col.remove_evicted(physics, &removed_keys);
 
-        // Build draw commands for every visible node that has a GPU mesh.
-        let planet_m = [
-            planet_center_ly.x * LY_TO_M,
-            planet_center_ly.y * LY_TO_M,
-            planet_center_ly.z * LY_TO_M,
-        ];
-        let camera_m = [
-            camera_galactic_ly.x * LY_TO_M,
-            camera_galactic_ly.y * LY_TO_M,
-            camera_galactic_ly.z * LY_TO_M,
-        ];
+        // --- Gravity computation ---
+        let gravity = sa_terrain::gravity::compute_gravity(
+            cam_rel_m,
+            ship_down,
+            self.config.radius_m,
+            self.surface_gravity_ms2,
+            9.81,
+        );
 
-        let mut draw_commands = Vec::with_capacity(visible.len());
-        for node in &visible {
-            let key = ChunkKey {
-                face: node.face as u8,
-                lod: node.lod,
-                x: node.x,
-                y: node.y,
-            };
-            if let Some(&handle) = self.gpu_meshes.get(&key) {
-                // Chunk center is planet-relative meters (from ChunkData or
-                // recomputed from the node center on the sphere).
-                let chunk_center_m = node.center;
+        // --- Collider management ---
+        self.col.update(
+            physics,
+            cam_rel_m,
+            self.config.radius_m,
+            self.max_displacement_m,
+        );
 
-                // Model offset: planet_center + chunk_center - camera, all in
-                // f64 meters, then cast to f32 for the matrix.
-                let ox = (planet_m[0] + chunk_center_m[0] - camera_m[0]) as f32;
-                let oy = (planet_m[1] + chunk_center_m[1] - camera_m[1]) as f32;
-                let oz = (planet_m[2] + chunk_center_m[2] - camera_m[2]) as f32;
-
-                let model = Mat4::from_translation(Vec3::new(ox, oy, oz));
-                draw_commands.push(DrawCommand {
-                    mesh: handle,
-                    model_matrix: model,
-                    pre_rebased: true,
-                });
-            }
-        }
+        // Build draw commands.
+        let draw_commands = self.build_draw_commands(
+            &visible,
+            planet_center_ly,
+            camera_galactic_ly,
+        );
 
         TerrainFrameResult {
             draw_commands,
             hidden_body_index: Some(self.body_index),
+            gravity: Some(gravity),
         }
+    }
+
+    /// Remove all terrain colliders and the terrain rigid body from physics.
+    pub fn cleanup(&mut self, physics: &mut PhysicsWorld) {
+        self.col.cleanup(physics);
     }
 
     /// Returns true when the camera has moved far enough to deactivate terrain.
@@ -184,6 +184,47 @@ impl TerrainManager {
     /// Body index this terrain replaces.
     pub fn body_index(&self) -> usize {
         self.body_index
+    }
+
+    fn build_draw_commands(
+        &self,
+        visible: &[sa_terrain::quadtree::VisibleNode],
+        planet_center_ly: WorldPos,
+        camera_galactic_ly: WorldPos,
+    ) -> Vec<DrawCommand> {
+        let planet_m = [
+            planet_center_ly.x * LY_TO_M,
+            planet_center_ly.y * LY_TO_M,
+            planet_center_ly.z * LY_TO_M,
+        ];
+        let camera_m = [
+            camera_galactic_ly.x * LY_TO_M,
+            camera_galactic_ly.y * LY_TO_M,
+            camera_galactic_ly.z * LY_TO_M,
+        ];
+
+        let mut cmds = Vec::with_capacity(visible.len());
+        for node in visible {
+            let key = ChunkKey {
+                face: node.face as u8,
+                lod: node.lod,
+                x: node.x,
+                y: node.y,
+            };
+            if let Some(&handle) = self.gpu_meshes.get(&key) {
+                let c = node.center;
+                let ox = (planet_m[0] + c[0] - camera_m[0]) as f32;
+                let oy = (planet_m[1] + c[1] - camera_m[1]) as f32;
+                let oz = (planet_m[2] + c[2] - camera_m[2]) as f32;
+
+                cmds.push(DrawCommand {
+                    mesh: handle,
+                    model_matrix: Mat4::from_translation(Vec3::new(ox, oy, oz)),
+                    pre_rebased: true,
+                });
+            }
+        }
+        cmds
     }
 }
 
@@ -224,12 +265,12 @@ fn is_landable(sub_type: PlanetSubType) -> bool {
 
 /// Find the nearest landable planet within activation range.
 ///
-/// Returns `(body_index, planet_center_ly, TerrainConfig)` if a planet
-/// qualifies, or `None` if no planet is close enough.
+/// Returns `(body_index, planet_center_ly, TerrainConfig, surface_gravity_ms2)`
+/// if a planet qualifies, or `None` if no planet is close enough.
 pub fn find_terrain_planet(
     active_system: &ActiveSystem,
     camera_ly: WorldPos,
-) -> Option<(usize, WorldPos, TerrainConfig)> {
+) -> Option<(usize, WorldPos, TerrainConfig, f32)> {
     let positions = active_system.compute_positions_ly_pub();
 
     let mut best: Option<(usize, f64, WorldPos)> = None;
@@ -240,7 +281,6 @@ pub fn find_terrain_planet(
             None => continue,
         };
 
-        // Only consider bodies that have planet_data (actual planets).
         let (_color_seed, sub_type, _disp_frac, _mass, _re) =
             match active_system.planet_data(i) {
                 Some(data) => data,
@@ -251,7 +291,6 @@ pub fn find_terrain_planet(
             continue;
         }
 
-        // Distance in meters.
         let dx = (camera_ly.x - pos.x) * LY_TO_M;
         let dy = (camera_ly.y - pos.y) * LY_TO_M;
         let dz = (camera_ly.z - pos.z) * LY_TO_M;
@@ -261,7 +300,6 @@ pub fn find_terrain_planet(
             continue;
         }
 
-        // Pick closest qualifying planet.
         let dominated = match &best {
             Some((_, best_dist, _)) => dist_m < *best_dist,
             None => true,
@@ -273,9 +311,8 @@ pub fn find_terrain_planet(
 
     let (body_idx, _dist, center_ly) = best?;
 
-    // Reconstruct config from planet data.
     let radius_m = active_system.body_radius_m(body_idx)?;
-    let (color_seed, sub_type, disp_frac, _mass, _re) =
+    let (color_seed, sub_type, disp_frac, mass_earth, radius_earth) =
         active_system.planet_data(body_idx)?;
 
     let config = TerrainConfig {
@@ -285,5 +322,8 @@ pub fn find_terrain_planet(
         displacement_fraction: disp_frac,
     };
 
-    Some((body_idx, center_ly, config))
+    let surface_grav =
+        sa_terrain::gravity::surface_gravity(mass_earth, radius_earth);
+
+    Some((body_idx, center_ly, config, surface_grav))
 }

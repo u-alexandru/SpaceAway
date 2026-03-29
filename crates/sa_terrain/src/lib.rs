@@ -9,6 +9,7 @@ pub mod heightmap;
 pub mod biome;
 pub mod chunk;
 pub mod streaming;
+pub mod gravity;
 
 use sa_universe::PlanetSubType;
 

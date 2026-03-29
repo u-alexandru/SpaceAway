@@ -30,6 +30,9 @@ pub const PLAYER: Group = Group::GROUP_3; // 0x0004
 /// Interactable sensor volumes (raycast-only detection).
 pub const INTERACTABLE: Group = Group::GROUP_4; // 0x0008
 
+/// Terrain colliders (ground surface for planet landing).
+pub const TERRAIN: Group = Group::GROUP_5;     // 0x0010
+
 // Membership + filter helpers:
 // SHIP_INTERIOR colliders are in SHIP_INTERIOR, collide with PLAYER.
 // PLAYER is in PLAYER, collides with SHIP_INTERIOR | WORLD.

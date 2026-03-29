@@ -5,6 +5,7 @@ mod ship_colliders;
 mod ship_setup;
 mod solar_system;
 mod star_streaming;
+mod terrain_colliders;
 mod terrain_integration;
 mod ui;
 
@@ -245,6 +246,8 @@ struct App {
     wants_star_lock: bool,
     /// Active terrain manager (when near a landable planet).
     terrain: Option<terrain_integration::TerrainManager>,
+    /// Gravity state from terrain (planet gravity blending).
+    terrain_gravity: Option<sa_terrain::gravity::GravityState>,
 }
 
 impl App {
@@ -328,6 +331,7 @@ impl App {
             menu: None,
             wants_star_lock: false,
             terrain: None,
+            terrain_gravity: None,
         }
     }
 
@@ -902,7 +906,9 @@ impl ApplicationHandler for App {
                             }
                             KeyCode::Digit9 => {
                                 // Debug: jump to a DIFFERENT star (skip nearest, pick next)
+                                if let Some(t) = &mut self.terrain { t.cleanup(&mut self.physics); }
                                 self.terrain = None;
+                                self.terrain_gravity = None;
                                 self.active_system = None;
                                 self.navigation.update_nearby(self.galactic_position);
                                 let skip = (self.teleport_counter as usize) % self.navigation.nearby_stars.len().max(1);
@@ -1287,7 +1293,9 @@ impl ApplicationHandler for App {
                                     self.audio.announce(sa_audio::VoiceId::EngagingWarp);
                                     // Unload active system when entering warp
                                     if self.active_system.is_some() {
+                                        if let Some(t) = &mut self.terrain { t.cleanup(&mut self.physics); }
                                         self.terrain = None;
+                                        self.terrain_gravity = None;
                                         self.active_system = None;
                                         log::info!("Left solar system — entering warp");
                                     }
@@ -1354,6 +1362,23 @@ impl ApplicationHandler for App {
                                 }
                             }
                             log::info!("Left helm seated mode — player teleported to ship");
+                        }
+                    }
+
+                    // Apply terrain gravity to ship body before step.
+                    if let Some(ref grav) = self.terrain_gravity {
+                        if grav.blend > 0.01 {
+                            if let Some(ship) = &self.ship {
+                                if let Some(body) = self.physics.get_body_mut(ship.body_handle) {
+                                    let grav_accel = nalgebra::Vector3::new(
+                                        grav.direction[0] * grav.magnitude,
+                                        grav.direction[1] * grav.magnitude,
+                                        grav.direction[2] * grav.magnitude,
+                                    );
+                                    let vel = body.linvel() + grav_accel * dt.min(1.0 / 30.0);
+                                    body.set_linvel(vel, true);
+                                }
+                            }
                         }
                     }
 
@@ -1621,6 +1646,18 @@ impl ApplicationHandler for App {
                                 let vel = body.linvel() + accel * physics_dt;
                                 let vel = vel * (1.0 - 0.001 * physics_dt).max(0.0);
                                 body.set_linvel(vel, true);
+                            }
+                            // Apply terrain gravity (planet surface pull).
+                            if let Some(ref grav) = self.terrain_gravity {
+                                if grav.blend > 0.01 {
+                                    let grav_accel = nalgebra::Vector3::new(
+                                        grav.direction[0] * grav.magnitude,
+                                        grav.direction[1] * grav.magnitude,
+                                        grav.direction[2] * grav.magnitude,
+                                    );
+                                    let vel = body.linvel() + grav_accel * physics_dt;
+                                    body.set_linvel(vel, true);
+                                }
                             }
                             // Angular damping ALWAYS applies (not just when engine on).
                             // Without this, Q/E roll torques create permanent spin.
@@ -2186,12 +2223,14 @@ impl ApplicationHandler for App {
 
                 // --- Terrain streaming (before immutable renderer borrow) ---
                 // Deactivation check
-                if let Some(terrain_mgr) = &self.terrain {
+                if let Some(terrain_mgr) = &mut self.terrain {
                     if terrain_mgr.should_deactivate(self.galactic_position) {
                         if let Some(sys) = &mut self.active_system {
                             sys.hidden_body_index = None;
                         }
+                        terrain_mgr.cleanup(&mut self.physics);
                         self.terrain = None;
+                        self.terrain_gravity = None;
                         log::info!("Terrain deactivated");
                     }
                 }
@@ -2199,26 +2238,40 @@ impl ApplicationHandler for App {
                 // Activation check (only if no terrain active and in a solar system)
                 if self.terrain.is_none()
                     && let Some(sys) = &self.active_system
-                    && let Some((body_idx, planet_pos, config)) =
+                    && let Some((body_idx, planet_pos, config, surface_grav)) =
                         terrain_integration::find_terrain_planet(sys, self.galactic_position)
                 {
                     log::info!(
-                        "Terrain activated for body {} (radius {:.0} km)",
+                        "Terrain activated for body {} (radius {:.0} km, g={:.2} m/s2)",
                         body_idx,
                         config.radius_m / 1000.0,
+                        surface_grav,
                     );
                     self.terrain = Some(terrain_integration::TerrainManager::new(
-                        config, planet_pos, body_idx,
+                        config, planet_pos, body_idx, surface_grav,
                     ));
                 }
 
                 // Deactivate terrain if no solar system is active
-                if self.active_system.is_none() && self.terrain.is_some() {
-                    self.terrain = None;
-                    log::info!("Terrain deactivated (no solar system)");
+                if self.active_system.is_none() {
+                    if let Some(terrain_mgr) = &mut self.terrain {
+                        terrain_mgr.cleanup(&mut self.physics);
+                        self.terrain = None;
+                        self.terrain_gravity = None;
+                        log::info!("Terrain deactivated (no solar system)");
+                    }
                 }
 
-                // Update terrain and collect draw commands (needs &mut renderer)
+                // Update terrain and collect draw commands (needs &mut renderer + &mut physics)
+                // Ship "down" direction for gravity blending.
+                let ship_down = self.ship.as_ref()
+                    .and_then(|s| self.physics.get_body(s.body_handle))
+                    .map(|body| {
+                        let down = body.rotation() * nalgebra::Vector3::new(0.0, -1.0, 0.0);
+                        [down.x, down.y, down.z]
+                    })
+                    .unwrap_or([0.0, -1.0, 0.0]);
+
                 let terrain_commands: Vec<DrawCommand> = if let Some(terrain_mgr) = &mut self.terrain {
                     if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
                         let planet_pos = self.active_system.as_ref()
@@ -2232,15 +2285,19 @@ impl ApplicationHandler for App {
                             planet_pos,
                             &mut renderer.mesh_store,
                             &gpu.device,
+                            &mut self.physics,
+                            ship_down,
                         );
                         if let Some(sys) = &mut self.active_system {
                             sys.hidden_body_index = result.hidden_body_index;
                         }
+                        self.terrain_gravity = result.gravity;
                         result.draw_commands
                     } else {
                         vec![]
                     }
                 } else {
+                    self.terrain_gravity = None;
                     vec![]
                 };
 
@@ -2383,7 +2440,9 @@ impl ApplicationHandler for App {
                         let au_in_ly = 1.581e-5_f64;
                         if dist > 100.0 * au_in_ly {
                             log::info!("Left system boundary — unloading");
+                            if let Some(t) = &mut self.terrain { t.cleanup(&mut self.physics); }
                             self.terrain = None;
+                            self.terrain_gravity = None;
                             self.active_system = None;
                         }
                     }
