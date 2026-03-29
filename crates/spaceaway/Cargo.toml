@@ -27,3 +27,5 @@ sa_audio.workspace = true
 nalgebra.workspace = true
 egui.workspace = true
 egui-wgpu.workspace = true
+sa_terrain.workspace = true
+crossbeam-channel.workspace = true

@@ -5,6 +5,7 @@ mod ship_colliders;
 mod ship_setup;
 mod solar_system;
 mod star_streaming;
+mod terrain_integration;
 mod ui;
 
 use glam::{Mat4, Vec3};

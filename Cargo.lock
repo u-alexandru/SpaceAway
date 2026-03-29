@@ -2918,6 +2918,7 @@ name = "spaceaway"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "crossbeam-channel",
  "egui",
  "egui-wgpu",
  "env_logger",
@@ -2937,6 +2938,7 @@ dependencies = [
  "sa_render",
  "sa_ship",
  "sa_survival",
+ "sa_terrain",
  "sa_universe",
  "wgpu",
  "winit",
