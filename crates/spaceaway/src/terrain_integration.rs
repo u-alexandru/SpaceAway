@@ -211,7 +211,13 @@ impl TerrainManager {
         let dy = (camera_ly.y - self.planet_center_ly.y) * LY_TO_M;
         let dz = (camera_ly.z - self.planet_center_ly.z) * LY_TO_M;
         let dist_m = (dx * dx + dy * dy + dz * dz).sqrt();
-        dist_m > self.config.radius_m * DEACTIVATE_RADIUS_MULT
+        let threshold = self.config.radius_m * DEACTIVATE_RADIUS_MULT;
+        let should = dist_m > threshold;
+        if !should && dist_m > threshold * 0.5 {
+            log::debug!("Terrain deactivation check: dist={:.0}km, threshold={:.0}km, deactivate={}",
+                dist_m / 1000.0, threshold / 1000.0, should);
+        }
+        should
     }
 
     /// Body index this terrain replaces.

@@ -2268,14 +2268,22 @@ impl ApplicationHandler for App {
 
                 // --- Terrain streaming (before immutable renderer borrow) ---
                 // Deactivation check
-                if let Some(terrain_mgr) = &mut self.terrain
-                    && terrain_mgr.should_deactivate(self.galactic_position)
-                {
+                // Check deactivation separately to avoid borrow issues
+                let should_deactivate_terrain = self.terrain.as_ref()
+                    .is_some_and(|t| {
+                        let result = t.should_deactivate(self.galactic_position);
+                        if self.time.frame_count() % 120 == 0 {
+                            log::info!("Deactivation check: should_deactivate={}", result);
+                        }
+                        result
+                    });
+                if should_deactivate_terrain {
                     if let Some(sys) = &mut self.active_system {
                         sys.hidden_body_index = None;
                     }
-                    terrain_mgr.cleanup(&mut self.physics);
-                    self.terrain = None;
+                    if let Some(mut t) = self.terrain.take() {
+                        t.cleanup(&mut self.physics);
+                    }
                     self.terrain_gravity = None;
                     log::info!("Terrain deactivated");
                 }
