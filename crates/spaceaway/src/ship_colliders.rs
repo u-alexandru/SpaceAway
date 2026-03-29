@@ -33,6 +33,10 @@ pub const INTERACTABLE: Group = Group::GROUP_4; // 0x0008
 /// Terrain colliders (ground surface for planet landing).
 pub const TERRAIN: Group = Group::GROUP_5;     // 0x0010
 
+/// Landing skid colliders — interact with TERRAIN only.
+#[allow(dead_code)]
+pub const SHIP_EXTERIOR: Group = Group::GROUP_6; // 0x0020
+
 // Membership + filter helpers:
 // SHIP_INTERIOR colliders are in SHIP_INTERIOR, collide with PLAYER.
 // PLAYER is in PLAYER, collides with SHIP_INTERIOR | WORLD.

@@ -21,6 +21,16 @@ pub struct Ship {
     pub max_torque: f32,
 }
 
+/// Landing skid positions in ship-local space (bottom of hull).
+const SKID_POSITIONS: [[f32; 3]; 4] = [
+    [0.0, -1.5, -12.0], // fore
+    [0.0, -1.5, 12.0],  // aft
+    [-2.0, -1.5, 0.0],  // port
+    [2.0, -1.5, 0.0],   // starboard
+];
+const SKID_RADIUS: f32 = 0.3;
+const SKID_FRICTION: f32 = 0.6;
+
 impl Ship {
     /// Ship physics constants.
     pub const MASS: f32 = 50_000.0;
@@ -212,6 +222,38 @@ impl Ship {
             .map(|b| { let v = b.linvel(); (v.x, v.y, v.z) })
             .unwrap_or((0.0, 0.0, 0.0))
     }
+
+    /// Create 4 landing skid colliders on the ship body.
+    /// Returns collider handles for later removal/query.
+    /// `exterior_group`: the collision group for ship exterior (SHIP_EXTERIOR).
+    /// `terrain_group`: the group to collide with (TERRAIN).
+    pub fn add_landing_skids(
+        &self,
+        physics: &mut PhysicsWorld,
+        exterior_group: rapier3d::prelude::Group,
+        terrain_group: rapier3d::prelude::Group,
+    ) -> [ColliderHandle; 4] {
+        let groups = rapier3d::prelude::InteractionGroups::new(
+            exterior_group,
+            terrain_group,
+        );
+        let mut handles = [rapier3d::prelude::ColliderHandle::invalid(); 4];
+        for (i, pos) in SKID_POSITIONS.iter().enumerate() {
+            let collider = rapier3d::prelude::ColliderBuilder::ball(SKID_RADIUS)
+                .friction(SKID_FRICTION)
+                .restitution(0.0)
+                .collision_groups(groups)
+                .translation(rapier3d::prelude::vector![pos[0], pos[1], pos[2]])
+                .build();
+            handles[i] = physics.add_collider(collider, self.body_handle);
+        }
+        handles
+    }
+
+    /// Landing skid positions in ship-local space (for raycasting).
+    pub fn skid_positions() -> &'static [[f32; 3]; 4] {
+        &SKID_POSITIONS
+    }
 }
 
 #[cfg(test)]
@@ -346,5 +388,23 @@ mod tests {
             angvel.magnitude() > 0.0,
             "ship should have angular velocity after torque"
         );
+    }
+
+    #[test]
+    fn landing_skids_created() {
+        let mut physics = PhysicsWorld::new();
+        let ship = Ship::new(&mut physics, 0.0, 5.0, 0.0);
+        let skids = ship.add_landing_skids(
+            &mut physics,
+            rapier3d::prelude::Group::GROUP_6,
+            rapier3d::prelude::Group::GROUP_5,
+        );
+        for handle in &skids {
+            assert!(physics.collider_set.get(*handle).is_some(), "skid collider should exist");
+        }
+        for handle in &skids {
+            let coll = physics.collider_set.get(*handle).unwrap();
+            assert!(!coll.is_sensor(), "skid colliders must be solid, not sensors");
+        }
     }
 }
