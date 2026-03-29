@@ -39,9 +39,17 @@ impl GpuContext {
         let mut config = surface
             .get_default_config(&adapter, size.width.max(1), size.height.max(1))
             .expect("Surface not supported by adapter");
-        // Fifo = VSync (no tearing, capped at display refresh rate).
-        // Immediate = uncapped but tears. Metal doesn't support Mailbox.
-        config.present_mode = wgpu::PresentMode::Fifo;
+        // Prefer sRGB format for correct gamma — DX12 may default to linear
+        // which makes colors appear washed out / brighter than intended.
+        let caps = surface.get_capabilities(&adapter);
+        if let Some(srgb) = caps.formats.iter().find(|f| f.is_srgb()) {
+            config.format = *srgb;
+        }
+        // AutoVsync: adapts to platform capabilities.
+        // On macOS (Metal): behaves like Fifo (VSync).
+        // On Windows (DX12): uses Mailbox if available (uncapped, no tearing),
+        // falls back to Fifo. User can toggle with V key.
+        config.present_mode = wgpu::PresentMode::AutoVsync;
         surface.configure(&device, &config);
 
         Self { surface, device, queue, config }
