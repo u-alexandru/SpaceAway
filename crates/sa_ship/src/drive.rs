@@ -3,7 +3,7 @@
 pub const SPEED_OF_LIGHT: f64 = 299_792_458.0;
 pub const METERS_PER_LY: f64 = 9.461e15;
 pub const LY_PER_SECOND_AT_C: f64 = 3.169e-8;
-pub const CRUISE_MIN_C: f64 = 1.0;
+pub const CRUISE_MIN_C: f64 = 0.00033; // ~100 km/s — fills gap between impulse and interplanetary
 pub const CRUISE_MAX_C: f64 = 500.0;
 pub const WARP_MIN_C: f64 = 100_000.0;
 pub const WARP_MAX_C: f64 = 5_000_000.0;

@@ -1619,7 +1619,7 @@ impl ApplicationHandler for App {
                                 let forward = rot * nalgebra::Vector3::new(0.0, 0.0, -1.0);
                                 let accel = forward * (ship.throttle * ship.max_thrust / body.mass());
                                 let vel = body.linvel() + accel * physics_dt;
-                                let vel = vel * (1.0 - 0.01 * physics_dt).max(0.0);
+                                let vel = vel * (1.0 - 0.001 * physics_dt).max(0.0);
                                 body.set_linvel(vel, true);
                             }
                             // Angular damping ALWAYS applies (not just when engine on).

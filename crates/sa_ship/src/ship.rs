@@ -36,7 +36,7 @@ impl Ship {
         let body = RigidBodyBuilder::dynamic()
             .translation(nalgebra::Vector3::new(x, y, z))
             .gravity_scale(0.0) // No gravity on the ship (space)
-            .linear_damping(0.01) // Very slight linear damping (hull drag from micro-debris)
+            .linear_damping(0.001) // Very slight linear damping — terminal velocity ~10 km/s
             .angular_damping(5.0) // Internal stabilization (gyroscopes/reaction wheels).
                                   // Prevents crew movement, impacts, or minor forces from
                                   // accumulating into visible rotation. Intentional helm
