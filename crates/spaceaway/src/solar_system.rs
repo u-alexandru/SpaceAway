@@ -37,8 +37,7 @@ struct LoadedBody {
     orbital_period_s: f64,
     /// Initial orbital phase in radians.
     initial_phase: f64,
-    /// Body radius in meters (for future angular-size LOD).
-    #[allow(dead_code)]
+    /// Body radius in meters (for future angular-size LOD and terrain integration).
     radius_m: f64,
     /// Index of parent body in `bodies` vec (-1 for star/planets that orbit the star).
     parent_index: i32,
@@ -59,6 +58,8 @@ pub struct ActiveSystem {
     game_time_s: f64,
     /// Catalog name for display.
     pub catalog_name: String,
+    /// Index of body whose icosphere is hidden (terrain active for this planet).
+    pub hidden_body_index: Option<usize>,
 }
 
 impl ActiveSystem {
@@ -144,6 +145,7 @@ impl ActiveSystem {
             bodies,
             game_time_s: 0.0,
             catalog_name,
+            hidden_body_index: None,
         }
     }
 
@@ -171,6 +173,17 @@ impl ActiveSystem {
 
         let mut commands = Vec::with_capacity(self.bodies.len());
         for (i, body) in self.bodies.iter().enumerate() {
+            // Skip body hidden by terrain (and its children: atmosphere, rings)
+            if let Some(hidden) = self.hidden_body_index {
+                if i == hidden {
+                    continue;
+                }
+                // Skip children of hidden body (atmosphere, rings share parent_index)
+                if body.parent_index == hidden as i32 {
+                    continue;
+                }
+            }
+
             let pos = world_positions[i];
             let dx_m = ((pos.x - camera_galactic_pos.x) * LY_TO_METERS) as f32;
             let dy_m = ((pos.y - camera_galactic_pos.y) * LY_TO_METERS) as f32;
@@ -245,6 +258,36 @@ impl ActiveSystem {
                 line
             })
             .collect()
+    }
+
+    /// Get planet radius in meters for a body index.
+    pub fn body_radius_m(&self, index: usize) -> Option<f64> {
+        self.bodies.get(index).map(|b| b.radius_m)
+    }
+
+    /// Get planet data needed for terrain config.
+    /// Returns (color_seed, sub_type, displacement_fraction, mass_earth, radius_earth).
+    pub fn planet_data(&self, index: usize) -> Option<(u64, sa_universe::PlanetSubType, f32, f32, f32)> {
+        let body = self.bodies.get(index)?;
+        for planet in &self.system.planets {
+            let planet_radius_m = planet.radius_earth as f64 * 6_371_000.0;
+            if (body.radius_m - planet_radius_m).abs() < 1000.0 {
+                let amplitude = match planet.sub_type {
+                    sa_universe::PlanetSubType::Molten => 0.01,
+                    sa_universe::PlanetSubType::Barren | sa_universe::PlanetSubType::Frozen => 0.02,
+                    sa_universe::PlanetSubType::Temperate | sa_universe::PlanetSubType::Ocean => 0.03,
+                    sa_universe::PlanetSubType::Desert => 0.04,
+                    _ => 0.03,
+                };
+                return Some((planet.color_seed, planet.sub_type, amplitude, planet.mass_earth, planet.radius_earth));
+            }
+        }
+        None
+    }
+
+    /// Public access to body positions in light-years (for terrain integration).
+    pub fn compute_positions_ly_pub(&self) -> Vec<sa_math::WorldPos> {
+        self.compute_positions_ly()
     }
 
     /// Compute galactic positions (light-years) for every body.
