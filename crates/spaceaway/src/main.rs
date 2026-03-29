@@ -1720,6 +1720,10 @@ impl ApplicationHandler for App {
                             .map(|b| *b.position())
                             .unwrap_or_else(nalgebra::Isometry3::identity);
                         let ship_speed_ms = ship.speed(&self.physics);
+                        let ship_vel_raw = ship.speed_vector(&self.physics);
+                        let ship_velocity = nalgebra::Vector3::new(
+                            ship_vel_raw.0, ship_vel_raw.1, ship_vel_raw.2,
+                        );
                         let gravity_raw = self.terrain_gravity.as_ref()
                             .map(|g| g.direction)
                             .unwrap_or([0.0, -1.0, 0.0]);
@@ -1734,6 +1738,7 @@ impl ApplicationHandler for App {
                             physics: &self.physics,
                             ship_iso: &ship_iso,
                             ship_speed_ms,
+                            ship_velocity,
                             gravity_dir,
                             planet_gravity,
                             terrain_active,
@@ -1746,7 +1751,6 @@ impl ApplicationHandler for App {
                         {
                             body.set_linvel(nalgebra::Vector3::zeros(), true);
                             body.set_angvel(nalgebra::Vector3::zeros(), true);
-                            body.set_gravity_scale(0.0, true);
                         }
                         if let Some(ref impact) = landing_result.impact {
                             log::info!(
@@ -1922,6 +1926,10 @@ impl ApplicationHandler for App {
                             .map(|b| *b.position())
                             .unwrap_or_else(nalgebra::Isometry3::identity);
                         let ship_speed_ms = ship.speed(&self.physics);
+                        let ship_vel_raw = ship.speed_vector(&self.physics);
+                        let ship_velocity = nalgebra::Vector3::new(
+                            ship_vel_raw.0, ship_vel_raw.1, ship_vel_raw.2,
+                        );
                         let gravity_raw = self.terrain_gravity.as_ref()
                             .map(|g| g.direction)
                             .unwrap_or([0.0, -1.0, 0.0]);
@@ -1936,6 +1944,7 @@ impl ApplicationHandler for App {
                             physics: &self.physics,
                             ship_iso: &ship_iso,
                             ship_speed_ms,
+                            ship_velocity,
                             gravity_dir,
                             planet_gravity,
                             terrain_active,
@@ -1948,7 +1957,6 @@ impl ApplicationHandler for App {
                         {
                             body.set_linvel(nalgebra::Vector3::zeros(), true);
                             body.set_angvel(nalgebra::Vector3::zeros(), true);
-                            body.set_gravity_scale(0.0, true);
                         }
                         if let Some(ref impact) = landing_result.impact {
                             log::info!(

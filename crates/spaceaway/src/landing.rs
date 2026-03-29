@@ -13,6 +13,7 @@
 use nalgebra::{Isometry3, Point3, Unit, Vector3};
 use rapier3d::prelude::{Group, InteractionGroups, QueryFilter};
 use sa_physics::PhysicsWorld;
+use sa_ship::Ship;
 
 use crate::ship_colliders::TERRAIN;
 
@@ -31,15 +32,6 @@ const FLYING_THRESHOLD: f32 = 10.0;
 
 /// Speed below which SLIDING → LANDED lock is allowed (m/s).
 const LOCK_SPEED_THRESHOLD: f32 = 5.0;
-
-/// Ship-local skid positions: [x, y, z] relative to ship origin.
-/// Fore-left, Fore-right, port-mid, starboard-mid (Y is belly of the ship).
-const SKID_POSITIONS: [[f32; 3]; 4] = [
-    [0.0, -1.5, -12.0],
-    [0.0, -1.5, 12.0],
-    [-2.0, -1.5, 0.0],
-    [2.0, -1.5, 0.0],
-];
 
 // ---------------------------------------------------------------------------
 // Public types — kept at top of file per convention
@@ -73,10 +65,10 @@ impl ImpactCategory {
     }
 }
 
-/// Event emitted the moment the ship transitions SLIDING → LANDED.
+/// Event emitted the moment the ship transitions FLYING → SLIDING (first ground contact).
 #[derive(Debug, Clone)]
 pub struct LandingImpactEvent {
-    /// Combined ship speed at the moment of touchdown (m/s).
+    /// Vertical speed (component along gravity direction) at the moment of touchdown (m/s).
     pub impact_speed_ms: f32,
     /// Speed contribution measured at each individual skid (m/s).
     // Stored for future use by audio/damage systems (Task 8+).
@@ -111,7 +103,7 @@ pub struct LandingUpdate {
     // Stored for future use by altitude HUD display (Task 7).
     #[allow(dead_code)]
     pub min_clearance: Option<f32>,
-    /// Impact event if the state transitioned to `Landed` this frame, else `None`.
+    /// Impact event if the state transitioned to `Sliding` (first ground contact) this frame, else `None`.
     pub impact: Option<LandingImpactEvent>,
 }
 
@@ -123,6 +115,8 @@ pub struct LandingParams<'a> {
     pub ship_iso: &'a Isometry3<f32>,
     /// Scalar ship speed in m/s.
     pub ship_speed_ms: f32,
+    /// Ship velocity vector in world space (m/s).
+    pub ship_velocity: Vector3<f32>,
     /// Unit vector pointing toward the planet centre (gravity direction).
     pub gravity_dir: Unit<Vector3<f32>>,
     /// Surface gravity magnitude (m/s²) of the current planet.
@@ -188,6 +182,18 @@ impl LandingSystem {
         match self.state {
             LandingState::Flying => {
                 if min_clearance.is_some_and(|c| c < SLIDING_THRESHOLD) {
+                    // FLYING → SLIDING: actual ground contact — emit impact event now.
+                    // Use the vertical speed component (along gravity) for impact severity,
+                    // so a horizontal graze at high speed doesn't register as a hard landing.
+                    let vertical_speed = p.ship_velocity.dot(&p.gravity_dir).abs();
+                    let per_skid = per_skid_speeds_from_clearance(&clearances, vertical_speed);
+                    let category = ImpactCategory::from_speed(vertical_speed);
+                    impact_event = Some(LandingImpactEvent {
+                        impact_speed_ms: vertical_speed,
+                        per_skid_speeds: per_skid,
+                        planet_gravity: p.planet_gravity,
+                        category,
+                    });
                     self.state = LandingState::Sliding;
                 }
             }
@@ -195,16 +201,7 @@ impl LandingSystem {
             LandingState::Sliding => {
                 // Allow unlock request to be a no-op here (already sliding).
                 if consume_lock && p.ship_speed_ms < LOCK_SPEED_THRESHOLD {
-                    // Transition to Landed — emit impact event.
-                    let per_skid =
-                        per_skid_speeds_from_clearance(&clearances, p.ship_speed_ms);
-                    let category = ImpactCategory::from_speed(p.ship_speed_ms);
-                    impact_event = Some(LandingImpactEvent {
-                        impact_speed_ms: p.ship_speed_ms,
-                        per_skid_speeds: per_skid,
-                        planet_gravity: p.planet_gravity,
-                        category,
-                    });
+                    // Transition to Landed — lock the ship in place.
                     self.state = LandingState::Landed;
                 } else {
                     // Check if we can return to Flying.
@@ -251,7 +248,7 @@ impl LandingSystem {
         let ray_dir = gravity_dir.into_inner();
         let mut clearances = [MAX_RAY_DIST; 4];
 
-        for (i, local) in SKID_POSITIONS.iter().enumerate() {
+        for (i, local) in Ship::skid_positions().iter().enumerate() {
             let local_pt = Point3::new(local[0], local[1], local[2]);
             let world_pt = ship_iso.transform_point(&local_pt);
 
@@ -316,6 +313,7 @@ mod tests {
             physics,
             ship_iso: iso,
             ship_speed_ms: 0.0,
+            ship_velocity: Vector3::zeros(),
             gravity_dir: Unit::new_normalize(Vector3::new(0.0, -1.0, 0.0)),
             planet_gravity: 9.81,
             terrain_active: true,
