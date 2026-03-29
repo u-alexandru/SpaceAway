@@ -115,7 +115,13 @@ Split the 1062-line frame_update.rs into:
 
 Removed false `#[allow(dead_code)]` on SHIP_HULL, PLAYER, SHIP_EXTERIOR (all used by terrain_colliders.rs). Deleted the truly unused `interactable_groups()` function.
 
-### Iteration 3: Terrain collider audit
+### Iteration 3: Frustum culling wiring
+**Changes:**
+- `e3a45e6` feat(terrain): wire frustum culling through terrain pipeline
+
+Computed planet-relative VP matrix at the render call site and passed it through the terrain pipeline. The quadtree now actively culls back-hemisphere chunks, reducing draw commands by ~50%.
+
+### Iteration 4: Terrain collider audit
 Audited terrain_colliders.rs end-to-end. Findings:
 - Rebase logic is correct: bodies shifted, colliders updated via `set_position_wrt_parent`, query pipeline refreshed
 - Barrier placement math is correct (center at radius_m, ±50m extent)
@@ -169,3 +175,10 @@ Audited terrain_colliders.rs end-to-end. Findings:
 12. `e669a9c` feat(terrain): add frustum culling infrastructure
 13. `aea4974` refactor(spaceaway): split frame_update into helm/walk
 14. `32b8284` fix(colliders): remove false dead_code attributes
+15. `e3a45e6` feat(terrain): wire frustum culling through terrain pipeline
+
+### Build verification
+- `cargo clippy --workspace -- -D warnings`: CLEAN
+- `cargo test --workspace`: 437 tests, all passing
+- `cargo build -p spaceaway --release`: SUCCESS (1m 13s)
+- All 13 crates: 392 lib tests passing
