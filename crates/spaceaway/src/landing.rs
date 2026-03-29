@@ -15,7 +15,7 @@ use rapier3d::prelude::{Group, InteractionGroups, QueryFilter};
 use sa_physics::PhysicsWorld;
 use sa_ship::Ship;
 
-use crate::ship_colliders::TERRAIN;
+use spaceaway::ship_colliders::TERRAIN;
 
 // ---------------------------------------------------------------------------
 // Constants

@@ -8,7 +8,7 @@ use sa_ship::interaction::InteractionSystem;
 use sa_ship::ship::Ship;
 use sa_ship::station::{cockpit_layout, PlacementKind};
 
-use crate::ship_colliders::INTERACTABLE;
+use spaceaway::ship_colliders::INTERACTABLE;
 
 /// IDs for the key interactables, so the game loop can read their state.
 #[allow(dead_code)]
@@ -41,7 +41,7 @@ pub fn create_ship_and_interactables(
     // Build precise hex-hull interior colliders (walls, bulkheads, endcaps).
     // These match the actual hexagonal cross-section of each ship section,
     // replacing the old simple box colliders that left gaps at angled hull faces.
-    crate::ship_colliders::build_ship_colliders(physics, ship.body_handle);
+    spaceaway::ship_colliders::build_ship_colliders(physics, ship.body_handle);
 
     let mut interaction = InteractionSystem::new();
     let layout = cockpit_layout();

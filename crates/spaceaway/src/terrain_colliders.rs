@@ -24,13 +24,13 @@ const ANCHOR_REBASE_THRESHOLD_M: f64 = 100.0;
 /// Note: the interior body is NOT included — it always stays at the rapier
 /// origin (the player controller subtracts/adds ship_position). Shifting it
 /// during rebase would be immediately undone by the interior sync code.
-pub(crate) struct RebaseBodies {
+pub struct RebaseBodies {
     pub ship: Option<RigidBodyHandle>,
     pub player: Option<RigidBodyHandle>,
 }
 
 /// Minimal data retained per chunk for collider management.
-pub(crate) struct CachedChunk {
+pub struct CachedChunk {
     pub center_f64: [f64; 3],
     pub heights: Vec<f32>,
     pub lod: u8,
@@ -41,7 +41,7 @@ pub(crate) struct CachedChunk {
 
 /// Terrain collider state — manages HeightField colliders attached to a static
 /// rigid body in the physics world.
-pub(crate) struct TerrainColliders {
+pub struct TerrainColliders {
     /// Static rigid body that parents all terrain colliders.
     pub terrain_body: Option<RigidBodyHandle>,
     /// HeightField collider handles keyed by chunk.
@@ -52,6 +52,12 @@ pub(crate) struct TerrainColliders {
     pub chunk_cache: HashMap<ChunkKey, CachedChunk>,
     /// Flat surface barrier below ship (prevents flythrough at coarse LODs).
     pub surface_barrier: Option<ColliderHandle>,
+}
+
+impl Default for TerrainColliders {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TerrainColliders {

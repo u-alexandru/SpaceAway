@@ -2,13 +2,14 @@ mod drive_integration;
 mod landing;
 mod menu;
 mod navigation;
-mod ship_colliders;
 mod ship_setup;
 mod solar_system;
 mod star_streaming;
-mod terrain_colliders;
 mod terrain_integration;
 mod ui;
+
+use spaceaway::ship_colliders;
+use spaceaway::terrain_colliders;
 
 use glam::{Mat4, Vec3};
 use sa_core::{EventBus, FrameTime};
@@ -1867,7 +1868,7 @@ impl ApplicationHandler for App {
 
                     // Sync interior collider rotation to match ship (same as walk mode).
                     // Needed so colliders are correct when the player stands up.
-                    if let (Some(ship_ref), Some(ih)) = (&self.ship, crate::ship_colliders::interior_body_handle()) {
+                    if let (Some(ship_ref), Some(ih)) = (&self.ship, ship_colliders::interior_body_handle()) {
                         let ship_rot = self.physics.get_body(ship_ref.body_handle)
                             .map(|b| *b.rotation());
                         if let (Some(rot), Some(ib)) = (ship_rot, self.physics.get_body_mut(ih)) {
@@ -2255,7 +2256,7 @@ impl ApplicationHandler for App {
                     // the ship's visual orientation after roll/pitch/yaw.
                     // Position stays at origin — high-speed translation is handled by
                     // the player controller's origin-offset transform.
-                    if let (Some(ship), Some(ih)) = (&self.ship, crate::ship_colliders::interior_body_handle()) {
+                    if let (Some(ship), Some(ih)) = (&self.ship, ship_colliders::interior_body_handle()) {
                         // Read ship rotation first (immutable borrow)
                         let ship_rot = self.physics.get_body(ship.body_handle)
                             .map(|b| *b.rotation());

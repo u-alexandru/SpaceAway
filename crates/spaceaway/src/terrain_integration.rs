@@ -15,7 +15,7 @@ use sa_terrain::{ChunkKey, TerrainConfig};
 use sa_universe::PlanetSubType;
 
 use crate::solar_system::ActiveSystem;
-use crate::terrain_colliders::TerrainColliders;
+use spaceaway::terrain_colliders::TerrainColliders;
 
 /// Light-years to meters conversion factor.
 const LY_TO_M: f64 = 9.461e15;
@@ -118,7 +118,7 @@ impl TerrainManager {
         device: &wgpu::Device,
         physics: &mut PhysicsWorld,
         ship_down: [f32; 3],
-        rebase_bodies: &crate::terrain_colliders::RebaseBodies,
+        rebase_bodies: &spaceaway::terrain_colliders::RebaseBodies,
     ) -> TerrainFrameResult {
         // DO NOT update planet_center_ly from orbital motion.
         // The planet orbits with TIME_SCALE=30 which can move it out of
