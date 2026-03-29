@@ -1,10 +1,16 @@
-//! Helm monitor layout: speed, throttle, engine state.
+//! Helm monitor layout: compact, information-dense cockpit display.
 //!
-//! Rendered via egui to an offscreen texture for display on the
+//! Rendered via egui to an offscreen 512×512 texture for display on the
 //! cockpit's Speed Display screen mesh.
 
-/// Helm station accent color: blue [0.15, 0.35, 0.65] -> RGB 38, 89, 166.
+/// Helm station accent color.
 const HELM_BLUE: egui::Color32 = egui::Color32::from_rgb(38, 89, 166);
+const DIM: egui::Color32 = egui::Color32::from_rgb(100, 100, 120);
+const BRIGHT: egui::Color32 = egui::Color32::from_rgb(200, 200, 220);
+const GREEN: egui::Color32 = egui::Color32::from_rgb(50, 200, 80);
+const RED: egui::Color32 = egui::Color32::from_rgb(220, 50, 30);
+const AMBER: egui::Color32 = egui::Color32::from_rgb(220, 160, 30);
+const CYAN: egui::Color32 = egui::Color32::from_rgb(40, 200, 220);
 
 /// Data to display on the helm monitor.
 pub struct HelmData {
@@ -16,304 +22,172 @@ pub struct HelmData {
     pub drive_status: sa_ship::DriveStatus,
     pub drive_speed_c: f64,
     pub exotic_fuel: f32,
-    /// Solar system overview lines (if in a system).
     pub system_info: Option<Vec<String>>,
-    /// Navigation target: (name, distance_ly, eta_seconds).
     pub target_info: Option<(String, f64, f64)>,
-    /// Altitude above terrain in meters (None if not near terrain).
     pub altitude_m: Option<f32>,
-    /// Distance to nearest planet surface in km (shown when < 1000km and heading toward it).
     pub planet_dist_km: Option<f32>,
 }
 
-/// Draw the helm monitor UI. Called within an egui context that targets
-/// the offscreen monitor texture.
+/// Draw the helm monitor UI.
 pub fn draw_helm_screen(ctx: &egui::Context, data: &HelmData) {
-    // Set dark background for the monitor
     let frame = egui::Frame::new()
-        .fill(egui::Color32::from_rgb(13, 13, 20))
-        .inner_margin(egui::Margin::same(8));
+        .fill(egui::Color32::from_rgb(10, 10, 16))
+        .inner_margin(egui::Margin::same(12));
 
     egui::CentralPanel::default().frame(frame).show(ctx, |ui| {
-        ui.vertical_centered(|ui| {
-            ui.add_space(8.0);
+        ui.spacing_mut().item_spacing = egui::vec2(0.0, 2.0);
 
-            // Title
-            ui.label(
-                egui::RichText::new("HELM")
-                    .color(HELM_BLUE)
-                    .size(18.0)
-                    .strong(),
-            );
-
-            ui.add_space(4.0);
-
-            // Separator line in blue
-            let rect = ui.available_rect_before_wrap();
-            let y = rect.top();
-            ui.painter().line_segment(
-                [
-                    egui::pos2(rect.left() + 10.0, y),
-                    egui::pos2(rect.right() - 10.0, y),
-                ],
-                egui::Stroke::new(1.0, HELM_BLUE),
-            );
-            ui.add_space(8.0);
-
-            // Planet distance / altitude (shown FIRST so it's always visible)
-            if let Some(dist_km) = data.planet_dist_km {
-                let (label, value_text, color) = if let Some(alt) = data.altitude_m {
-                    let c = if alt < 50.0 {
-                        egui::Color32::from_rgb(220, 50, 30)
-                    } else if alt < 200.0 {
-                        egui::Color32::from_rgb(220, 160, 30)
-                    } else {
-                        HELM_BLUE
-                    };
-                    if alt < 1000.0 {
-                        ("ALT", format!("{:.0}m", alt), c)
-                    } else {
-                        ("ALT", format!("{:.1}km", alt / 1000.0), c)
-                    }
-                } else if dist_km < 10.0 {
-                    ("SURF", format!("{:.1}km", dist_km), egui::Color32::from_rgb(220, 160, 30))
+        // ── Row 1: SURF/ALT distance (most important during approach) ──
+        if let Some(dist_km) = data.planet_dist_km {
+            let (label, value, color) = if let Some(alt) = data.altitude_m {
+                let c = if alt < 50.0 { RED } else if alt < 200.0 { AMBER } else { CYAN };
+                if alt < 1000.0 {
+                    ("ALT", format!("{:.0}m", alt), c)
                 } else {
-                    ("SURF", format!("{:.0}km", dist_km), HELM_BLUE)
-                };
-                ui.label(
-                    egui::RichText::new(format!("{label}  {value_text}"))
-                        .color(color)
-                        .size(16.0)
-                        .strong(),
-                );
-                ui.add_space(4.0);
-            }
-
-            // Speed (large) — units depend on drive mode
-            let (speed_text, speed_unit) = match data.drive_mode {
-                sa_ship::DriveMode::Warp if matches!(data.drive_status, sa_ship::DriveStatus::Engaged) => {
-                    let ly_s = data.drive_speed_c * 3.169e-8;
-                    (format!("{:.3}", ly_s), "ly/s")
+                    ("ALT", format!("{:.1}km", alt / 1000.0), c)
                 }
-                sa_ship::DriveMode::Cruise if matches!(data.drive_status, sa_ship::DriveStatus::Engaged) => {
-                    if data.drive_speed_c >= 10.0 {
-                        (format!("{:.0}", data.drive_speed_c), "c")
-                    } else {
-                        (format!("{:.1}", data.drive_speed_c), "c")
-                    }
-                }
-                _ => (format!("{:.1}", data.speed), "m/s"),
-            };
-            ui.label(
-                egui::RichText::new(speed_text)
-                    .color(HELM_BLUE)
-                    .size(36.0)
-                    .strong(),
-            );
-            ui.label(
-                egui::RichText::new(speed_unit)
-                    .color(egui::Color32::from_white_alpha(140))
-                    .size(12.0),
-            );
-
-            ui.add_space(12.0);
-
-            // Throttle
-            ui.label(
-                egui::RichText::new(format!("THR  {:.0}%", data.throttle * 100.0))
-                    .color(egui::Color32::from_white_alpha(200))
-                    .size(16.0),
-            );
-
-            // Simple throttle bar
-            let bar_width = 120.0;
-            let bar_height = 8.0;
-            let (bar_rect, _) = ui.allocate_exact_size(
-                egui::vec2(bar_width, bar_height),
-                egui::Sense::hover(),
-            );
-            // Background
-            ui.painter().rect_filled(
-                bar_rect,
-                2.0,
-                egui::Color32::from_rgb(30, 30, 40),
-            );
-            // Fill
-            let fill_width = bar_width * data.throttle;
-            if fill_width > 0.5 {
-                let fill_rect = egui::Rect::from_min_size(
-                    bar_rect.left_top(),
-                    egui::vec2(fill_width, bar_height),
-                );
-                ui.painter().rect_filled(fill_rect, 2.0, HELM_BLUE);
-            }
-
-            ui.add_space(12.0);
-
-            // Engine state
-            let (engine_text, engine_color) = if data.engine_on {
-                ("ENGINE  ON", egui::Color32::from_rgb(50, 200, 80))
+            } else if dist_km < 10.0 {
+                ("SURF", format!("{:.1}km", dist_km), AMBER)
             } else {
-                ("ENGINE  OFF", egui::Color32::from_rgb(180, 40, 40))
+                ("SURF", format!("{:.0}km", dist_km), CYAN)
             };
-            ui.label(
-                egui::RichText::new(engine_text)
-                    .color(engine_color)
-                    .size(16.0)
-                    .strong(),
-            );
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(label).color(DIM).size(14.0));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(egui::RichText::new(value).color(color).size(22.0).strong());
+                });
+            });
+            separator(ui);
+        }
+
+        // ── Row 2: Speed (large, central) ──
+        let (speed_text, speed_unit) = format_speed(data);
+        ui.vertical_centered(|ui| {
+            ui.label(egui::RichText::new(&speed_text).color(BRIGHT).size(38.0).strong());
+            ui.label(egui::RichText::new(speed_unit).color(DIM).size(11.0));
+        });
+
+        ui.add_space(4.0);
+
+        // ── Row 3: Throttle bar ──
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(format!("THR {:.0}%", data.throttle * 100.0)).color(DIM).size(12.0));
+        });
+        draw_bar(ui, data.throttle, HELM_BLUE);
+
+        ui.add_space(4.0);
+
+        // ── Row 4: Engine + Drive (single row) ──
+        ui.horizontal(|ui| {
+            let (eng_text, eng_color) = if data.engine_on { ("ENG ON", GREEN) } else { ("ENG OFF", RED) };
+            ui.label(egui::RichText::new(eng_text).color(eng_color).size(12.0).strong());
 
             ui.add_space(12.0);
 
-            // Fuel gauge
-            let fuel_color = if data.fuel < 0.2 {
-                egui::Color32::from_rgb(220, 50, 30)
-            } else if data.fuel < 0.5 {
-                egui::Color32::from_rgb(220, 160, 30)
-            } else {
-                HELM_BLUE
-            };
-            ui.label(
-                egui::RichText::new(format!("FUEL  {:.0}%", data.fuel * 100.0))
-                    .color(fuel_color)
-                    .size(14.0),
-            );
-
-            // Fuel bar
-            let bar_width = 120.0;
-            let bar_height = 6.0;
-            let (fuel_rect, _) = ui.allocate_exact_size(
-                egui::vec2(bar_width, bar_height),
-                egui::Sense::hover(),
-            );
-            ui.painter().rect_filled(
-                fuel_rect,
-                2.0,
-                egui::Color32::from_rgb(30, 30, 40),
-            );
-            let fill_width = bar_width * data.fuel;
-            if fill_width > 0.5 {
-                let fill_rect = egui::Rect::from_min_size(
-                    fuel_rect.left_top(),
-                    egui::vec2(fill_width, bar_height),
-                );
-                ui.painter().rect_filled(fill_rect, 2.0, fuel_color);
-            }
-
-            ui.add_space(8.0);
-
-            // --- Drive mode section ---
             let (drive_label, drive_color) = match data.drive_mode {
-                sa_ship::DriveMode::Impulse => ("IMPULSE", egui::Color32::from_rgb(120, 120, 140)),
-                sa_ship::DriveMode::Cruise => ("CRUISE", egui::Color32::from_rgb(40, 200, 220)),
-                sa_ship::DriveMode::Warp => ("WARP", egui::Color32::from_rgb(200, 80, 220)),
+                sa_ship::DriveMode::Impulse => ("IMP", DIM),
+                sa_ship::DriveMode::Cruise => ("CRU", CYAN),
+                sa_ship::DriveMode::Warp => ("WRP", egui::Color32::from_rgb(200, 80, 220)),
             };
-
-            let status_text = match data.drive_status {
+            let status = match data.drive_status {
                 sa_ship::DriveStatus::Idle => String::new(),
-                sa_ship::DriveStatus::Spooling(p) => format!("  SPOOL {:.0}%", p / sa_ship::drive::WARP_SPOOL_TIME * 100.0),
+                sa_ship::DriveStatus::Spooling(p) => {
+                    format!(" {:.0}%", p / sa_ship::drive::WARP_SPOOL_TIME * 100.0)
+                }
                 sa_ship::DriveStatus::Engaged => {
                     if data.drive_speed_c > 1000.0 {
-                        format!("  {:.0}kc", data.drive_speed_c / 1000.0)
+                        format!(" {:.0}kc", data.drive_speed_c / 1000.0)
                     } else if data.drive_speed_c > 1.0 {
-                        format!("  {:.0}c", data.drive_speed_c)
+                        format!(" {:.0}c", data.drive_speed_c)
                     } else {
                         String::new()
                     }
                 }
             };
+            ui.label(egui::RichText::new(format!("{drive_label}{status}")).color(drive_color).size(12.0).strong());
+        });
 
-            ui.label(
-                egui::RichText::new(format!("{drive_label}{status_text}"))
-                    .color(drive_color)
-                    .size(14.0)
-                    .strong(),
-            );
+        ui.add_space(4.0);
 
-            // Exotic fuel gauge (only show if not at 100%)
+        // ── Row 5: Fuel bars (compact, side by side) ──
+        ui.horizontal(|ui| {
+            let fuel_color = if data.fuel < 0.2 { RED } else if data.fuel < 0.5 { AMBER } else { HELM_BLUE };
+            ui.label(egui::RichText::new(format!("H₂ {:.0}%", data.fuel * 100.0)).color(fuel_color).size(11.0));
             if data.exotic_fuel < 0.999 {
-                let exotic_color = if data.exotic_fuel < 0.15 {
-                    egui::Color32::from_rgb(220, 50, 30)
-                } else {
-                    egui::Color32::from_rgb(200, 80, 220)
-                };
-                ui.label(
-                    egui::RichText::new(format!("EXOTIC  {:.0}%", data.exotic_fuel * 100.0))
-                        .color(exotic_color)
-                        .size(12.0),
-                );
-                let bar_width = 120.0;
-                let bar_height = 5.0;
-                let (exotic_rect, _) = ui.allocate_exact_size(
-                    egui::vec2(bar_width, bar_height),
-                    egui::Sense::hover(),
-                );
-                ui.painter().rect_filled(
-                    exotic_rect, 2.0, egui::Color32::from_rgb(30, 30, 40),
-                );
-                let ew = bar_width * data.exotic_fuel;
-                if ew > 0.5 {
-                    let fill = egui::Rect::from_min_size(
-                        exotic_rect.left_top(), egui::vec2(ew, bar_height),
-                    );
-                    ui.painter().rect_filled(fill, 2.0, exotic_color);
-                }
-            }
-
-            // (SURF/ALT display moved to top of screen for visibility)
-
-            // --- Navigation target ---
-            if let Some((ref name, dist, eta)) = data.target_info {
                 ui.add_space(8.0);
-                let eta_str = if eta.is_infinite() {
-                    "---".to_string()
-                } else if eta > 3600.0 {
-                    format!("{:.1}h", eta / 3600.0)
-                } else if eta > 60.0 {
-                    format!("{:.0}m", eta / 60.0)
-                } else {
-                    format!("{:.0}s", eta)
-                };
-                ui.label(
-                    egui::RichText::new(format!("TGT {name}"))
-                        .color(egui::Color32::from_rgb(40, 200, 220))
-                        .size(11.0),
-                );
-                ui.label(
-                    egui::RichText::new(format!("{}  ETA {eta_str}", super::visor::format_distance_ly(dist)))
-                        .color(egui::Color32::from_rgb(40, 200, 220))
-                        .size(11.0),
-                );
-            }
-
-            // --- Solar system overview ---
-            if let Some(ref bodies) = data.system_info {
-                ui.add_space(8.0);
-                // Separator
-                let rect = ui.available_rect_before_wrap();
-                let y = rect.top();
-                ui.painter().line_segment(
-                    [
-                        egui::pos2(rect.left() + 10.0, y),
-                        egui::pos2(rect.right() - 10.0, y),
-                    ],
-                    egui::Stroke::new(1.0, HELM_BLUE),
-                );
-                ui.add_space(4.0);
-                ui.label(
-                    egui::RichText::new("SYSTEM")
-                        .color(HELM_BLUE)
-                        .size(14.0)
-                        .strong(),
-                );
-                for line in bodies {
-                    ui.label(
-                        egui::RichText::new(line)
-                            .color(egui::Color32::from_white_alpha(180))
-                            .size(10.0),
-                    );
-                }
+                let ex_color = if data.exotic_fuel < 0.15 { RED } else { egui::Color32::from_rgb(200, 80, 220) };
+                ui.label(egui::RichText::new(format!("EX {:.0}%", data.exotic_fuel * 100.0)).color(ex_color).size(11.0));
             }
         });
+        draw_bar(ui, data.fuel, if data.fuel < 0.2 { RED } else { HELM_BLUE });
+
+        separator(ui);
+
+        // ── Row 6: Navigation target (if locked) ──
+        if let Some((ref name, dist, eta)) = data.target_info {
+            let eta_str = if eta.is_infinite() {
+                "---".to_string()
+            } else if eta > 3600.0 {
+                format!("{:.1}h", eta / 3600.0)
+            } else if eta > 60.0 {
+                format!("{:.0}m", eta / 60.0)
+            } else {
+                format!("{:.0}s", eta)
+            };
+            ui.label(egui::RichText::new(format!("▸ {name}")).color(CYAN).size(11.0));
+            ui.label(
+                egui::RichText::new(format!("  {} ETA {eta_str}", super::visor::format_distance_ly(dist)))
+                    .color(CYAN).size(10.0),
+            );
+            ui.add_space(2.0);
+        }
+
+        // ── Row 7: System bodies (compact list) ──
+        if let Some(ref bodies) = data.system_info {
+            separator(ui);
+            for line in bodies.iter().take(6) {
+                ui.label(egui::RichText::new(line).color(DIM).size(9.0));
+            }
+        }
     });
+}
+
+// ── Helpers ──
+
+fn format_speed(data: &HelmData) -> (String, &'static str) {
+    match data.drive_mode {
+        sa_ship::DriveMode::Warp if matches!(data.drive_status, sa_ship::DriveStatus::Engaged) => {
+            let ly_s = data.drive_speed_c * 3.169e-8;
+            (format!("{:.3}", ly_s), "ly/s")
+        }
+        sa_ship::DriveMode::Cruise if matches!(data.drive_status, sa_ship::DriveStatus::Engaged) => {
+            if data.drive_speed_c >= 10.0 {
+                (format!("{:.0}", data.drive_speed_c), "c")
+            } else {
+                (format!("{:.1}", data.drive_speed_c), "c")
+            }
+        }
+        _ => (format!("{:.1}", data.speed), "m/s"),
+    }
+}
+
+fn draw_bar(ui: &mut egui::Ui, fraction: f32, fill_color: egui::Color32) {
+    let width = ui.available_width().min(200.0);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 4.0), egui::Sense::hover());
+    ui.painter().rect_filled(rect, 1.0, egui::Color32::from_rgb(25, 25, 35));
+    let fw = width * fraction.clamp(0.0, 1.0);
+    if fw > 0.5 {
+        let fill = egui::Rect::from_min_size(rect.left_top(), egui::vec2(fw, 4.0));
+        ui.painter().rect_filled(fill, 1.0, fill_color);
+    }
+}
+
+fn separator(ui: &mut egui::Ui) {
+    ui.add_space(3.0);
+    let rect = ui.available_rect_before_wrap();
+    ui.painter().line_segment(
+        [egui::pos2(rect.left() + 4.0, rect.top()), egui::pos2(rect.right() - 4.0, rect.top())],
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(30, 35, 50)),
+    );
+    ui.add_space(3.0);
 }

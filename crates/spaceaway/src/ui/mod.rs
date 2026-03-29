@@ -11,7 +11,7 @@ use sa_ship::InteractableKind;
 use sensors_screen::SensorsData;
 
 /// Monitor texture resolution (square).
-const MONITOR_SIZE: u32 = 256;
+const MONITOR_SIZE: u32 = 512;
 
 /// State passed to the HUD each frame.
 pub struct HudState {
