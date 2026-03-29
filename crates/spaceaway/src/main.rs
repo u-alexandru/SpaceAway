@@ -3068,7 +3068,7 @@ impl ApplicationHandler for App {
                     }
                 }
 
-                if let (Some(gpu), Some(renderer)) = (&self.gpu, &self.renderer) {
+                if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
                     // 1. Render BOTH monitors to offscreen textures in ONE encoder
                     // (avoids multiple queue.submit() calls per frame)
                     if let Some(ui_sys) = &mut self.ui_system {
@@ -3260,11 +3260,9 @@ impl ApplicationHandler for App {
                         for (i, cmd) in commands.iter().enumerate() {
                             let t = cmd.model_matrix.col(3);
                             let dist = ((t.x * t.x + t.y * t.y + t.z * t.z) as f64).sqrt();
-                            let mesh_info = if let (Some(_gpu), Some(renderer)) = (&self.gpu, &self.renderer) {
-                                renderer.mesh_store.get(cmd.mesh)
-                                    .map(|m| m.index_count)
-                                    .unwrap_or(0)
-                            } else { 0 };
+                            let mesh_info = renderer.mesh_store.get(cmd.mesh)
+                                .map(|m| m.index_count)
+                                .unwrap_or(0);
                             log::info!("CMD[{}]: pos=({:.0},{:.0},{:.0}) dist={:.0}m tris={} pre_rebased={}",
                                 i, t.x, t.y, t.z, dist, mesh_info / 3, cmd.pre_rebased);
                         }
