@@ -46,7 +46,7 @@ impl Ship {
         let body = RigidBodyBuilder::dynamic()
             .translation(nalgebra::Vector3::new(x, y, z))
             .gravity_scale(0.0) // No gravity on the ship (space)
-            .linear_damping(0.001) // Very slight linear damping — terminal velocity ~10 km/s
+            .linear_damping(0.009) // Linear damping — terminal velocity ~5 km/s at max thrust boost
             .angular_damping(5.0) // Internal stabilization (gyroscopes/reaction wheels).
                                   // Prevents crew movement, impacts, or minor forces from
                                   // accumulating into visible rotation. Intentional helm
@@ -98,12 +98,21 @@ impl Ship {
 
     /// Apply forward thrust along the ship's local -Z axis (nose direction).
     /// Effective thrust = throttle * max_thrust * engine_on.
+    /// At max throttle (1.0), a 3× boost kicks in for faster acceleration
+    /// during planetary approach and escape maneuvers.
     /// Call once per frame while helm is active.
     pub fn apply_thrust(&self, physics: &mut PhysicsWorld) {
         if !self.engine_on {
             return;
         }
-        let force_magnitude = self.throttle * self.max_thrust;
+        // Boost at max throttle: 3× thrust for aggressive acceleration.
+        // Smoothly ramps from 1× at 90% throttle to 3× at 100%.
+        let boost = if self.throttle > 0.9 {
+            1.0 + 2.0 * ((self.throttle - 0.9) / 0.1)
+        } else {
+            1.0
+        };
+        let force_magnitude = self.throttle * self.max_thrust * boost;
         if force_magnitude.abs() < 0.01 {
             return;
         }

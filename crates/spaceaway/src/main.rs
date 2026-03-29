@@ -2305,34 +2305,26 @@ impl ApplicationHandler for App {
                     && !self.fly_mode
                 {
                     // Interaction raycasts must use origin-relative coordinates
-                    // because interactable colliders are children of the interior
-                    // body which stays at (0,0,0). The ship body may drift up to
-                    // 100m from origin between rebases, so using camera.position
-                    // (based on ship rapier pos) would miss the interactables.
-                    // Instead, apply only the rotation + helm offset from origin.
+                    // because interactable colliders live on the interior body
+                    // which stays at rapier (0,0,0). The ship body may drift
+                    // up to 100m from origin between rebases. Subtract the
+                    // ship's rapier translation to get the ray in interior space.
+                    let ship_trans = self.ship.as_ref()
+                        .and_then(|s| self.physics.get_body(s.body_handle))
+                        .map(|b| *b.translation())
+                        .unwrap_or(nalgebra::Vector3::zeros());
                     let (ray_origin, ray_dir) = if is_seated {
-                        let ship_rot = self.ship.as_ref()
-                            .and_then(|s| self.physics.get_body(s.body_handle))
-                            .map(|b| *b.rotation())
-                            .unwrap_or(nalgebra::UnitQuaternion::identity());
-                        let helm_offset = self.helm.as_ref()
-                            .map(|h| h.viewpoint_offset)
-                            .unwrap_or(glam::Vec3::ZERO);
-                        let offset = ship_rot * nalgebra::Vector3::new(
-                            helm_offset.x, helm_offset.y, helm_offset.z,
-                        );
+                        let pos = self.camera.position;
                         let fwd = self.camera.forward();
                         (
-                            [offset.x, offset.y, offset.z],
+                            [pos.x as f32 - ship_trans.x, pos.y as f32 - ship_trans.y, pos.z as f32 - ship_trans.z],
                             [fwd.x, fwd.y, fwd.z],
                         )
                     } else {
-                        // Walk mode: player body is already origin-relative
-                        // (controller subtracts ship translation).
-                        let player_pos = player.position(&self.physics);
+                        let eye_pos = player.position(&self.physics);
                         let fwd = self.camera.forward();
                         (
-                            [player_pos.x as f32, player_pos.y as f32, player_pos.z as f32],
+                            [eye_pos.x as f32 - ship_trans.x, eye_pos.y as f32 - ship_trans.y, eye_pos.z as f32 - ship_trans.z],
                             [fwd.x, fwd.y, fwd.z],
                         )
                     };
