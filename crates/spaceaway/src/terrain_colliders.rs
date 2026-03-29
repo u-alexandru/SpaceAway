@@ -50,8 +50,8 @@ pub(crate) struct TerrainColliders {
     pub anchor_f64: [f64; 3],
     /// Chunk data retained for collider creation (heights + center).
     pub chunk_cache: HashMap<ChunkKey, CachedChunk>,
-    /// Sphere barrier collider at planet radius (prevents flythrough at coarse LODs).
-    pub sphere_barrier: Option<ColliderHandle>,
+    /// Flat surface barrier below ship (prevents flythrough at coarse LODs).
+    pub surface_barrier: Option<ColliderHandle>,
 }
 
 impl TerrainColliders {
@@ -61,7 +61,7 @@ impl TerrainColliders {
             colliders: HashMap::new(),
             anchor_f64: [0.0; 3],
             chunk_cache: HashMap::new(),
-            sphere_barrier: None,
+            surface_barrier: None,
         }
     }
 
@@ -71,7 +71,7 @@ impl TerrainColliders {
             physics.remove_collider(*handle);
         }
         self.colliders.clear();
-        if let Some(sh) = self.sphere_barrier.take() {
+        if let Some(sh) = self.surface_barrier.take() {
             physics.remove_collider(sh);
         }
         if let Some(bh) = self.terrain_body.take() {
@@ -120,9 +120,8 @@ impl TerrainColliders {
         rebase_bodies: &RebaseBodies,
     ) {
         // On first call, initialize anchor to the camera position so the
-        // sphere barrier is placed correctly. Without this, anchor stays at
-        // [0,0,0] from the constructor and the barrier ends up at the physics
-        // origin instead of at the planet center relative to the camera.
+        // surface barrier and heightfield colliders are placed correctly.
+        // Without this, anchor stays at [0,0,0] from the constructor.
         if self.terrain_body.is_none() {
             self.anchor_f64 = cam_rel_m;
         }
@@ -133,32 +132,81 @@ impl TerrainColliders {
             physics.add_rigid_body(rb)
         });
 
-        // Sphere barrier: a ball collider at planet radius that prevents
-        // flying through the planet at coarse LODs (where HeightField
-        // colliders don't exist). Positioned at planet center relative to anchor.
-        // f32 precision note: anchor values up to ~12,000,000m (2× Earth radius)
-        // give ≤1m error. Only rocky planets are landable so this is safe.
-        if self.sphere_barrier.is_none() {
-            let cx = (-self.anchor_f64[0]) as f32;
-            let cy = (-self.anchor_f64[1]) as f32;
-            let cz = (-self.anchor_f64[2]) as f32;
-            let collider = ColliderBuilder::ball(radius_m as f32)
-                .collision_groups(InteractionGroups::new(
-                    ship_colliders::TERRAIN,
-                    ship_colliders::PLAYER.union(ship_colliders::SHIP_HULL).union(ship_colliders::SHIP_EXTERIOR),
-                ))
-                .position(nalgebra::Isometry3::translation(cx, cy, cz))
-                .build();
-            self.sphere_barrier = Some(physics.add_collider(collider, terrain_body));
+        // Get ship's rapier position for barrier placement and rebase check.
+        let ship_rapier_pos = rebase_bodies.ship
+            .and_then(|h| physics.rigid_body_set.get(h))
+            .map(|b| *b.translation())
+            .unwrap_or(nalgebra::Vector3::zeros());
+
+        // Flat surface barrier: a large cuboid positioned at the surface
+        // directly below the ship. Unlike the old sphere barrier (which was
+        // millions of meters from origin in rapier space and missed by
+        // broadphase), this sits within normal rapier range.
+        let cam_len = (cam_rel_m[0] * cam_rel_m[0]
+            + cam_rel_m[1] * cam_rel_m[1]
+            + cam_rel_m[2] * cam_rel_m[2])
+            .sqrt();
+        let altitude = cam_len - radius_m;
+
+        if altitude < 50_000.0 && cam_len > 0.01 {
+            // Surface normal: direction from planet center to ship
+            let inv_len = 1.0 / cam_len;
+            let normal = [
+                cam_rel_m[0] * inv_len,
+                cam_rel_m[1] * inv_len,
+                cam_rel_m[2] * inv_len,
+            ];
+
+            // In rapier space (ship near origin): surface is altitude meters
+            // below the ship along the normal direction.
+            let surface_x = -(normal[0] * altitude) as f32 + ship_rapier_pos.x;
+            let surface_y = -(normal[1] * altitude) as f32 + ship_rapier_pos.y;
+            let surface_z = -(normal[2] * altitude) as f32 + ship_rapier_pos.z;
+
+            // Rotation: map Y-up to the surface normal direction
+            let up = nalgebra::Vector3::new(0.0_f32, 1.0, 0.0);
+            let normal_f32 = nalgebra::Vector3::new(
+                normal[0] as f32,
+                normal[1] as f32,
+                normal[2] as f32,
+            );
+            let rotation =
+                nalgebra::UnitQuaternion::rotation_between(&up, &normal_f32)
+                    .unwrap_or(nalgebra::UnitQuaternion::identity());
+
+            let iso = nalgebra::Isometry3::from_parts(
+                nalgebra::Translation3::new(surface_x, surface_y, surface_z),
+                rotation,
+            );
+
+            if let Some(sh) = self.surface_barrier {
+                // Update existing barrier position each frame
+                if let Some(coll) = physics.collider_set.get_mut(sh) {
+                    coll.set_position_wrt_parent(iso);
+                }
+            } else {
+                // Create new barrier: 10km x 1m x 10km cuboid
+                let collider = ColliderBuilder::cuboid(5000.0, 0.5, 5000.0)
+                    .collision_groups(InteractionGroups::new(
+                        ship_colliders::TERRAIN,
+                        ship_colliders::PLAYER
+                            .union(ship_colliders::SHIP_HULL)
+                            .union(ship_colliders::SHIP_EXTERIOR),
+                    ))
+                    .friction(0.8)
+                    .position(iso)
+                    .build();
+                self.surface_barrier =
+                    Some(physics.add_collider(collider, terrain_body));
+            }
+        } else if let Some(sh) = self.surface_barrier.take() {
+            // Too high — remove barrier
+            physics.remove_collider(sh);
         }
 
         // Unified anchor rebase: check if the ship has drifted >100m from
         // the physics origin. If so, shift ALL bodies (ship, player, interior,
         // terrain colliders) so the ship returns near origin.
-        let ship_rapier_pos = rebase_bodies.ship
-            .and_then(|h| physics.rigid_body_set.get(h))
-            .map(|b| *b.translation())
-            .unwrap_or(nalgebra::Vector3::zeros());
         let ship_drift = (ship_rapier_pos.x * ship_rapier_pos.x
             + ship_rapier_pos.y * ship_rapier_pos.y
             + ship_rapier_pos.z * ship_rapier_pos.z).sqrt();
@@ -200,17 +248,8 @@ impl TerrainColliders {
                 }
             }
 
-            // Recompute sphere barrier to planet center relative to new anchor.
-            if let Some(sh) = self.sphere_barrier
-                && let Some(coll) = physics.collider_set.get_mut(sh)
-            {
-                let cx = (-self.anchor_f64[0]) as f32;
-                let cy = (-self.anchor_f64[1]) as f32;
-                let cz = (-self.anchor_f64[2]) as f32;
-                coll.set_position_wrt_parent(
-                    nalgebra::Isometry3::translation(cx, cy, cz)
-                );
-            }
+            // Surface barrier position is recomputed every frame from
+            // cam_rel_m, so no explicit rebase needed for it.
 
             physics.sync_collider_positions();
             physics.update_query_pipeline();
