@@ -1638,7 +1638,10 @@ impl ApplicationHandler for App {
                             let dist_m = (cam_rel[0] * cam_rel[0]
                                 + cam_rel[1] * cam_rel[1]
                                 + cam_rel[2] * cam_rel[2]).sqrt();
-                            let atmo_boundary = terrain_mgr.planet_radius_m() * 1.2;
+                            // Disengage at 1.05× radius (~385km for Earth-sized planet).
+                            // Close enough that the surface is visible and impulse
+                            // feels responsive, but high enough to decelerate safely.
+                            let atmo_boundary = terrain_mgr.planet_radius_m() * 1.05;
                             if dist_m < atmo_boundary {
                                 // Clamp position to atmosphere boundary.
                                 let safe_dist = atmo_boundary / dist_m;
@@ -2301,29 +2304,35 @@ impl ApplicationHandler for App {
                 if let (Some(interaction), Some(player)) = (&mut self.interaction, &self.player)
                     && !self.fly_mode
                 {
-                    // When seated, use camera position/direction for raycasting
-                    // (player can look around cockpit and click interactables).
-                    // When standing, use player eye position/direction.
+                    // Interaction raycasts must use origin-relative coordinates
+                    // because interactable colliders are children of the interior
+                    // body which stays at (0,0,0). The ship body may drift up to
+                    // 100m from origin between rebases, so using camera.position
+                    // (based on ship rapier pos) would miss the interactables.
+                    // Instead, apply only the rotation + helm offset from origin.
                     let (ray_origin, ray_dir) = if is_seated {
-                        let pos = self.camera.position;
-                        let fwd = self.camera.forward();
-                        (
-                            [pos.x as f32, pos.y as f32, pos.z as f32],
-                            [fwd.x, fwd.y, fwd.z],
-                        )
-                    } else {
-                        // Use camera forward (includes ship rotation via
-                        // orientation_override) so raycasts match where the
-                        // player is actually looking after ship roll/pitch.
-                        // Eye position offset along ship's up direction.
-                        let ship_rot_for_eye = self.ship.as_ref()
+                        let ship_rot = self.ship.as_ref()
                             .and_then(|s| self.physics.get_body(s.body_handle))
                             .map(|b| *b.rotation())
                             .unwrap_or(nalgebra::UnitQuaternion::identity());
-                        let eye_pos = player.position_ship_up(&self.physics, ship_rot_for_eye);
+                        let helm_offset = self.helm.as_ref()
+                            .map(|h| h.viewpoint_offset)
+                            .unwrap_or(glam::Vec3::ZERO);
+                        let offset = ship_rot * nalgebra::Vector3::new(
+                            helm_offset.x, helm_offset.y, helm_offset.z,
+                        );
                         let fwd = self.camera.forward();
                         (
-                            [eye_pos.x as f32, eye_pos.y as f32, eye_pos.z as f32],
+                            [offset.x, offset.y, offset.z],
+                            [fwd.x, fwd.y, fwd.z],
+                        )
+                    } else {
+                        // Walk mode: player body is already origin-relative
+                        // (controller subtracts ship translation).
+                        let player_pos = player.position(&self.physics);
+                        let fwd = self.camera.forward();
+                        (
+                            [player_pos.x as f32, player_pos.y as f32, player_pos.z as f32],
                             [fwd.x, fwd.y, fwd.z],
                         )
                     };
