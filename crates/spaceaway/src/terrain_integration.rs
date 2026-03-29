@@ -259,6 +259,12 @@ impl TerrainManager {
         self.col.anchor_f64
     }
 
+    /// Set the physics anchor directly (for teleport).
+    /// After calling this, the ship body should be at rapier origin.
+    pub fn set_anchor(&mut self, new_anchor: [f64; 3]) {
+        self.col.anchor_f64 = new_anchor;
+    }
+
     /// Planet radius in meters.
     #[allow(dead_code)]
     pub fn planet_radius_m(&self) -> f64 {

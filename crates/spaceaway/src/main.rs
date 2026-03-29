@@ -827,20 +827,36 @@ impl ApplicationHandler for App {
                             let dist = (dx*dx + dy*dy + dz*dz).sqrt().max(1.0);
                             let target_dist = radius_m + 1000.0;
                             let scale = target_dist / dist;
+                            let new_cam_rel = [dx * scale, dy * scale, dz * scale];
                             self.galactic_position = WorldPos::new(
-                                planet_pos.x + dx * scale * m_to_ly,
-                                planet_pos.y + dy * scale * m_to_ly,
-                                planet_pos.z + dz * scale * m_to_ly,
+                                planet_pos.x + new_cam_rel[0] * m_to_ly,
+                                planet_pos.y + new_cam_rel[1] * m_to_ly,
+                                planet_pos.z + new_cam_rel[2] * m_to_ly,
                             );
                             self.camera.position = self.galactic_position;
+                            // Update ship rapier position + anchor to match new
+                            // galactic position. With origin rebase, just setting
+                            // galactic_position gets overwritten next frame.
+                            if let Some(terrain_mgr) = &mut self.terrain {
+                                // Set anchor to new cam_rel_m, ship to origin
+                                terrain_mgr.set_anchor(new_cam_rel);
+                            }
                             if let Some(ship) = &self.ship
                                 && let Some(body) = self.physics.rigid_body_set.get_mut(ship.body_handle)
                             {
+                                body.set_translation(nalgebra::Vector3::zeros(), true);
                                 body.set_linvel(nalgebra::Vector3::zeros(), true);
                                 body.set_angvel(nalgebra::Vector3::zeros(), true);
                             }
+                            // Also reset player body to origin
+                            if let Some(player) = &self.player
+                                && let Some(body) = self.physics.rigid_body_set.get_mut(player.body_handle)
+                            {
+                                body.set_translation(nalgebra::Vector3::zeros(), true);
+                                body.set_linvel(nalgebra::Vector3::zeros(), true);
+                            }
                             self.drive.request_disengage();
-                            log::info!("Teleported 1km above planet surface (radius {:.0}km)", radius_m / 1000.0);
+                            log::info!("Teleported 1km above planet surface (radius {:.0}km, alt 1km)", radius_m / 1000.0);
                         } else {
                             log::warn!("No planet found — press 8 to enter a system first");
                         }
