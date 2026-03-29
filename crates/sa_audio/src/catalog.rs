@@ -9,6 +9,16 @@ pub enum SfxId {
     Confirm,
     DoorOpen,
     DoorClose,
+    /// Altitude proximity beep during descent.
+    AltitudeBeep,
+    /// Soft landing thud (clean touchdown, < 10 m/s).
+    ImpactSoft,
+    /// Heavy landing thud (minor impact, 10–30 m/s).
+    ImpactHeavy,
+    /// Crash sound (major impact, 30–80 m/s).
+    ImpactCrash,
+    /// Explosion (destroyed, > 80 m/s).
+    ImpactExplosion,
 }
 
 /// Computer voice announcements.
@@ -44,6 +54,8 @@ pub enum AlarmId {
     FuelLow,
     FuelCritical,
     PowerFailure,
+    /// Structural damage alarm (major impact).
+    StructuralDamage,
 }
 
 /// Music contexts.
@@ -76,6 +88,11 @@ pub fn sfx_path(id: SfxId) -> &'static str {
         SfxId::Confirm => "interface/confirm.wav",
         SfxId::DoorOpen => "doors/door_open.wav",
         SfxId::DoorClose => "doors/door_close.wav",
+        SfxId::AltitudeBeep => "interface/button_click.wav",
+        SfxId::ImpactSoft => "impacts/impact_soft.wav",
+        SfxId::ImpactHeavy => "impacts/impact_heavy.wav",
+        SfxId::ImpactCrash => "impacts/impact_crash.wav",
+        SfxId::ImpactExplosion => "impacts/explosion.wav",
     }
 }
 
@@ -98,6 +115,7 @@ pub fn alarm_path(id: AlarmId) -> &'static str {
         AlarmId::FuelLow => "alarms/fuel_low.wav",
         AlarmId::FuelCritical => "alarms/fuel_critical.wav",
         AlarmId::PowerFailure => "alarms/power_failure.wav",
+        AlarmId::StructuralDamage => "alarms/fuel_critical.wav",
     }
 }
 

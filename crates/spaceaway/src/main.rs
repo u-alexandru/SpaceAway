@@ -260,6 +260,8 @@ struct App {
     landing_skids: Option<[rapier3d::prelude::ColliderHandle; 4]>,
     /// Last computed minimum clearance from landing system for altitude HUD display.
     last_clearance: Option<f32>,
+    /// Countdown timer for altitude proximity beeps (seconds until next beep).
+    altitude_beep_timer: f32,
 }
 
 impl App {
@@ -355,6 +357,7 @@ impl App {
             landing: landing::LandingSystem::new(),
             landing_skids,
             last_clearance: None,
+            altitude_beep_timer: 0.0,
         }
     }
 
@@ -1751,6 +1754,21 @@ impl ApplicationHandler for App {
                                 impact.category,
                                 impact.impact_speed_ms
                             );
+                            match impact.category {
+                                landing::ImpactCategory::Clean => {
+                                    self.audio.play_sfx(sa_audio::SfxId::ImpactSoft, None);
+                                }
+                                landing::ImpactCategory::Minor => {
+                                    self.audio.play_sfx(sa_audio::SfxId::ImpactHeavy, None);
+                                }
+                                landing::ImpactCategory::Major => {
+                                    self.audio.play_sfx(sa_audio::SfxId::ImpactCrash, None);
+                                    self.audio.play_alarm(sa_audio::AlarmId::StructuralDamage);
+                                }
+                                landing::ImpactCategory::Destroyed => {
+                                    self.audio.play_sfx(sa_audio::SfxId::ImpactExplosion, None);
+                                }
+                            }
                             self.events.emit(impact.clone());
                         }
                     }
@@ -1938,6 +1956,21 @@ impl ApplicationHandler for App {
                                 impact.category,
                                 impact.impact_speed_ms
                             );
+                            match impact.category {
+                                landing::ImpactCategory::Clean => {
+                                    self.audio.play_sfx(sa_audio::SfxId::ImpactSoft, None);
+                                }
+                                landing::ImpactCategory::Minor => {
+                                    self.audio.play_sfx(sa_audio::SfxId::ImpactHeavy, None);
+                                }
+                                landing::ImpactCategory::Major => {
+                                    self.audio.play_sfx(sa_audio::SfxId::ImpactCrash, None);
+                                    self.audio.play_alarm(sa_audio::AlarmId::StructuralDamage);
+                                }
+                                landing::ImpactCategory::Destroyed => {
+                                    self.audio.play_sfx(sa_audio::SfxId::ImpactExplosion, None);
+                                }
+                            }
                             self.events.emit(impact.clone());
                         }
                     }
@@ -2258,6 +2291,7 @@ impl ApplicationHandler for App {
                     && interaction.hovered() == Some(ids.landing_lock_button)
                 {
                     self.landing.request_lock_toggle();
+                    self.audio.play_sfx(sa_audio::SfxId::ButtonClick, None);
                     log::debug!("Landing lock toggle requested");
                 }
 
@@ -2475,6 +2509,30 @@ impl ApplicationHandler for App {
                     }
                     if self.ship_resources.fuel >= 0.3 {
                         self.fuel_low_announced = false; // reset when fuel recovers
+                    }
+
+                    // Altitude proximity beep: fires when descending within 100 m.
+                    // Beep rate scales with closeness to ground.
+                    self.altitude_beep_timer -= dt;
+                    if let Some(clearance) = self.last_clearance {
+                        if clearance < 100.0 && self.altitude_beep_timer <= 0.0 {
+                            self.audio.play_sfx(sa_audio::SfxId::AltitudeBeep, None);
+                            // Reset timer: interval shrinks as altitude drops.
+                            self.altitude_beep_timer = if clearance < 5.0 {
+                                0.0 // continuous — fire every frame
+                            } else if clearance < 10.0 {
+                                1.0 / 8.0
+                            } else if clearance < 20.0 {
+                                1.0 / 4.0
+                            } else if clearance < 50.0 {
+                                1.0 / 2.0
+                            } else {
+                                1.0 // 1 beep/sec at 50–100 m
+                            };
+                        }
+                    } else {
+                        // No clearance data — reset timer so beep starts promptly on entry.
+                        self.altitude_beep_timer = 0.0;
                     }
 
                     self.audio.update(dt);
