@@ -106,7 +106,9 @@ impl TerrainColliders {
     }
 
     /// Compute the isometry for the surface barrier cuboid.
-    /// Top face at the planet surface, 50m below surface center.
+    /// Center at planet surface (radius_m). Top face 50m above surface,
+    /// bottom face 50m below. Ship stops at the top face and gravity
+    /// settles it to the actual terrain height via HeightField colliders.
     fn compute_barrier_isometry(
         &self,
         cam_rel_m: [f64; 3],
@@ -123,8 +125,8 @@ impl TerrainColliders {
             cam_rel_m[1] * inv_len,
             cam_rel_m[2] * inv_len,
         ];
-        // Surface point minus anchor, offset 50m inward (cuboid half-height)
-        let depth = radius_m - 50.0;
+        // Center at planet surface (radius_m)
+        let depth = radius_m;
         let sx = (normal[0] * depth - self.anchor_f64[0]) as f32;
         let sy = (normal[1] * depth - self.anchor_f64[1]) as f32;
         let sz = (normal[2] * depth - self.anchor_f64[2]) as f32;

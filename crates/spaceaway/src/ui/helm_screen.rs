@@ -60,6 +60,35 @@ pub fn draw_helm_screen(ctx: &egui::Context, data: &HelmData) {
             );
             ui.add_space(8.0);
 
+            // Planet distance / altitude (shown FIRST so it's always visible)
+            if let Some(dist_km) = data.planet_dist_km {
+                let (label, value_text, color) = if let Some(alt) = data.altitude_m {
+                    let c = if alt < 50.0 {
+                        egui::Color32::from_rgb(220, 50, 30)
+                    } else if alt < 200.0 {
+                        egui::Color32::from_rgb(220, 160, 30)
+                    } else {
+                        HELM_BLUE
+                    };
+                    if alt < 1000.0 {
+                        ("ALT", format!("{:.0}m", alt), c)
+                    } else {
+                        ("ALT", format!("{:.1}km", alt / 1000.0), c)
+                    }
+                } else if dist_km < 10.0 {
+                    ("SURF", format!("{:.1}km", dist_km), egui::Color32::from_rgb(220, 160, 30))
+                } else {
+                    ("SURF", format!("{:.0}km", dist_km), HELM_BLUE)
+                };
+                ui.label(
+                    egui::RichText::new(format!("{label}  {value_text}"))
+                        .color(color)
+                        .size(16.0)
+                        .strong(),
+                );
+                ui.add_space(4.0);
+            }
+
             // Speed (large) — units depend on drive mode
             let (speed_text, speed_unit) = match data.drive_mode {
                 sa_ship::DriveMode::Warp if matches!(data.drive_status, sa_ship::DriveStatus::Engaged) => {
@@ -231,36 +260,7 @@ pub fn draw_helm_screen(ctx: &egui::Context, data: &HelmData) {
                 }
             }
 
-            // Planet distance / altitude display
-            if let Some(dist_km) = data.planet_dist_km {
-                ui.add_space(8.0);
-                // Use altitude_m (raycast) when available (< 100m), otherwise
-                // use galactic-computed distance for longer range.
-                let (label, value_text, color) = if let Some(alt) = data.altitude_m {
-                    let c = if alt < 50.0 {
-                        egui::Color32::from_rgb(220, 50, 30) // red when close
-                    } else if alt < 200.0 {
-                        egui::Color32::from_rgb(220, 160, 30) // amber
-                    } else {
-                        HELM_BLUE
-                    };
-                    if alt < 1000.0 {
-                        ("ALT", format!("{:.0}m", alt), c)
-                    } else {
-                        ("ALT", format!("{:.1}km", alt / 1000.0), c)
-                    }
-                } else if dist_km < 10.0 {
-                    ("SURF", format!("{:.1}km", dist_km), egui::Color32::from_rgb(220, 160, 30))
-                } else {
-                    ("SURF", format!("{:.0}km", dist_km), HELM_BLUE)
-                };
-                ui.label(
-                    egui::RichText::new(format!("{label}  {value_text}"))
-                        .color(color)
-                        .size(16.0)
-                        .strong(),
-                );
-            }
+            // (SURF/ALT display moved to top of screen for visibility)
 
             // --- Navigation target ---
             if let Some((ref name, dist, eta)) = data.target_info {
