@@ -106,6 +106,11 @@ impl Navigation {
         }
     }
 
+    /// Lock on to a specific NavStar directly (e.g. a planet).
+    pub fn lock_star(&mut self, star: NavStar) {
+        self.locked_target = Some(star);
+    }
+
     /// Clear the current lock-on target.
     pub fn clear_target(&mut self) {
         self.locked_target = None;

@@ -864,7 +864,7 @@ impl ApplicationHandler for App {
                                         let au_in_ly = 1.581e-5_f64;
                                         let meters_in_ly = 1.0 / 9.461e15_f64;
                                         let planet_radius_m = planet.radius_earth as f64 * 6_371_000.0;
-                                        let view_dist_m = planet_radius_m * 1.5;
+                                        let view_dist_m = planet_radius_m * 1.8; // inside terrain activation (2.0x)
                                         let planet_orbital_ly = planet.orbital_radius_au as f64 * au_in_ly;
                                         // Offset above orbital plane so rings are visible
                                         let above_ly = view_dist_m * 0.4 * meters_in_ly;
@@ -899,7 +899,7 @@ impl ApplicationHandler for App {
                                             let meters_in_ly = 1.0 / 9.461e15_f64;
                                             let (offset_ly, desc) = if let Some(p) = system.planets.first() {
                                                 let r_m = p.radius_earth as f64 * 6_371_000.0;
-                                                let view_m = r_m * 1.5;
+                                                let view_m = r_m * 1.8;
                                                 let orb_ly = p.orbital_radius_au as f64 * au_in_ly;
                                                 (orb_ly + view_m * meters_in_ly, format!(
                                                     "Planet 1: {:?} {:.0}km at {:.2}AU",
@@ -1197,10 +1197,9 @@ impl ApplicationHandler for App {
                                 log::info!("Drive: CRUISE engaged");
                             }
                         }
-                        // Tab: lock star nearest to screen center
+                        // Tab: lock nearest target to crosshair.
+                        // In a solar system: lock nearest PLANET. Otherwise: lock nearest STAR.
                         if self.input.keyboard.just_pressed(KeyCode::Tab) {
-                            // Project all nearby stars to screen space, pick closest to center.
-                            // This guarantees we lock what the player is LOOKING at.
                             if let Some(gpu) = &self.gpu {
                                 let sw = gpu.config.width as f32;
                                 let sh = gpu.config.height as f32;
@@ -1208,37 +1207,103 @@ impl ApplicationHandler for App {
                                 let cy = sh / 2.0;
                                 let aspect = sw / sh;
                                 let vp = self.camera.view_projection_matrix(aspect);
+                                let cam_fwd = self.camera.forward();
 
-                                let mut best_screen_dist = f32::MAX;
-                                let mut best_idx: Option<usize> = None;
+                                let locked = if let Some(sys) = &self.active_system {
+                                    // In a solar system — lock nearest planet to crosshair
+                                    let positions = sys.compute_positions_ly_pub();
+                                    let mut best_dist = f32::MAX;
+                                    let mut best: Option<(usize, f32)> = None;
 
-                                for (i, star) in self.navigation.nearby_stars.iter().enumerate() {
-                                    let dx = (star.galactic_pos.x - self.galactic_position.x) as f32;
-                                    let dy = (star.galactic_pos.y - self.galactic_position.y) as f32;
-                                    let dz = (star.galactic_pos.z - self.galactic_position.z) as f32;
-                                    let len = (dx*dx + dy*dy + dz*dz).sqrt();
-                                    if len < 0.001 { continue; }
-                                    let dir = glam::Vec3::new(dx/len, dy/len, dz/len) * 90000.0;
-                                    let clip = vp * glam::Vec4::new(dir.x, dir.y, dir.z, 1.0);
-                                    if clip.w <= 0.0 { continue; } // behind camera
-                                    let sx = (clip.x / clip.w * 0.5 + 0.5) * sw;
-                                    let sy = (1.0 - (clip.y / clip.w * 0.5 + 0.5)) * sh;
-                                    let screen_dist = ((sx - cx).powi(2) + (sy - cy).powi(2)).sqrt();
-                                    if screen_dist < best_screen_dist {
-                                        best_screen_dist = screen_dist;
-                                        best_idx = Some(i);
+                                    for (i, pos) in positions.iter().enumerate() {
+                                        if i == 0 { continue; } // skip star
+                                        let Some(radius_m) = sys.body_radius_m(i) else { continue };
+                                        let Some((_, sub_type, _, _, _)) = sys.planet_data(i) else { continue };
+                                        // Skip non-planets (atmosphere, rings)
+                                        if radius_m < 100_000.0 { continue; }
+
+                                        let dx = (pos.x - self.galactic_position.x) as f32;
+                                        let dy = (pos.y - self.galactic_position.y) as f32;
+                                        let dz = (pos.z - self.galactic_position.z) as f32;
+                                        let len = (dx*dx + dy*dy + dz*dz).sqrt();
+                                        if len < 1e-10 { continue; }
+                                        let dir_norm = glam::Vec3::new(dx/len, dy/len, dz/len);
+                                        // Only consider planets within ~60° of crosshair
+                                        if cam_fwd.dot(dir_norm) < 0.5 { continue; }
+                                        let dir = dir_norm * 90000.0;
+                                        let clip = vp * glam::Vec4::new(dir.x, dir.y, dir.z, 1.0);
+                                        if clip.w <= 0.0 { continue; }
+                                        let sx = (clip.x / clip.w * 0.5 + 0.5) * sw;
+                                        let sy = (1.0 - (clip.y / clip.w * 0.5 + 0.5)) * sh;
+                                        let sd = ((sx - cx).powi(2) + (sy - cy).powi(2)).sqrt();
+                                        if sd < best_dist {
+                                            best_dist = sd;
+                                            best = Some((i, sd));
+                                        }
                                     }
-                                }
 
-                                if let Some(idx) = best_idx {
-                                    self.navigation.lock_target(idx);
-                                    if let Some(target) = &self.navigation.locked_target {
-                                        log::info!("LOCKED: {} ({:.2} ly, {:.0}px from center)",
-                                            target.catalog_name, target.distance_ly, best_screen_dist);
+                                    if let Some((idx, px_dist)) = best {
+                                        let pos = positions[idx];
+                                        let dist_ly = self.galactic_position.distance_to(pos);
+                                        let radius_m = sys.body_radius_m(idx).unwrap_or(0.0);
+                                        let (_, sub_type, _, _, _) = sys.planet_data(idx).unwrap();
+                                        let name = format!("Planet {} ({:?}, {:.0}km)",
+                                            idx, sub_type, radius_m / 1000.0);
+                                        let nav = navigation::NavStar {
+                                            id: sa_universe::ObjectId(0),
+                                            galactic_pos: pos,
+                                            catalog_name: name.clone(),
+                                            distance_ly: dist_ly,
+                                            color: [1.0, 1.0, 1.0],
+                                            spectral_class: sa_universe::SpectralClass::G,
+                                            luminosity: 1.0,
+                                        };
+                                        self.navigation.lock_star(nav);
+                                        log::info!("LOCKED PLANET: {} ({:.6} ly, {:.0}px from center)",
+                                            name, dist_ly, px_dist);
                                         self.audio.play_sfx(sa_audio::SfxId::Confirm, None);
+                                        true
+                                    } else {
+                                        false
                                     }
                                 } else {
-                                    log::warn!("No star visible on screen");
+                                    false
+                                };
+
+                                // Fallback: lock nearest star if no planet was locked
+                                if !locked {
+                                    self.navigation.update_nearby(self.galactic_position);
+                                    let mut best_screen_dist = f32::MAX;
+                                    let mut best_idx: Option<usize> = None;
+                                    for (i, star) in self.navigation.nearby_stars.iter().enumerate() {
+                                        let dx = (star.galactic_pos.x - self.galactic_position.x) as f32;
+                                        let dy = (star.galactic_pos.y - self.galactic_position.y) as f32;
+                                        let dz = (star.galactic_pos.z - self.galactic_position.z) as f32;
+                                        let len = (dx*dx + dy*dy + dz*dz).sqrt();
+                                        if len < 0.001 { continue; }
+                                        let dir_norm = glam::Vec3::new(dx/len, dy/len, dz/len);
+                                        if cam_fwd.dot(dir_norm) < 0.866 { continue; }
+                                        let dir = dir_norm * 90000.0;
+                                        let clip = vp * glam::Vec4::new(dir.x, dir.y, dir.z, 1.0);
+                                        if clip.w <= 0.0 { continue; }
+                                        let sx = (clip.x / clip.w * 0.5 + 0.5) * sw;
+                                        let sy = (1.0 - (clip.y / clip.w * 0.5 + 0.5)) * sh;
+                                        let screen_dist = ((sx - cx).powi(2) + (sy - cy).powi(2)).sqrt();
+                                        if screen_dist < best_screen_dist {
+                                            best_screen_dist = screen_dist;
+                                            best_idx = Some(i);
+                                        }
+                                    }
+                                    if let Some(idx) = best_idx {
+                                        self.navigation.lock_target(idx);
+                                        if let Some(target) = &self.navigation.locked_target {
+                                            log::info!("LOCKED STAR: {} ({:.2} ly, {:.0}px from center)",
+                                                target.catalog_name, target.distance_ly, best_screen_dist);
+                                            self.audio.play_sfx(sa_audio::SfxId::Confirm, None);
+                                        }
+                                    } else {
+                                        log::warn!("No target visible on screen");
+                                    }
                                 }
                             }
                         }
