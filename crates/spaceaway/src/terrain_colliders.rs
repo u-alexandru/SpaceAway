@@ -20,10 +20,13 @@ const ANCHOR_REBASE_THRESHOLD_M: f64 = 100.0;
 
 /// Handles for all bodies that must be shifted during an anchor rebase.
 /// Collected from main.rs and passed into the rebase function.
+///
+/// Note: the interior body is NOT included — it always stays at the rapier
+/// origin (the player controller subtracts/adds ship_position). Shifting it
+/// during rebase would be immediately undone by the interior sync code.
 pub(crate) struct RebaseBodies {
     pub ship: Option<RigidBodyHandle>,
     pub player: Option<RigidBodyHandle>,
-    pub interior: Option<RigidBodyHandle>,
 }
 
 /// Minimal data retained per chunk for collider management.
@@ -107,7 +110,6 @@ impl TerrainColliders {
     /// Unified anchor system: the terrain body stays at (0,0,0). All physics
     /// bodies (ship, player, interior) are positioned relative to the anchor.
     /// When the ship drifts >100m from origin, all bodies are shifted back.
-    #[allow(clippy::too_many_arguments)]
     pub fn update(
         &mut self,
         physics: &mut PhysicsWorld,
@@ -115,7 +117,6 @@ impl TerrainColliders {
         radius_m: f64,
         max_displacement_m: f64,
         visible_keys: &std::collections::HashSet<ChunkKey>,
-        _ship_physics_pos: [f32; 3],
         rebase_bodies: &RebaseBodies,
     ) {
         // On first call, initialize anchor to the camera position so the
@@ -135,6 +136,8 @@ impl TerrainColliders {
         // Sphere barrier: a ball collider at planet radius that prevents
         // flying through the planet at coarse LODs (where HeightField
         // colliders don't exist). Positioned at planet center relative to anchor.
+        // f32 precision note: anchor values up to ~12,000,000m (2× Earth radius)
+        // give ≤1m error. Only rocky planets are landable so this is safe.
         if self.sphere_barrier.is_none() {
             let cx = (-self.anchor_f64[0]) as f32;
             let cy = (-self.anchor_f64[1]) as f32;
@@ -169,8 +172,8 @@ impl TerrainColliders {
             self.anchor_f64[1] += ship_rapier_pos.y as f64;
             self.anchor_f64[2] += ship_rapier_pos.z as f64;
 
-            // Shift all rigid bodies.
-            for handle in [rebase_bodies.ship, rebase_bodies.player, rebase_bodies.interior].iter().flatten() {
+            // Shift all rigid bodies (ship + player, not interior which stays at origin).
+            for handle in [rebase_bodies.ship, rebase_bodies.player].iter().flatten() {
                 if let Some(body) = physics.rigid_body_set.get_mut(*handle) {
                     let t = body.translation();
                     body.set_translation(

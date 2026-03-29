@@ -2731,16 +2731,7 @@ impl ApplicationHandler for App {
                                 true,
                             );
                         }
-                        // Shift interior body
-                        if let Some(ih) = ship_colliders::interior_body_handle()
-                            && let Some(b) = self.physics.rigid_body_set.get_mut(ih)
-                        {
-                            let t = b.translation();
-                            b.set_translation(
-                                nalgebra::Vector3::new(t.x + shift.x, t.y + shift.y, t.z + shift.z),
-                                true,
-                            );
-                        }
+                        // Interior body stays at origin (player controller handles offset).
                         log::info!("Physics origin rebase on terrain activation: shifted by ({:.0},{:.0},{:.0})",
                             shift.x, shift.y, shift.z);
                     }
@@ -2783,17 +2774,9 @@ impl ApplicationHandler for App {
                                 positions.get(terrain_mgr.body_index()).copied()
                             })
                             .unwrap_or(WorldPos::ORIGIN);
-                        let ship_phys_pos = self.ship.as_ref()
-                            .and_then(|s| self.physics.get_body(s.body_handle))
-                            .map(|b| {
-                                let t = b.translation();
-                                [t.x, t.y, t.z]
-                            })
-                            .unwrap_or([0.0; 3]);
                         let rebase_bodies = terrain_colliders::RebaseBodies {
                             ship: self.ship.as_ref().map(|s| s.body_handle),
                             player: self.player.as_ref().map(|p| p.body_handle),
-                            interior: ship_colliders::interior_body_handle(),
                         };
                         let result = terrain_mgr.update(
                             self.galactic_position,
@@ -2802,7 +2785,6 @@ impl ApplicationHandler for App {
                             &gpu.device,
                             &mut self.physics,
                             ship_down,
-                            ship_phys_pos,
                             &rebase_bodies,
                         );
                         if let Some(sys) = &mut self.active_system {

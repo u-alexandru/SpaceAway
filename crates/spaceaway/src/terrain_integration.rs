@@ -118,7 +118,6 @@ impl TerrainManager {
         device: &wgpu::Device,
         physics: &mut PhysicsWorld,
         ship_down: [f32; 3],
-        ship_physics_pos: [f32; 3],
         rebase_bodies: &crate::terrain_colliders::RebaseBodies,
     ) -> TerrainFrameResult {
         // DO NOT update planet_center_ly from orbital motion.
@@ -196,7 +195,6 @@ impl TerrainManager {
             self.config.radius_m,
             self.max_displacement_m,
             &visible_keys,
-            ship_physics_pos,
             rebase_bodies,
         );
 
@@ -208,14 +206,19 @@ impl TerrainManager {
                 + cam_rel_m[2] * cam_rel_m[2]).sqrt();
             let altitude_km = (cam_dist - self.config.radius_m) / 1000.0;
 
-            // Sphere barrier diagnostic: log its world position + distance to ship
+            // Sphere barrier diagnostic: log its world position + distance to ship.
+            // Read ship position fresh from rapier (may have been rebased this frame).
+            let ship_pos = rebase_bodies.ship
+                .and_then(|h| physics.rigid_body_set.get(h))
+                .map(|b| *b.translation())
+                .unwrap_or(nalgebra::Vector3::zeros());
             if let Some(sh) = self.col.sphere_barrier
                 && let Some(coll) = physics.collider_set.get(sh)
             {
                 let world = coll.position().translation;
-                let dx = world.x - ship_physics_pos[0];
-                let dy = world.y - ship_physics_pos[1];
-                let dz = world.z - ship_physics_pos[2];
+                let dx = world.x - ship_pos.x;
+                let dy = world.y - ship_pos.y;
+                let dz = world.z - ship_pos.z;
                 let dist_to_center = (dx * dx + dy * dy + dz * dz).sqrt();
                 let barrier_gap = dist_to_center - self.config.radius_m as f32;
                 log::info!(
@@ -223,7 +226,7 @@ impl TerrainManager {
                      barrier_center=({:.0},{:.0},{:.0}), dist_to_barrier_center={:.0}m, \
                      barrier_gap={:.0}m, heightfield_colliders={}, cam_rel_mag={:.0}m",
                     altitude_km,
-                    ship_physics_pos[0], ship_physics_pos[1], ship_physics_pos[2],
+                    ship_pos.x, ship_pos.y, ship_pos.z,
                     world.x, world.y, world.z,
                     dist_to_center, barrier_gap,
                     self.col.colliders.len(),
