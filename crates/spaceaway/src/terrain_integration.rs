@@ -229,7 +229,16 @@ impl TerrainManager {
         // coverage. With fewer than 6 chunks (one per cube face), the terrain
         // sphere has visible gaps and the transition looks like the planet
         // disappearing and being replaced by floating panels.
-        let hide_icosphere = self.gpu_meshes.len() >= 6;
+        let visible_in_gpu = visible.iter().filter(|n| {
+            let key = ChunkKey {
+                face: n.face as u8,
+                lod: n.lod,
+                x: n.x,
+                y: n.y,
+            };
+            self.gpu_meshes.contains_key(&key)
+        }).count();
+        let hide_icosphere = visible_in_gpu >= 6;
 
         TerrainFrameResult {
             draw_commands,
@@ -263,6 +272,13 @@ impl TerrainManager {
     /// After calling this, the ship body should be at rapier origin.
     pub fn set_anchor(&mut self, new_anchor: [f64; 3]) {
         self.col.anchor_f64 = new_anchor;
+    }
+
+    /// Clear stale GPU meshes and force burst uploads after a teleport.
+    /// Old chunks are at the previous position and must be discarded.
+    pub fn flush_for_teleport(&mut self) {
+        self.gpu_meshes.clear();
+        self.streaming.burst_frames_remaining = 120;
     }
 
     /// Planet radius in meters.

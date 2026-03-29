@@ -13,7 +13,7 @@ use sa_terrain::ChunkKey;
 use crate::ship_colliders;
 
 /// Only create HeightField colliders for chunks within this distance (meters).
-const COLLIDER_RANGE_M: f64 = 500.0;
+const COLLIDER_RANGE_M: f64 = 2000.0;
 
 /// Shift all collider positions when the ship moves this far from the anchor.
 const ANCHOR_REBASE_THRESHOLD_M: f64 = 100.0;
@@ -289,7 +289,7 @@ impl TerrainColliders {
         // Minimum LOD for collision: chunks must be fine enough that the
         // flat HeightField approximation is accurate. At LOD 10, chunk covers
         // ~10km — above this, curvature error is too large for reliable collision.
-        let min_collider_lod: u8 = 10;
+        let min_collider_lod: u8 = 8;
 
         let keys_to_add: Vec<ChunkKey> = self
             .chunk_cache

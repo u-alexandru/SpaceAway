@@ -129,6 +129,8 @@ pub struct ChunkStreaming {
     cache: LruCache,
     /// Keys currently in-flight (requested but not yet received).
     in_flight: HashSet<ChunkKey>,
+    /// When > 0, force burst upload mode and decrement each frame.
+    pub burst_frames_remaining: u32,
 }
 
 impl ChunkStreaming {
@@ -170,6 +172,7 @@ impl ChunkStreaming {
             result_rx,
             cache: LruCache::new(LRU_CAPACITY),
             in_flight: HashSet::new(),
+            burst_frames_remaining: 0,
         }
     }
 
@@ -197,8 +200,11 @@ impl ChunkStreaming {
         /// How many cached chunks before we switch from burst to steady.
         const BURST_THRESHOLD: usize = 24;
 
-        let max_uploads = if self.cache.len() < BURST_THRESHOLD {
-            MAX_UPLOADS_BURST // initial fill: upload aggressively
+        let max_uploads = if self.burst_frames_remaining > 0 || self.cache.len() < BURST_THRESHOLD {
+            if self.burst_frames_remaining > 0 {
+                self.burst_frames_remaining -= 1;
+            }
+            MAX_UPLOADS_BURST // burst fill: upload aggressively
         } else {
             MAX_UPLOADS_STEADY // steady state: cap at 8
         };
