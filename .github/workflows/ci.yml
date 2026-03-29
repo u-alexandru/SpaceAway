@@ -10,8 +10,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  check:
-    name: Check & Lint
+  check-macos:
+    name: macOS — Check, Lint, Test
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,6 +19,8 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ci-macos
       - name: cargo check
         run: cargo check --workspace
       - name: cargo clippy
@@ -27,13 +29,13 @@ jobs:
         run: cargo test --workspace
 
   check-windows:
-    name: Windows Cross-Check
-    runs-on: ubuntu-latest
+    name: Windows — Build
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
-      - name: cargo check (Windows target)
-        run: cargo check --workspace --target x86_64-pc-windows-msvc
+        with:
+          key: ci-windows
+      - name: cargo build
+        run: cargo build -p spaceaway
