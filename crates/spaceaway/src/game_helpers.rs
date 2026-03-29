@@ -1,13 +1,29 @@
-use super::App;
+use super::{App, GamePhase, PerfTimings};
 use crate::debug_state;
+use crate::drive_integration;
+use crate::landing;
+use crate::menu;
 use crate::mesh_utils::{make_cube, meshgen_to_render};
+use crate::navigation;
 use crate::ship_setup;
 use crate::sky::{distant_galaxies_to_instances, nebulae_to_instances};
+use crate::star_streaming;
+use crate::ui;
+use sa_core::{EventBus, FrameTime};
+use sa_ecs::{GameWorld, Schedule};
+use sa_input::InputState;
 use sa_math::WorldPos;
-use sa_render::ScreenQuad;
-use sa_universe::MasterSeed;
+use sa_physics::PhysicsWorld;
+use sa_player::PlayerController;
+use sa_render::{Camera, GpuContext, Renderer, ScreenQuad};
+use sa_ship::helm::HelmController;
+use sa_survival::{ShipResources, SuitResources, generate_deposits};
+use sa_universe::{MasterSeed, Universe};
+use std::collections::HashSet;
+use std::sync::Arc;
 use std::time::Instant;
-use winit::window::CursorGrabMode;
+use winit::event_loop::ActiveEventLoop;
+use winit::window::{CursorGrabMode, Window};
 
 impl App {
     pub(crate) fn setup_scene(&mut self) {
@@ -232,6 +248,129 @@ impl App {
                 .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined));
             window.set_cursor_visible(false);
             self.cursor_grabbed = true;
+        }
+    }
+
+    pub(crate) fn new() -> Self {
+        let mut physics = PhysicsWorld::new();
+        let (ship, interaction, ids) =
+            ship_setup::create_ship_and_interactables(&mut physics);
+        let landing_skids = Some(ship.add_landing_skids(
+            &mut physics,
+            spaceaway::ship_colliders::SHIP_EXTERIOR,
+            spaceaway::ship_colliders::TERRAIN,
+        ));
+        let helm = HelmController::new(glam::Vec3::new(-0.8, 0.3, 2.0));
+        let player = PlayerController::spawn(&mut physics, 0.0, 0.0, 3.5);
+        let camera = Camera::new();
+        let seed = MasterSeed(42);
+        let universe = Universe::new(seed);
+
+        Self {
+            window: None, gpu: None, renderer: None,
+            camera,
+            input: InputState::new(),
+            world: GameWorld::new(),
+            events: EventBus::new(),
+            time: FrameTime::new(),
+            schedule: Schedule::new(),
+            last_frame: Instant::now(),
+            cube_mesh: None,
+            cursor_grabbed: false,
+            physics,
+            player: Some(player),
+            star_streaming: star_streaming::StarStreaming::new(seed),
+            universe,
+            nebulae: Vec::new(),
+            distant_galaxies: Vec::new(),
+            perf: PerfTimings::default(),
+            perf_update_timer: 0.0,
+            teleport_counter: 0,
+            fly_mode: false,
+            fly_speed: 5.0,
+            galactic_position: WorldPos::ORIGIN,
+            ship_part_mesh: None,
+            ship_part_index: 0,
+            view_mode: 0,
+            ship: Some(ship),
+            interaction: Some(interaction),
+            ship_ids: Some(ids),
+            helm: Some(helm),
+            interactable_meshes: Vec::new(),
+            debug_ray_mesh: None,
+            debug_ray_data: None,
+            ui_system: None,
+            screen_quad: None,
+            screen_bind_group: None,
+            sensors_quad: None,
+            sensors_bind_group: None,
+            drive: sa_ship::DriveController::new(),
+            drive_visuals: drive_integration::DriveVisualState::new(),
+            ship_resources: ShipResources::new(),
+            suit: SuitResources::new(),
+            active_system: None,
+            helm_look_yaw: 0.0,
+            helm_look_pitch: 0.0,
+            deposits: generate_deposits(42),
+            gathered: HashSet::new(),
+            nearest_gatherable: None,
+            navigation: navigation::Navigation::new(seed),
+            audio: sa_audio::AudioManager::new("resources/sounds".into()),
+            fuel_low_announced: false,
+            proximity_warned: false,
+            prev_target_dist: None,
+            phase: GamePhase::Menu,
+            menu: None,
+            wants_star_lock: false,
+            terrain: None,
+            terrain_gravity: None,
+            quit_requested: false,
+            landing: landing::LandingSystem::new(),
+            landing_skids,
+            last_clearance: None,
+            altitude_beep_timer: 0.0,
+            show_profiler: false,
+            puffin_server: None,
+        }
+    }
+
+    pub(crate) fn init_window(&mut self, event_loop: &ActiveEventLoop) {
+        if self.window.is_some() { return; }
+        let attrs = Window::default_attributes()
+            .with_title("SpaceAway")
+            .with_inner_size(winit::dpi::LogicalSize::new(1280, 720));
+        let window = Arc::new(event_loop.create_window(attrs).unwrap());
+        let gpu = GpuContext::new(window.clone());
+        let renderer = Renderer::new(&gpu);
+        let ui_sys = ui::UiSystem::new(
+            &gpu.device, gpu.config.format, gpu.config.width, gpu.config.height,
+        );
+        self.gpu = Some(gpu);
+        self.renderer = Some(renderer);
+        self.ui_system = Some(ui_sys);
+        self.window = Some(window.clone());
+        self.last_frame = Instant::now();
+        self.setup_scene();
+
+        if self.menu.is_none() && self.phase == GamePhase::Menu {
+            if let (Some(gpu_ref), Some(renderer_ref)) = (&self.gpu, &mut self.renderer) {
+                self.menu = Some(menu::MainMenu::new(
+                    &mut renderer_ref.mesh_store, &gpu_ref.device,
+                ));
+            }
+            if let Some(menu_ref) = &self.menu {
+                let menu_pos = menu_ref.galactic_position();
+                self.star_streaming.force_load(menu_pos);
+                if let (Some(gpu_ref), Some(renderer_ref)) = (&self.gpu, &mut self.renderer) {
+                    let verts = self.star_streaming.build_vertices(menu_pos);
+                    renderer_ref.star_field.update_star_buffer(&gpu_ref.device, &verts);
+                }
+            }
+            self.audio.set_music_context(sa_audio::MusicContext::Idle);
+            window.set_cursor_visible(true);
+            let _ = window.set_cursor_grab(CursorGrabMode::None);
+            self.cursor_grabbed = false;
+            log::info!("Main menu created");
         }
     }
 }

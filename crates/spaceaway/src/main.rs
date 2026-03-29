@@ -6,6 +6,7 @@ mod game_systems;
 mod input_handler;
 mod landing;
 mod menu;
+mod menu_render;
 mod mesh_utils;
 mod navigation;
 #[allow(clippy::too_many_lines)]
@@ -20,7 +21,6 @@ mod ui;
 use spaceaway::ship_colliders;
 use spaceaway::terrain_colliders;
 
-use glam::Vec3;
 use sa_core::{EventBus, FrameTime};
 use sa_ecs::{GameWorld, Schedule};
 use sa_input::InputState;
@@ -28,14 +28,14 @@ use sa_math::WorldPos;
 use sa_physics::PhysicsWorld;
 use sa_player::PlayerController;
 use sa_render::{
-    Camera, GpuContext, Renderer, ScreenDrawCommand,
+    Camera, GpuContext, Renderer,
     ScreenQuad,
 };
 use sa_ship::helm::HelmController;
 use sa_ship::interaction::InteractionSystem;
 use sa_ship::ship::Ship;
-use sa_survival::{ResourceDeposit, ShipResources, SuitResources, generate_deposits};
-use sa_universe::{MasterSeed, Universe};
+use sa_survival::{ResourceDeposit, ShipResources, SuitResources};
+use sa_universe::Universe;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
@@ -194,153 +194,9 @@ struct App {
     puffin_server: Option<puffin_http::Server>,
 }
 
-impl App {
-    fn new() -> Self {
-        // Zero gravity for space
-        // Use normal gravity — the ship body has gravity_scale(0.0) so it's unaffected.
-        // The player body uses default gravity_scale(1.0) so it falls naturally onto the floor.
-        // This is more stable than manually applying force each frame.
-        let mut physics = PhysicsWorld::new(); // default gravity (0, -9.81, 0)
-
-        // Create ship and interactables
-        let (ship, interaction, ids) =
-            ship_setup::create_ship_and_interactables(&mut physics);
-
-        // Create landing skids on the ship body (persist for the lifetime of the session).
-        let landing_skids = Some(ship.add_landing_skids(
-            &mut physics,
-            ship_colliders::SHIP_EXTERIOR,
-            ship_colliders::TERRAIN,
-        ));
-
-        // Helm controller: viewpoint at pilot seat position (port side) + eye height
-        let helm = HelmController::new(glam::Vec3::new(-0.8, 0.3, 2.0));
-
-        // Spawn player behind the helm seats (standing room in v2 cockpit)
-        let player = PlayerController::spawn(&mut physics, 0.0, 0.0, 3.5);
-
-        let camera = Camera::new();
-        let seed = MasterSeed(42);
-        let universe = Universe::new(seed);
-
-        Self {
-            window: None,
-            gpu: None,
-            renderer: None,
-            camera,
-            input: InputState::new(),
-            world: GameWorld::new(),
-            events: EventBus::new(),
-            time: FrameTime::new(),
-            schedule: Schedule::new(),
-            last_frame: Instant::now(),
-            cube_mesh: None,
-            cursor_grabbed: false,
-            physics,
-            player: Some(player),
-            star_streaming: star_streaming::StarStreaming::new(seed),
-            universe,
-            nebulae: Vec::new(),
-            distant_galaxies: Vec::new(),
-            perf: PerfTimings::default(),
-            perf_update_timer: 0.0,
-            teleport_counter: 0,
-            fly_mode: false,
-            fly_speed: 5.0,
-            galactic_position: WorldPos::ORIGIN,
-            ship_part_mesh: None,
-            ship_part_index: 0,
-            view_mode: 0,
-            ship: Some(ship),
-            interaction: Some(interaction),
-            ship_ids: Some(ids),
-            helm: Some(helm),
-            interactable_meshes: Vec::new(),
-            debug_ray_mesh: None,
-            debug_ray_data: None,
-            ui_system: None,
-            screen_quad: None,
-            screen_bind_group: None,
-            sensors_quad: None,
-            sensors_bind_group: None,
-            drive: sa_ship::DriveController::new(),
-            drive_visuals: drive_integration::DriveVisualState::new(),
-            ship_resources: ShipResources::new(),
-            suit: SuitResources::new(),
-            active_system: None,
-            helm_look_yaw: 0.0,
-            helm_look_pitch: 0.0,
-            deposits: generate_deposits(42),
-            gathered: HashSet::new(),
-            nearest_gatherable: None,
-            navigation: navigation::Navigation::new(seed),
-            audio: sa_audio::AudioManager::new("resources/sounds".into()),
-            fuel_low_announced: false,
-            proximity_warned: false,
-            prev_target_dist: None,
-            phase: GamePhase::Menu,
-            menu: None,
-            wants_star_lock: false,
-            terrain: None,
-            terrain_gravity: None,
-            quit_requested: false,
-            landing: landing::LandingSystem::new(),
-            landing_skids,
-            last_clearance: None,
-            altitude_beep_timer: 0.0,
-            show_profiler: false,
-            puffin_server: None,
-        }
-    }
-}
-
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.window.is_none() {
-            let attrs = Window::default_attributes()
-                .with_title("SpaceAway")
-                .with_inner_size(winit::dpi::LogicalSize::new(1280, 720));
-            let window = Arc::new(event_loop.create_window(attrs).unwrap());
-            let gpu = GpuContext::new(window.clone());
-            let renderer = Renderer::new(&gpu);
-            let ui_sys = ui::UiSystem::new(
-                &gpu.device,
-                gpu.config.format,
-                gpu.config.width,
-                gpu.config.height,
-            );
-            self.gpu = Some(gpu);
-            self.renderer = Some(renderer);
-            self.ui_system = Some(ui_sys);
-            self.window = Some(window.clone());
-            self.last_frame = Instant::now();
-            self.setup_scene();
-
-            // Create main menu scene after GPU is ready
-            if self.menu.is_none() && self.phase == GamePhase::Menu {
-                if let (Some(gpu_ref), Some(renderer_ref)) = (&self.gpu, &mut self.renderer) {
-                    self.menu = Some(menu::MainMenu::new(
-                        &mut renderer_ref.mesh_store,
-                        &gpu_ref.device,
-                    ));
-                }
-                // Load stars for the menu's galactic position
-                if let Some(menu_ref) = &self.menu {
-                    let menu_pos = menu_ref.galactic_position();
-                    self.star_streaming.force_load(menu_pos);
-                    if let (Some(gpu_ref), Some(renderer_ref)) = (&self.gpu, &mut self.renderer) {
-                        let verts = self.star_streaming.build_vertices(menu_pos);
-                        renderer_ref.star_field.update_star_buffer(&gpu_ref.device, &verts);
-                    }
-                }
-                self.audio.set_music_context(sa_audio::MusicContext::Idle);
-                // Make sure cursor is free during menu
-                window.set_cursor_visible(true);
-                let _ = window.set_cursor_grab(CursorGrabMode::None);
-                self.cursor_grabbed = false;
-                log::info!("Main menu created");
-            }
-        }
+        self.init_window(event_loop);
     }
 
     fn window_event(
@@ -404,85 +260,7 @@ impl ApplicationHandler for App {
 
                 let dt = self.time.delta_seconds() as f32;
 
-                // --- MENU PHASE ---
-                if self.phase == GamePhase::Menu {
-                    if let Some(menu_ref) = &mut self.menu {
-                        menu_ref.update(dt);
-                    }
-                    self.audio.update(dt);
-
-                    if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
-                        // Update star field for menu position
-                        let menu_pos = self.menu.as_ref()
-                            .map(|m| m.galactic_position())
-                            .unwrap_or(WorldPos::ORIGIN);
-                        let needs_rebuild = self.star_streaming.update(menu_pos, dt);
-                        if needs_rebuild {
-                            let verts = self.star_streaming.build_vertices(menu_pos);
-                            renderer.star_field.update_star_buffer(&gpu.device, &verts);
-                        }
-
-                        // Get menu draw commands
-                        let commands = self.menu.as_ref()
-                            .map(|m| m.draw_commands())
-                            .unwrap_or_default();
-                        let screen_draws: Vec<ScreenDrawCommand<'_>> = vec![];
-                        let drive_params = sa_render::DriveRenderParams::default();
-
-                        let default_cam = Camera::new();
-                        let menu_camera = self.menu.as_ref()
-                            .map(|m| m.camera())
-                            .unwrap_or(&default_cam);
-
-                        if let Some(mut frame_ctx) = renderer.render_frame(
-                            gpu,
-                            menu_camera,
-                            &commands,
-                            &screen_draws,
-                            Vec3::new(0.5, -0.8, -0.3),
-                            menu_pos,
-                            &drive_params,
-                        ) {
-                            // Render menu egui overlay
-                            if let Some(ui_sys) = &mut self.ui_system {
-                                // Pass mouse position (physical pixels) and click state to egui
-                                let mouse_pos = self.input.mouse.position()
-                                    .map(|(x, y)| [x, y]);
-                                let mouse_clicked = self.input.mouse.left_just_pressed();
-                                let menu_action = ui_sys.render_menu(
-                                    &gpu.device,
-                                    &gpu.queue,
-                                    &mut frame_ctx.encoder,
-                                    &frame_ctx.view,
-                                    self.menu.as_mut().unwrap(),
-                                    mouse_pos,
-                                    mouse_clicked,
-                                );
-                                match menu_action {
-                                    Some(menu::MenuAction::Continue) => {
-                                        self.phase = GamePhase::Playing;
-                                        self.menu = None;
-                                        self.star_streaming.force_load(self.galactic_position);
-                                        let verts = self.star_streaming.build_vertices(self.galactic_position);
-                                        renderer.star_field.update_star_buffer(&gpu.device, &verts);
-                                        self.audio.set_power(true);
-                                        log::info!("Starting game -- entering ship");
-                                    }
-                                    Some(menu::MenuAction::Quit) => {
-                                        self.quit_requested = true;
-                                    }
-                                    None => {}
-                                }
-                            }
-
-                            renderer.submit_frame(gpu, frame_ctx);
-                        }
-                    }
-
-                    self.input.end_frame();
-                    if let Some(window) = &self.window {
-                        window.request_redraw();
-                    }
+                if self.render_menu_frame(dt) {
                     return;
                 }
 
