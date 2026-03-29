@@ -56,11 +56,11 @@ impl LruCache {
         self.order.push_back(key);
 
         // Evict LRU if over capacity.
-        if self.order.len() > self.capacity {
-            if let Some(evicted) = self.order.pop_front() {
-                self.map.remove(&evicted);
-                return Some(evicted);
-            }
+        if self.order.len() > self.capacity
+            && let Some(evicted) = self.order.pop_front()
+        {
+            self.map.remove(&evicted);
+            return Some(evicted);
         }
         None
     }
