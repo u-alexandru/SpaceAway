@@ -2700,6 +2700,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "sa_terrain"
+version = "0.1.0"
+dependencies = [
+ "approx",
+ "crossbeam-channel",
+ "fastnoise-lite",
+ "glam",
+ "log",
+ "sa_core",
+ "sa_math",
+ "sa_universe",
+]
+
+[[package]]
 name = "sa_universe"
 version = "0.1.0"
 dependencies = [
