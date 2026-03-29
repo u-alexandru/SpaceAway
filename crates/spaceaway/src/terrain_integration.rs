@@ -206,16 +206,36 @@ impl TerrainManager {
                 + cam_rel_m[2] * cam_rel_m[2]).sqrt();
             let altitude_km = (cam_dist - self.config.radius_m) / 1000.0;
 
-            // Surface barrier diagnostic.
-            let has_barrier = self.col.surface_barrier.is_some();
-            log::info!(
-                "COLLISION_DIAG: altitude={:.1}km, \
-                 surface_barrier={}, heightfield_colliders={}, cam_rel_mag={:.0}m",
-                altitude_km,
-                has_barrier,
-                self.col.colliders.len(),
-                cam_dist,
-            );
+            // Surface barrier diagnostic: position + distance from ship.
+            let ship_pos = rebase_bodies.ship
+                .and_then(|h| physics.rigid_body_set.get(h))
+                .map(|b| *b.translation())
+                .unwrap_or(nalgebra::Vector3::zeros());
+            let barrier_info = self.col.surface_barrier
+                .and_then(|sh| physics.collider_set.get(sh))
+                .map(|coll| {
+                    let pos = coll.position().translation;
+                    let dx = pos.x - ship_pos.x;
+                    let dy = pos.y - ship_pos.y;
+                    let dz = pos.z - ship_pos.z;
+                    (pos.x, pos.y, pos.z, (dx*dx + dy*dy + dz*dz).sqrt())
+                });
+            if let Some((bx, by, bz, bdist)) = barrier_info {
+                log::info!(
+                    "COLLISION_DIAG: alt={:.1}km, ship=({:.0},{:.0},{:.0}), \
+                     barrier=({:.0},{:.0},{:.0}), gap={:.0}m, hf_colliders={}",
+                    altitude_km,
+                    ship_pos.x, ship_pos.y, ship_pos.z,
+                    bx, by, bz, bdist,
+                    self.col.colliders.len(),
+                );
+            } else {
+                log::info!(
+                    "COLLISION_DIAG: alt={:.1}km, NO_BARRIER, hf_colliders={}",
+                    altitude_km,
+                    self.col.colliders.len(),
+                );
+            }
         }
 
         // Build draw commands using frozen planet position.

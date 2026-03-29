@@ -192,8 +192,10 @@ pub fn generate_chunk(key: ChunkKey, config: &TerrainConfig) -> ChunkData {
     // "Toward planet centre" in patch-local space = -(world_pos - center).
     // We drop the skirt vertex by at least 1.0 m along that direction.
     // -----------------------------------------------------------------------
-    let skirt_drop_fraction = 0.002; // 0.2 % of radius
-    let skirt_drop_min = 1.0_f32;
+    // Skirt drop: enough to hide LOD seams but not visible from below.
+    // 2× the terrain displacement amplitude, capped at 500m.
+    let skirt_drop_fraction = config.displacement_fraction as f64 * 2.0;
+    let skirt_drop_min = 2.0_f32;
 
     let skirt_base = vertices.len() as u32; // = n*n
 
@@ -228,7 +230,7 @@ pub fn generate_chunk(key: ChunkKey, config: &TerrainConfig) -> ChunkData {
             let ny = -dirs[gi][1] as f32;
             let nz = -dirs[gi][2] as f32;
 
-            let drop = (config.radius_m as f32 * skirt_drop_fraction).max(skirt_drop_min);
+            let drop = ((config.radius_m * skirt_drop_fraction) as f32).max(skirt_drop_min);
 
             let skirt_pos = [
                 lp[0] + nx * drop,

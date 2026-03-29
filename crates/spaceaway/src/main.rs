@@ -3101,7 +3101,10 @@ impl ApplicationHandler for App {
                             // Only show altitude when raycasts actually hit
                             // terrain (< 100m). At 100m (MAX_RAY_DIST) the rays
                             // missed — show SURF distance instead.
-                            altitude_m: self.last_clearance.filter(|&c| c < 99.0),
+                            // Show raycast altitude only when actually hitting terrain
+                            // (not the default 100m max). The surface barrier can be
+                            // hit at distances close to 100m, so filter generously.
+                            altitude_m: self.last_clearance.filter(|&c| c < 95.0),
                             planet_dist_km: {
                                 // Show distance to nearest planet surface when < 1000km
                                 // and heading toward it (dot product check).
