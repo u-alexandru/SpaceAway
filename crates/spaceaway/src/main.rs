@@ -2304,34 +2304,32 @@ impl ApplicationHandler for App {
                 if let (Some(interaction), Some(player)) = (&mut self.interaction, &self.player)
                     && !self.fly_mode
                 {
-                    // Interaction raycasts must use origin-relative coordinates
-                    // because interactable colliders live on the interior body
-                    // which stays at rapier (0,0,0). Compute ray origin directly
-                    // from ship rotation + offset (NOT from camera.position, which
-                    // may be set before cruise teleports the ship body).
-                    let ship_rot = self.ship.as_ref()
-                        .and_then(|s| self.physics.get_body(s.body_handle))
-                        .map(|b| *b.rotation())
-                        .unwrap_or(nalgebra::UnitQuaternion::identity());
-                    let fwd = self.camera.forward();
-                    let ray_dir = [fwd.x, fwd.y, fwd.z];
-                    let ray_origin = if is_seated {
-                        // Helm viewpoint offset rotated by ship orientation.
-                        let vp = self.helm.as_ref()
-                            .map(|h| h.viewpoint_offset)
-                            .unwrap_or(glam::Vec3::ZERO);
-                        let o = ship_rot * nalgebra::Vector3::new(vp.x, vp.y, vp.z);
-                        [o.x, o.y, o.z]
+                    // Interactable colliders are children of the ship body (NOT
+                    // the interior body). Use camera.position as ray origin —
+                    // it's in the same coordinate space as the ship body.
+                    //
+                    // The query pipeline must be refreshed first: between
+                    // physics.step() and this point, the ship body may have
+                    // moved (gravity, cruise sync, rebase). The AABB tree
+                    // becomes stale and the broadphase can't find the colliders
+                    // even though ray and colliders moved by the same offset.
+                    self.physics.sync_collider_positions();
+                    self.physics.update_query_pipeline();
+
+                    let (ray_origin, ray_dir) = if is_seated {
+                        let pos = self.camera.position;
+                        let fwd = self.camera.forward();
+                        (
+                            [pos.x as f32, pos.y as f32, pos.z as f32],
+                            [fwd.x, fwd.y, fwd.z],
+                        )
                     } else {
-                        // Walk mode: player body pos minus ship body pos = interior-relative.
-                        let player_t = self.physics.get_body(player.body_handle)
-                            .map(|b| *b.translation())
-                            .unwrap_or(nalgebra::Vector3::zeros());
-                        let ship_t = self.ship.as_ref()
-                            .and_then(|s| self.physics.get_body(s.body_handle))
-                            .map(|b| *b.translation())
-                            .unwrap_or(nalgebra::Vector3::zeros());
-                        [player_t.x - ship_t.x, player_t.y - ship_t.y + 1.6, player_t.z - ship_t.z]
+                        let eye_pos = player.position(&self.physics);
+                        let fwd = self.camera.forward();
+                        (
+                            [eye_pos.x as f32, eye_pos.y as f32, eye_pos.z as f32],
+                            [fwd.x, fwd.y, fwd.z],
+                        )
                     };
 
                     let (_, mouse_dy) = self.input.mouse.delta();
