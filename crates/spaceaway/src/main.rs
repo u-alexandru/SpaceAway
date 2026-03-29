@@ -1171,13 +1171,17 @@ impl ApplicationHandler for App {
                             log::info!("Drive: IMPULSE");
                         }
                         if self.input.keyboard.just_pressed(KeyCode::Digit2) {
-                            let ship_speed = self.ship.as_ref()
-                                .map(|s| s.speed(&self.physics))
-                                .unwrap_or(0.0);
-                            if self.drive.request_engage_with_speed(sa_ship::DriveMode::Cruise, ship_speed) {
-                                log::info!("Drive: CRUISE engaged");
-                            } else if ship_speed > 10.0 {
-                                log::warn!("Cannot engage cruise: ship moving at {:.0} m/s (stop first)", ship_speed);
+                            if self.terrain.is_some() {
+                                log::warn!("Cannot engage cruise: too close to planet surface");
+                            } else {
+                                let ship_speed = self.ship.as_ref()
+                                    .map(|s| s.speed(&self.physics))
+                                    .unwrap_or(0.0);
+                                if self.drive.request_engage_with_speed(sa_ship::DriveMode::Cruise, ship_speed) {
+                                    log::info!("Drive: CRUISE engaged");
+                                } else if ship_speed > 10.0 {
+                                    log::warn!("Cannot engage cruise: ship moving at {:.0} m/s (stop first)", ship_speed);
+                                }
                             }
                         }
 
@@ -1292,7 +1296,9 @@ impl ApplicationHandler for App {
                             }
                         }
                         if self.input.keyboard.just_pressed(KeyCode::Digit3) {
-                            if self.ship_resources.exotic_fuel > 0.0 {
+                            if self.terrain.is_some() {
+                                log::warn!("Cannot engage warp: too close to planet surface");
+                            } else if self.ship_resources.exotic_fuel > 0.0 {
                                 let ship_speed = self.ship.as_ref()
                                     .map(|s| s.speed(&self.physics))
                                     .unwrap_or(0.0);
@@ -1656,7 +1662,12 @@ impl ApplicationHandler for App {
                                 let forward = rot * nalgebra::Vector3::new(0.0, 0.0, -1.0);
                                 let accel = forward * (ship.throttle * ship.max_thrust / body.mass());
                                 let vel = body.linvel() + accel * physics_dt;
-                                let vel = vel * (1.0 - 0.001 * physics_dt).max(0.0);
+                                body.set_linvel(vel, true);
+                            }
+                            // Linear damping always applies (not just when engine on).
+                            // Without this, gravity accumulates velocity without bound.
+                            {
+                                let vel = body.linvel() * (1.0 - 0.001 * physics_dt).max(0.0);
                                 body.set_linvel(vel, true);
                             }
                             // Apply terrain gravity (planet surface pull).

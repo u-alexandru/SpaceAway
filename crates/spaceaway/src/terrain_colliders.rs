@@ -23,6 +23,9 @@ pub(crate) struct CachedChunk {
     pub center_f64: [f64; 3],
     pub heights: Vec<f32>,
     pub lod: u8,
+    pub face: u8,
+    pub grid_x: u32,
+    pub grid_y: u32,
 }
 
 /// Terrain collider state — manages HeightField colliders attached to a static
@@ -79,6 +82,9 @@ impl TerrainColliders {
             center_f64: chunk.center_f64,
             heights: chunk.heights.clone(),
             lod: key.lod,
+            face: key.face,
+            grid_x: key.x,
+            grid_y: key.y,
         });
     }
 
@@ -202,33 +208,47 @@ fn build_heightfield(
     let cy = (cached.center_f64[1] - anchor[1]) as f32;
     let cz = (cached.center_f64[2] - anchor[2]) as f32;
 
-    // Surface normal = normalized chunk center direction.
-    let len = (cached.center_f64[0].powi(2)
-        + cached.center_f64[1].powi(2)
-        + cached.center_f64[2].powi(2))
-    .sqrt();
-    if len < 1.0 {
-        return None;
-    }
-    let center_dir = nalgebra::Vector3::new(
-        (cached.center_f64[0] / len) as f32,
-        (cached.center_f64[1] / len) as f32,
-        (cached.center_f64[2] / len) as f32,
-    );
+    // Compute tangent frame from the cube face UV axes.
+    // HeightField X-axis must align with the chunk's U direction,
+    // HeightField Z-axis must align with the chunk's V direction,
+    // HeightField Y-axis (height) must align with the surface normal.
+    //
+    // We sample two nearby sphere points to get tangent vectors,
+    // then build a rotation matrix from the resulting frame.
+    let subdivs = 1u64 << cached.lod;
+    let u_center = -1.0 + (2.0 * cached.grid_x as f64 + 1.0) / subdivs as f64;
+    let v_center = -1.0 + (2.0 * cached.grid_y as f64 + 1.0) / subdivs as f64;
+    let face = sa_terrain::cube_sphere::CubeFace::ALL[cached.face as usize];
 
-    // Rotate heightfield Y-up to match surface normal.
-    let up = nalgebra::Vector3::y();
-    let rotation = if (center_dir - up).norm() < 1e-4 {
-        nalgebra::UnitQuaternion::identity()
-    } else if (center_dir + up).norm() < 1e-4 {
-        nalgebra::UnitQuaternion::from_axis_angle(
-            &nalgebra::Vector3::x_axis(),
-            std::f32::consts::PI,
+    let eps = 0.001;
+    let center_dir_f64 = sa_terrain::cube_sphere::cube_to_sphere(face, u_center, v_center);
+    let u_dir_f64 = sa_terrain::cube_sphere::cube_to_sphere(face, u_center + eps, v_center);
+    let v_dir_f64 = sa_terrain::cube_sphere::cube_to_sphere(face, u_center, v_center + eps);
+
+    // Tangent U = normalize(u_dir - center_dir)
+    let tu = nalgebra::Vector3::new(
+        (u_dir_f64[0] - center_dir_f64[0]) as f32,
+        (u_dir_f64[1] - center_dir_f64[1]) as f32,
+        (u_dir_f64[2] - center_dir_f64[2]) as f32,
+    ).normalize();
+    // Tangent V = normalize(v_dir - center_dir)
+    let tv = nalgebra::Vector3::new(
+        (v_dir_f64[0] - center_dir_f64[0]) as f32,
+        (v_dir_f64[1] - center_dir_f64[1]) as f32,
+        (v_dir_f64[2] - center_dir_f64[2]) as f32,
+    ).normalize();
+    // Normal = cross(tangent_u, tangent_v), should point outward
+    let normal = tu.cross(&tv).normalize();
+
+    // Build rotation: columns are the axes of the rotated frame.
+    // HeightField local X → tu (chunk U axis)
+    // HeightField local Y → normal (outward from sphere)
+    // HeightField local Z → tv (chunk V axis)
+    let rotation = nalgebra::UnitQuaternion::from_rotation_matrix(
+        &nalgebra::Rotation3::from_matrix_unchecked(
+            nalgebra::Matrix3::from_columns(&[tu, normal, tv])
         )
-    } else {
-        nalgebra::UnitQuaternion::rotation_between(&up, &center_dir)
-            .unwrap_or_else(nalgebra::UnitQuaternion::identity)
-    };
+    );
 
     let position = nalgebra::Isometry3::from_parts(
         nalgebra::Translation3::new(cx, cy, cz),

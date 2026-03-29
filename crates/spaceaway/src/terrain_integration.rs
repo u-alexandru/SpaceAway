@@ -48,8 +48,9 @@ pub struct TerrainFrameResult {
 pub struct TerrainManager {
     streaming: ChunkStreaming,
     config: TerrainConfig,
-    /// GPU handles keyed by chunk.
-    gpu_meshes: HashMap<ChunkKey, Handle<MeshMarker>>,
+    /// GPU handles and chunk centers keyed by chunk.
+    /// The center_f64 is the actual displaced chunk center (not the quadtree node center).
+    gpu_meshes: HashMap<ChunkKey, (Handle<MeshMarker>, [f64; 3])>,
     /// Planet center in light-years (updated each frame from orbital position).
     planet_center_ly: WorldPos,
     /// Body index in the ActiveSystem (for icosphere hiding).
@@ -127,17 +128,23 @@ impl TerrainManager {
 
         // Upload newly generated chunks to GPU and cache for colliders.
         for chunk in &new_chunks {
-            let mesh_data = chunk_to_mesh_data(chunk);
-            let handle = mesh_store.upload(device, &mesh_data);
-            self.gpu_meshes.insert(chunk.key, handle);
+            if !self.gpu_meshes.contains_key(&chunk.key) {
+                let mesh_data = chunk_to_mesh_data(chunk);
+                let handle = mesh_store.upload(device, &mesh_data);
+                self.gpu_meshes.insert(chunk.key, (handle, chunk.center_f64));
+            }
             self.col.cache_chunk(chunk.key, chunk);
         }
 
-        // Remove colliders and GPU meshes for evicted chunks.
+        // Only remove GPU meshes for chunks that are truly evicted from the
+        // streaming cache (not just off-screen). Off-screen chunks may come
+        // back when the player turns around.
+        // removed_keys from streaming = chunks no longer in the visible set.
+        // We keep GPU meshes alive as long as the chunk exists in the LRU cache.
+        // Only remove when gpu_meshes has keys that aren't in visible AND aren't
+        // expected to return soon. For now, let GPU meshes accumulate up to a
+        // budget and evict the oldest.
         self.col.remove_evicted(physics, &removed_keys);
-        for key in &removed_keys {
-            self.gpu_meshes.remove(key);
-        }
 
         // --- Gravity computation ---
         let gravity = sa_terrain::gravity::compute_gravity(
@@ -214,11 +221,13 @@ impl TerrainManager {
                 x: node.x,
                 y: node.y,
             };
-            if let Some(&handle) = self.gpu_meshes.get(&key) {
-                let c = node.center;
-                let ox = (planet_m[0] + c[0] - camera_m[0]) as f32;
-                let oy = (planet_m[1] + c[1] - camera_m[1]) as f32;
-                let oz = (planet_m[2] + c[2] - camera_m[2]) as f32;
+            if let Some(&(handle, center_f64)) = self.gpu_meshes.get(&key) {
+                // Use the chunk's actual displaced center (not the quadtree
+                // node center which is on the undisplaced sphere surface).
+                // Difference is ~avg_h * amplitude radially.
+                let ox = (planet_m[0] + center_f64[0] - camera_m[0]) as f32;
+                let oy = (planet_m[1] + center_f64[1] - camera_m[1]) as f32;
+                let oz = (planet_m[2] + center_f64[2] - camera_m[2]) as f32;
 
                 cmds.push(DrawCommand {
                     mesh: handle,

@@ -30,6 +30,8 @@ pub struct LruCache {
     /// Most-recently-used at the back, least-recently-used at the front.
     order: VecDeque<ChunkKey>,
     map: HashMap<ChunkKey, ChunkData>,
+    /// Keys evicted by capacity overflow since last drain.
+    evicted: Vec<ChunkKey>,
 }
 
 impl LruCache {
@@ -39,12 +41,19 @@ impl LruCache {
             capacity,
             order: VecDeque::with_capacity(capacity + 1),
             map: HashMap::with_capacity(capacity + 1),
+            evicted: Vec::new(),
         }
     }
 
+    /// Drain the list of keys evicted since the last call.
+    pub fn drain_evicted(&mut self) -> Vec<ChunkKey> {
+        std::mem::take(&mut self.evicted)
+    }
+
     /// Insert a chunk. If the key already exists it is refreshed (promoted to
-    /// MRU). Returns the evicted key if the cache was full.
-    pub fn insert(&mut self, data: ChunkData) -> Option<ChunkKey> {
+    /// MRU). Evicted keys (capacity overflow) are collected in `self.evicted`
+    /// and retrieved via `drain_evicted()`.
+    pub fn insert(&mut self, data: ChunkData) {
         let key = data.key;
 
         // If already present, remove from order so we can push to back.
@@ -56,13 +65,12 @@ impl LruCache {
         self.order.push_back(key);
 
         // Evict LRU if over capacity.
-        if self.order.len() > self.capacity
-            && let Some(evicted) = self.order.pop_front()
-        {
-            self.map.remove(&evicted);
-            return Some(evicted);
+        if self.order.len() > self.capacity {
+            if let Some(evicted_key) = self.order.pop_front() {
+                self.map.remove(&evicted_key);
+                self.evicted.push(evicted_key);
+            }
         }
-        None
     }
 
     /// Retrieve a chunk by key, promoting it to MRU. Returns `None` if not
@@ -193,28 +201,28 @@ impl ChunkStreaming {
         }
 
         // ---------------------------------------------------------------
-        // 2. Request generation for needed chunks not yet available.
+        // 2. For needed chunks in cache but not yet in new_chunks,
+        //    return them as cache hits (caller needs to re-upload GPU mesh).
         // ---------------------------------------------------------------
         for key in &needed {
-            if !self.cache.contains(key) && !self.in_flight.contains(key) {
-                self.in_flight.insert(*key);
-                // Ignore send error (no workers running in tests without
-                // actual threads — shouldn't happen in normal use).
-                let _ = self.request_tx.send(*key);
+            let already_new = new_chunks.iter().any(|c| c.key == *key);
+            if !already_new {
+                if let Some(data) = self.cache.get(key) {
+                    new_chunks.push(data.clone());
+                } else if !self.in_flight.contains(key) {
+                    self.in_flight.insert(*key);
+                    let _ = self.request_tx.send(*key);
+                }
             }
         }
 
         // ---------------------------------------------------------------
-        // 3. Determine removed keys: cached but no longer needed.
+        // 3. Evicted keys: chunks removed by LRU capacity overflow.
+        //    These are truly gone and the caller should free GPU resources.
+        //    We do NOT report cached-but-invisible chunks as removed —
+        //    they stay in cache for fast re-use.
         // ---------------------------------------------------------------
-        // Collect all cached keys that are absent from the needed set.
-        let removed_keys: Vec<ChunkKey> = self
-            .cache
-            .order
-            .iter()
-            .filter(|k| !needed.contains(k))
-            .copied()
-            .collect();
+        let removed_keys: Vec<ChunkKey> = self.cache.drain_evicted();
 
         (new_chunks, removed_keys)
     }
@@ -287,8 +295,10 @@ mod tests {
         cache.get(&k0);
 
         // Insert a 4th entry — k1 should be evicted.
-        let evicted = cache.insert(make_chunk(3, 0, 0, 0));
-        assert_eq!(evicted, Some(k1));
+        cache.insert(make_chunk(3, 0, 0, 0));
+        let evicted = cache.drain_evicted();
+        assert_eq!(evicted.len(), 1);
+        assert_eq!(evicted[0], k1);
         assert!(!cache.contains(&k1));
         assert!(cache.contains(&k0));
         assert!(cache.contains(&k2));
