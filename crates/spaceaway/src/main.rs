@@ -1254,15 +1254,13 @@ impl ApplicationHandler for App {
                             log::info!("Drive: IMPULSE");
                         }
                         if self.input.keyboard.just_pressed(KeyCode::Digit2) {
-                            // Block cruise only in atmosphere (gravity blend > 0.2).
-                            // Terrain activates at 2.0× radius which is still far from
-                            // the surface — player needs cruise to close that distance.
-                            // Atmosphere starts at ~1.2× radius (blend > 0).
-                            let in_atmosphere = self.terrain_gravity
-                                .as_ref()
-                                .is_some_and(|g| g.blend > 0.2);
-                            if in_atmosphere {
-                                log::warn!("Cannot engage cruise: inside atmosphere");
+                            // Block cruise when terrain is active. In cruise mode
+                            // the rapier body doesn't move — only galactic_position
+                            // changes — so terrain colliders teleport through the
+                            // ship and no collision is detected. The player must
+                            // use impulse for the final approach.
+                            if self.terrain.is_some() {
+                                log::warn!("Cannot engage cruise: terrain active (use impulse)");
                             } else {
                                 let ship_speed = self.ship.as_ref()
                                     .map(|s| s.speed(&self.physics))
@@ -1385,11 +1383,8 @@ impl ApplicationHandler for App {
                                 }
                         }
                         if self.input.keyboard.just_pressed(KeyCode::Digit3) {
-                            let in_atmosphere = self.terrain_gravity
-                                .as_ref()
-                                .is_some_and(|g| g.blend > 0.5);
-                            if in_atmosphere {
-                                log::warn!("Cannot engage warp: inside atmosphere");
+                            if self.terrain.is_some() {
+                                log::warn!("Cannot engage warp: terrain active (use impulse)");
                             } else if self.ship_resources.exotic_fuel > 0.0 {
                                 let ship_speed = self.ship.as_ref()
                                     .map(|s| s.speed(&self.physics))
@@ -1779,8 +1774,8 @@ impl ApplicationHandler for App {
                         });
                         self.last_clearance = landing_result.min_clearance;
 
-                        // Diagnostic logging when terrain is active.
-                        if terrain_active {
+                        // Diagnostic logging when terrain is active (throttled).
+                        if terrain_active && self.time.frame_count().is_multiple_of(60) {
                             log::info!(
                                 "LANDING_DIAG: state={:?}, speed={:.1}m/s, vertical={:.1}m/s, clearance={:.1}m, skid_contact={}",
                                 landing_result.state,
@@ -2063,8 +2058,8 @@ impl ApplicationHandler for App {
                         });
                         self.last_clearance = landing_result.min_clearance;
 
-                        // Diagnostic logging when terrain is active.
-                        if terrain_active {
+                        // Diagnostic logging when terrain is active (throttled).
+                        if terrain_active && self.time.frame_count().is_multiple_of(60) {
                             log::info!(
                                 "LANDING_DIAG: state={:?}, speed={:.1}m/s, vertical={:.1}m/s, clearance={:.1}m, skid_contact={}",
                                 landing_result.state,
@@ -2841,8 +2836,21 @@ impl ApplicationHandler for App {
                             b.linvel().dot(&gdir)
                         })
                         .unwrap_or(0.0);
-                    // Find nearest planet distance
-                    if let Some(sys) = &self.active_system {
+                    // Find nearest planet distance.
+                    // When terrain is active, use the frozen planet position
+                    // (matches what the terrain system actually uses) instead of
+                    // the orbiting position which diverges rapidly at TIME_SCALE=30.
+                    if let Some(terrain_mgr) = &self.terrain {
+                        let cam_rel = terrain_mgr.cam_rel_m(self.galactic_position);
+                        let dist_m = (cam_rel[0] * cam_rel[0]
+                            + cam_rel[1] * cam_rel[1]
+                            + cam_rel[2] * cam_rel[2]).sqrt();
+                        let ratio = dist_m / terrain_mgr.planet_radius_m();
+                        log::info!(
+                            "APPROACH_DIAG: dist={:.0}km, ratio={:.2}x, drive={}, terrain={}, gravity_blend={:.2}, vertical_speed={:.1}m/s",
+                            dist_m / 1000.0, ratio, drive_mode, terrain_active, gravity_blend, vertical_speed,
+                        );
+                    } else if let Some(sys) = &self.active_system {
                         let positions = sys.compute_positions_ly_pub();
                         let ly_to_m = 9.461e15_f64;
                         let mut best_dist_km = f64::MAX;
