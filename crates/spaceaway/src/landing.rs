@@ -1,7 +1,4 @@
 //! Landing state machine for planet surface operations.
-// This module is complete but not yet wired into the main game loop (Task 6).
-// Allow dead-code until integration is done.
-#![allow(dead_code)]
 //!
 //! Tracks FLYING / SLIDING / LANDED states using 4-point raycasting from
 //! landing skid positions against TERRAIN colliders (GROUP_5).
@@ -82,8 +79,12 @@ pub struct LandingImpactEvent {
     /// Combined ship speed at the moment of touchdown (m/s).
     pub impact_speed_ms: f32,
     /// Speed contribution measured at each individual skid (m/s).
+    // Stored for future use by audio/damage systems (Task 8+).
+    #[allow(dead_code)]
     pub per_skid_speeds: [f32; 4],
     /// Planet surface gravity magnitude (m/s²).
+    // Stored for future use by audio/damage systems (Task 8+).
+    #[allow(dead_code)]
     pub planet_gravity: f32,
     /// Severity classification of the impact.
     pub category: ImpactCategory,
@@ -107,6 +108,8 @@ pub struct LandingUpdate {
     /// Current state after this update.
     pub state: LandingState,
     /// Minimum clearance across all skids, or `None` when no terrain is detected.
+    // Stored for future use by altitude HUD display (Task 7).
+    #[allow(dead_code)]
     pub min_clearance: Option<f32>,
     /// Impact event if the state transitioned to `Landed` this frame, else `None`.
     pub impact: Option<LandingImpactEvent>,

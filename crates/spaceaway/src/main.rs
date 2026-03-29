@@ -253,6 +253,11 @@ struct App {
     terrain_gravity: Option<sa_terrain::gravity::GravityState>,
     /// Set by menu Quit action, checked in event loop to exit.
     quit_requested: bool,
+    /// Landing state machine.
+    landing: landing::LandingSystem,
+    /// Landing skid collider handles (created when ship is spawned).
+    #[allow(dead_code)]
+    landing_skids: Option<[rapier3d::prelude::ColliderHandle; 4]>,
 }
 
 impl App {
@@ -266,6 +271,13 @@ impl App {
         // Create ship and interactables
         let (ship, interaction, ids) =
             ship_setup::create_ship_and_interactables(&mut physics);
+
+        // Create landing skids on the ship body (persist for the lifetime of the session).
+        let landing_skids = Some(ship.add_landing_skids(
+            &mut physics,
+            ship_colliders::SHIP_EXTERIOR,
+            ship_colliders::TERRAIN,
+        ));
 
         // Helm controller: viewpoint at pilot seat position (port side) + eye height
         let helm = HelmController::new(glam::Vec3::new(-0.8, 0.3, 2.0));
@@ -338,6 +350,8 @@ impl App {
             terrain: None,
             terrain_gravity: None,
             quit_requested: false,
+            landing: landing::LandingSystem::new(),
+            landing_skids,
         }
     }
 
@@ -1694,6 +1708,49 @@ impl ApplicationHandler for App {
                         }
                     }
 
+                    // --- Landing system update (helm mode) ---
+                    if let Some(ship) = &self.ship {
+                        let ship_iso = self.physics.get_body(ship.body_handle)
+                            .map(|b| *b.position())
+                            .unwrap_or_else(nalgebra::Isometry3::identity);
+                        let ship_speed_ms = ship.speed(&self.physics);
+                        let gravity_raw = self.terrain_gravity.as_ref()
+                            .map(|g| g.direction)
+                            .unwrap_or([0.0, -1.0, 0.0]);
+                        let gravity_dir = nalgebra::Unit::new_normalize(
+                            nalgebra::Vector3::new(gravity_raw[0], gravity_raw[1], gravity_raw[2]),
+                        );
+                        let planet_gravity = self.terrain_gravity.as_ref()
+                            .map(|g| g.magnitude)
+                            .unwrap_or(0.0);
+                        let terrain_active = self.terrain.is_some();
+                        let landing_result = self.landing.update(landing::LandingParams {
+                            physics: &self.physics,
+                            ship_iso: &ship_iso,
+                            ship_speed_ms,
+                            gravity_dir,
+                            planet_gravity,
+                            terrain_active,
+                            engine_on: ship.engine_on,
+                            throttle: ship.throttle,
+                        });
+                        if landing_result.state == landing::LandingState::Landed
+                            && let Some(body) = self.physics.get_body_mut(ship.body_handle)
+                        {
+                            body.set_linvel(nalgebra::Vector3::zeros(), true);
+                            body.set_angvel(nalgebra::Vector3::zeros(), true);
+                            body.set_gravity_scale(0.0, true);
+                        }
+                        if let Some(ref impact) = landing_result.impact {
+                            log::info!(
+                                "IMPACT: {:?} at {:.1} m/s",
+                                impact.category,
+                                impact.impact_speed_ms
+                            );
+                            self.events.emit(impact.clone());
+                        }
+                    }
+
                     // Camera: ship quaternion + helm mouse look offset.
                     // ONLY runs while still seated — must not run on the stand-up frame
                     // or orientation_override gets re-set after being cleared.
@@ -1750,8 +1807,18 @@ impl ApplicationHandler for App {
                         .map(|b| (b.translation().clone_owned(), *b.rotation()))
                         .unwrap_or((nalgebra::Vector3::zeros(), nalgebra::UnitQuaternion::identity()));
 
-                    // Manually integrate ship: apply thrust as velocity change
-                    if let Some(ship) = &self.ship
+                    // Manually integrate ship: apply thrust as velocity change.
+                    // Skip all integration when landed — ship is frozen on the surface.
+                    if self.landing.state() == landing::LandingState::Landed {
+                        // Ship is locked on the ground — zero velocity and hold position.
+                        if let Some(ship) = &self.ship
+                            && let Some(body) = self.physics.get_body_mut(ship.body_handle)
+                        {
+                            body.set_linvel(nalgebra::Vector3::zeros(), true);
+                            body.set_angvel(nalgebra::Vector3::zeros(), true);
+                            body.set_gravity_scale(0.0, true);
+                        }
+                    } else if let Some(ship) = &self.ship
                         && let Some(body) = self.physics.get_body_mut(ship.body_handle)
                     {
                             // Apply thrust: F = throttle * max_thrust * engine_on
@@ -1825,6 +1892,49 @@ impl ApplicationHandler for App {
                         self.galactic_position.x += (ship_pos_after.x as f64 - ship_pos_before.x as f64) * m_to_ly;
                         self.galactic_position.y += (ship_pos_after.y as f64 - ship_pos_before.y as f64) * m_to_ly;
                         self.galactic_position.z += (ship_pos_after.z as f64 - ship_pos_before.z as f64) * m_to_ly;
+                    }
+
+                    // --- Landing system update (walk mode) ---
+                    if let Some(ship) = &self.ship {
+                        let ship_iso = self.physics.get_body(ship.body_handle)
+                            .map(|b| *b.position())
+                            .unwrap_or_else(nalgebra::Isometry3::identity);
+                        let ship_speed_ms = ship.speed(&self.physics);
+                        let gravity_raw = self.terrain_gravity.as_ref()
+                            .map(|g| g.direction)
+                            .unwrap_or([0.0, -1.0, 0.0]);
+                        let gravity_dir = nalgebra::Unit::new_normalize(
+                            nalgebra::Vector3::new(gravity_raw[0], gravity_raw[1], gravity_raw[2]),
+                        );
+                        let planet_gravity = self.terrain_gravity.as_ref()
+                            .map(|g| g.magnitude)
+                            .unwrap_or(0.0);
+                        let terrain_active = self.terrain.is_some();
+                        let landing_result = self.landing.update(landing::LandingParams {
+                            physics: &self.physics,
+                            ship_iso: &ship_iso,
+                            ship_speed_ms,
+                            gravity_dir,
+                            planet_gravity,
+                            terrain_active,
+                            engine_on: ship.engine_on,
+                            throttle: ship.throttle,
+                        });
+                        if landing_result.state == landing::LandingState::Landed
+                            && let Some(body) = self.physics.get_body_mut(ship.body_handle)
+                        {
+                            body.set_linvel(nalgebra::Vector3::zeros(), true);
+                            body.set_angvel(nalgebra::Vector3::zeros(), true);
+                            body.set_gravity_scale(0.0, true);
+                        }
+                        if let Some(ref impact) = landing_result.impact {
+                            log::info!(
+                                "IMPACT: {:?} at {:.1} m/s",
+                                impact.category,
+                                impact.impact_speed_ms
+                            );
+                            self.events.emit(impact.clone());
+                        }
                     }
 
                     // Step 4: Carry player with ship.
@@ -2135,6 +2245,15 @@ impl ApplicationHandler for App {
                                 *slot = handle;
                             }
                     }
+                }
+
+                // Landing lock button: toggle landing lock when clicked.
+                if let (Some(interaction), Some(ids)) = (&self.interaction, &self.ship_ids)
+                    && self.input.mouse.left_just_released()
+                    && interaction.hovered() == Some(ids.landing_lock_button)
+                {
+                    self.landing.request_lock_toggle();
+                    log::debug!("Landing lock toggle requested");
                 }
 
                 // --- Survival resources update ---

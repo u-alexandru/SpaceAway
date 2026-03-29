@@ -17,6 +17,7 @@ pub struct ShipInteractableIds {
     pub engine_button: usize,
     pub speed_screen: usize,
     pub helm_seat: usize,
+    pub landing_lock_button: usize,
 }
 
 /// All the meshes needed for the ship scene.
@@ -49,6 +50,9 @@ pub fn create_ship_and_interactables(
     let mut engine_button = 0;
     let mut speed_screen = 0;
     let mut helm_seat = 0;
+    let mut landing_lock_button = 0;
+    // Count ToggleButtons so the first is engine_button and the second is landing_lock_button.
+    let mut toggle_button_count = 0;
 
     for placement in &layout.interactables {
         // Generate the interactable mesh and create a CONVEX HULL sensor
@@ -102,7 +106,12 @@ pub fn create_ship_and_interactables(
                 let id = interaction.register(
                     sa_ship::Interactable::toggle_button(collider_handle, &placement.label),
                 );
-                engine_button = id;
+                if toggle_button_count == 0 {
+                    engine_button = id;
+                } else {
+                    landing_lock_button = id;
+                }
+                toggle_button_count += 1;
                 id
             }
             PlacementKind::MomentaryButton => interaction.register(
@@ -134,6 +143,7 @@ pub fn create_ship_and_interactables(
         engine_button,
         speed_screen,
         helm_seat,
+        landing_lock_button,
     };
 
     (ship, interaction, ids)
