@@ -112,26 +112,40 @@ pub fn engine_path(state: EngineState) -> Option<&'static str> {
     }
 }
 
-/// Music track lists per context.
+/// Music track stems per context (no extension — resolved at load time).
 pub fn music_tracks(ctx: MusicContext) -> &'static [&'static str] {
     match ctx {
         MusicContext::Idle => &[
-            "music/Alone.wav", "music/Winter.wav", "music/Tears.wav",
+            "music/Alone", "music/Winter", "music/Tears",
         ],
         MusicContext::Exploration => &[
-            "music/SilentFloating.wav", "music/Deep.wav", "music/Hope.wav",
-            "music/Freedom.wav", "music/Forever.wav",
+            "music/SilentFloating", "music/Deep", "music/Hope",
+            "music/Freedom", "music/Forever",
         ],
         MusicContext::Warp => &[
-            "music/fly.wav", "music/Spherical.wav", "music/sound.wav", "music/Freak.wav",
+            "music/fly", "music/Spherical", "music/sound", "music/Freak",
         ],
         MusicContext::Tension => &[
-            "music/trapped.wav", "music/BehindYou.wav", "music/mindcontrol.wav",
+            "music/trapped", "music/BehindYou", "music/mindcontrol",
         ],
         MusicContext::Discovery => &[
-            "music/Fantasy.wav", "music/reflexions.wav", "music/sence.wav",
+            "music/Fantasy", "music/reflexions", "music/sence",
         ],
     }
+}
+
+/// Resolve a music stem to an actual file path.
+/// Tries `.ogg` first (release builds), falls back to `.wav` (dev).
+pub fn resolve_music_path(sounds_root: &std::path::Path, stem: &str) -> Option<std::path::PathBuf> {
+    let ogg = sounds_root.join(format!("{stem}.ogg"));
+    if ogg.exists() {
+        return Some(ogg);
+    }
+    let wav = sounds_root.join(format!("{stem}.wav"));
+    if wav.exists() {
+        return Some(wav);
+    }
+    None
 }
 
 pub fn ambience_hum_path() -> &'static str { "ambience/ship_hum.wav" }
