@@ -158,18 +158,40 @@ pub fn galactic_position_delta(
 }
 
 /// Compute the warp deceleration multiplier based on distance to locked target.
-/// Returns 1.0 (full speed) when far, ramps down to 0.01 when close.
+/// Returns 1.0 (full speed) when far, ramps down near target.
+/// Warp auto-disengages at WARP_DISENGAGE_LY (cruise can cover the rest).
 pub fn warp_deceleration(distance_to_target_ly: f64) -> f64 {
     if distance_to_target_ly > 1.0 {
-        1.0 // full speed
+        1.0
     } else if distance_to_target_ly > 0.1 {
-        // Linear ramp: 1.0 at 1ly -> 0.1 at 0.1ly
         0.1 + 0.9 * ((distance_to_target_ly - 0.1) / 0.9)
-    } else if distance_to_target_ly > 0.001 {
-        // Ramp: 0.1 at 0.1ly -> 0.01 at 0.001ly
-        0.01 + 0.09 * ((distance_to_target_ly - 0.001) / 0.099)
+    } else if distance_to_target_ly > WARP_DISENGAGE_LY {
+        0.05 + 0.05 * ((distance_to_target_ly - WARP_DISENGAGE_LY) / (0.1 - WARP_DISENGAGE_LY))
     } else {
-        0.01 // minimum
+        0.05
+    }
+}
+
+/// Distance at which warp auto-disengages to cruise (~0.01 ly ≈ 630 AU).
+/// Cruise can comfortably cover this distance.
+pub const WARP_DISENGAGE_LY: f64 = 0.01;
+
+/// Distance at which cruise auto-disengages to impulse (~50 AU).
+/// This is the gravity well radius — impulse handles the final approach.
+pub const CRUISE_DISENGAGE_LY: f64 = 50.0 * 1.581e-5; // 50 AU in ly
+
+/// Cruise deceleration multiplier. Ramps down as we approach the target.
+pub fn cruise_deceleration(distance_to_target_ly: f64) -> f64 {
+    let au_in_ly: f64 = 1.581e-5;
+    let dist_au = distance_to_target_ly / au_in_ly;
+    if dist_au > 500.0 {
+        1.0
+    } else if dist_au > 100.0 {
+        0.2 + 0.8 * ((dist_au - 100.0) / 400.0)
+    } else if dist_au > 50.0 {
+        0.05 + 0.15 * ((dist_au - 50.0) / 50.0)
+    } else {
+        0.05
     }
 }
 
@@ -188,7 +210,11 @@ pub fn galactic_position_delta_decel(
     }
 
     let decel = target_distance_ly
-        .map(|d| warp_deceleration(d))
+        .map(|d| match drive.mode() {
+            DriveMode::Warp => warp_deceleration(d),
+            DriveMode::Cruise => cruise_deceleration(d),
+            _ => 1.0,
+        })
         .unwrap_or(1.0);
     let effective_speed = base_speed * decel;
 

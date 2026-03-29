@@ -239,6 +239,9 @@ struct App {
     phase: GamePhase,
     /// Main menu state (only present during Menu phase).
     menu: Option<menu::MainMenu>,
+    /// Deferred star lock-on flag — set by Tab key, consumed in RedrawRequested
+    /// after camera orientation is fully updated for the current frame.
+    wants_star_lock: bool,
 }
 
 impl App {
@@ -320,6 +323,7 @@ impl App {
             prev_target_dist: None,
             phase: GamePhase::Menu,
             menu: None,
+            wants_star_lock: false,
         }
     }
 
@@ -804,49 +808,9 @@ impl ApplicationHandler for App {
                                 log::info!("Returned to normal scene view");
                             }
                             KeyCode::Tab => {
-                                // Lock star nearest to screen center
-                                self.navigation.update_nearby(self.galactic_position);
-                                if let Some(gpu) = &self.gpu {
-                                    let sw = gpu.config.width as f32;
-                                    let sh = gpu.config.height as f32;
-                                    let cx = sw / 2.0;
-                                    let cy = sh / 2.0;
-                                    let aspect = sw / sh;
-                                    let vp = self.camera.view_projection_matrix(aspect);
-
-                                    let mut best_screen_dist = f32::MAX;
-                                    let mut best_idx: Option<usize> = None;
-
-                                    for (i, star) in self.navigation.nearby_stars.iter().enumerate() {
-                                        // Project as direction on sky dome (same as star renderer)
-                                        let dx = (star.galactic_pos.x - self.galactic_position.x) as f32;
-                                        let dy = (star.galactic_pos.y - self.galactic_position.y) as f32;
-                                        let dz = (star.galactic_pos.z - self.galactic_position.z) as f32;
-                                        let len = (dx*dx + dy*dy + dz*dz).sqrt();
-                                        if len < 0.001 { continue; }
-                                        // Normalize to direction, place on sky dome at 90000 units
-                                        let dir = glam::Vec3::new(dx/len, dy/len, dz/len) * 90000.0;
-                                        let clip = vp * glam::Vec4::new(dir.x, dir.y, dir.z, 1.0);
-                                        if clip.w <= 0.0 { continue; }
-                                        let sx = (clip.x / clip.w * 0.5 + 0.5) * sw;
-                                        let sy = (1.0 - (clip.y / clip.w * 0.5 + 0.5)) * sh;
-                                        let screen_dist = ((sx - cx).powi(2) + (sy - cy).powi(2)).sqrt();
-                                        if screen_dist < best_screen_dist {
-                                            best_screen_dist = screen_dist;
-                                            best_idx = Some(i);
-                                        }
-                                    }
-
-                                    if let Some(idx) = best_idx {
-                                        self.navigation.lock_target(idx);
-                                        if let Some(target) = &self.navigation.locked_target {
-                                            log::info!("LOCKED: {} ({:.2} ly, {:.0}px from center)",
-                                                target.catalog_name, target.distance_ly, best_screen_dist);
-                                        }
-                                    } else {
-                                        log::warn!("No star visible on screen");
-                                    }
-                                }
+                                // Flag for lock-on — actual projection happens in RedrawRequested
+                                // where the camera orientation is current for this frame.
+                                self.wants_star_lock = true;
                             }
                             KeyCode::Digit8 => {
                                 // Debug: cycle through planets in current system (or jump to nearest star)
@@ -1188,58 +1152,25 @@ impl ApplicationHandler for App {
                             log::info!("Drive: IMPULSE");
                         }
                         if self.input.keyboard.just_pressed(KeyCode::Digit2) {
-                            if self.drive.request_engage(sa_ship::DriveMode::Cruise) {
+                            let ship_speed = self.ship.as_ref()
+                                .map(|s| s.speed(&self.physics))
+                                .unwrap_or(0.0);
+                            if self.drive.request_engage_with_speed(sa_ship::DriveMode::Cruise, ship_speed) {
                                 log::info!("Drive: CRUISE engaged");
+                            } else if ship_speed > 10.0 {
+                                log::warn!("Cannot engage cruise: ship moving at {:.0} m/s (stop first)", ship_speed);
                             }
                         }
-                        // Tab: lock star nearest to screen center
+                        // Tab: flag for deferred lock-on (projection happens after camera update)
                         if self.input.keyboard.just_pressed(KeyCode::Tab) {
-                            // Project all nearby stars to screen space, pick closest to center.
-                            // This guarantees we lock what the player is LOOKING at.
-                            if let Some(gpu) = &self.gpu {
-                                let sw = gpu.config.width as f32;
-                                let sh = gpu.config.height as f32;
-                                let cx = sw / 2.0;
-                                let cy = sh / 2.0;
-                                let aspect = sw / sh;
-                                let vp = self.camera.view_projection_matrix(aspect);
-
-                                let mut best_screen_dist = f32::MAX;
-                                let mut best_idx: Option<usize> = None;
-
-                                for (i, star) in self.navigation.nearby_stars.iter().enumerate() {
-                                    let dx = (star.galactic_pos.x - self.galactic_position.x) as f32;
-                                    let dy = (star.galactic_pos.y - self.galactic_position.y) as f32;
-                                    let dz = (star.galactic_pos.z - self.galactic_position.z) as f32;
-                                    let len = (dx*dx + dy*dy + dz*dz).sqrt();
-                                    if len < 0.001 { continue; }
-                                    let dir = glam::Vec3::new(dx/len, dy/len, dz/len) * 90000.0;
-                                    let clip = vp * glam::Vec4::new(dir.x, dir.y, dir.z, 1.0);
-                                    if clip.w <= 0.0 { continue; } // behind camera
-                                    let sx = (clip.x / clip.w * 0.5 + 0.5) * sw;
-                                    let sy = (1.0 - (clip.y / clip.w * 0.5 + 0.5)) * sh;
-                                    let screen_dist = ((sx - cx).powi(2) + (sy - cy).powi(2)).sqrt();
-                                    if screen_dist < best_screen_dist {
-                                        best_screen_dist = screen_dist;
-                                        best_idx = Some(i);
-                                    }
-                                }
-
-                                if let Some(idx) = best_idx {
-                                    self.navigation.lock_target(idx);
-                                    if let Some(target) = &self.navigation.locked_target {
-                                        log::info!("LOCKED: {} ({:.2} ly, {:.0}px from center)",
-                                            target.catalog_name, target.distance_ly, best_screen_dist);
-                                        self.audio.play_sfx(sa_audio::SfxId::Confirm, None);
-                                    }
-                                } else {
-                                    log::warn!("No star visible on screen");
-                                }
-                            }
+                            self.wants_star_lock = true;
                         }
                         if self.input.keyboard.just_pressed(KeyCode::Digit3) {
                             if self.ship_resources.exotic_fuel > 0.0 {
-                                if self.drive.request_engage(sa_ship::DriveMode::Warp) {
+                                let ship_speed = self.ship.as_ref()
+                                    .map(|s| s.speed(&self.physics))
+                                    .unwrap_or(0.0);
+                                if self.drive.request_engage_with_speed(sa_ship::DriveMode::Warp, ship_speed) {
                                     log::info!("Drive: WARP spooling...");
                                     self.audio.announce(sa_audio::VoiceId::EngagingWarp);
                                     // Unload active system when entering warp
@@ -1247,6 +1178,8 @@ impl ApplicationHandler for App {
                                         self.active_system = None;
                                         log::info!("Left solar system — entering warp");
                                     }
+                                } else if ship_speed > 10.0 {
+                                    log::warn!("Cannot engage warp: ship moving at {:.0} m/s (stop first)", ship_speed);
                                 }
                             } else {
                                 log::warn!("Cannot engage warp: no exotic fuel");
@@ -1317,6 +1250,43 @@ impl ApplicationHandler for App {
                         self.physics.step(physics_dt);
                     }
 
+                    // Auto-orient ship toward locked target in cruise/warp.
+                    // Smoothly slerps the ship body rotation so its forward (-Z)
+                    // aligns with the direction to the target.
+                    if self.drive.mode() != sa_ship::DriveMode::Impulse {
+                        if let Some(target) = &self.navigation.locked_target {
+                            if let Some(ship) = &self.ship {
+                                if let Some(body) = self.physics.get_body_mut(ship.body_handle) {
+                                    let dx = (target.galactic_pos.x - self.galactic_position.x) as f32;
+                                    let dy = (target.galactic_pos.y - self.galactic_position.y) as f32;
+                                    let dz = (target.galactic_pos.z - self.galactic_position.z) as f32;
+                                    let len = (dx * dx + dy * dy + dz * dz).sqrt();
+                                    if len > 0.001 {
+                                        let to_target = glam::Vec3::new(dx / len, dy / len, dz / len);
+                                        // Ship forward is -Z, so desired rotation takes -Z to to_target
+                                        let desired = glam::Quat::from_rotation_arc(
+                                            glam::Vec3::new(0.0, 0.0, -1.0),
+                                            to_target,
+                                        );
+                                        let current_rot = body.rotation();
+                                        let current = glam::Quat::from_xyzw(
+                                            current_rot.i, current_rot.j, current_rot.k, current_rot.w,
+                                        );
+                                        // Fast slerp: 95% of the way per second (exponential smoothing)
+                                        let t = (1.0 - (-3.0 * dt).exp()).clamp(0.0, 1.0);
+                                        let new_rot = current.slerp(desired, t).normalize();
+                                        let q = nalgebra::UnitQuaternion::from_quaternion(
+                                            nalgebra::Quaternion::new(new_rot.w, new_rot.x, new_rot.y, new_rot.z),
+                                        );
+                                        body.set_rotation(q, true);
+                                        // Zero angular velocity so manual steering doesn't fight
+                                        body.set_angvel(nalgebra::Vector3::zeros(), true);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // Update galactic position based on drive speed (with deceleration)
                     if self.drive.mode() != sa_ship::DriveMode::Impulse {
                         let direction = if let Some(ship) = &self.ship {
@@ -1351,12 +1321,39 @@ impl ApplicationHandler for App {
 
                         let pos_after = self.galactic_position;
 
-                        // "Approaching destination" voice when deceleration begins (~1 ly)
+                        // Approach voice + cascade auto-disengage
                         if let Some(dist) = target_dist {
-                            if dist < 1.0 && self.prev_target_dist.map_or(true, |d| d >= 1.0) {
-                                self.audio.announce(sa_audio::VoiceId::AllSystemsReady);
-                                log::info!("Approaching destination — deceleration engaged");
+                            let prev = self.prev_target_dist;
+
+                            // Voice: "Approaching destination" when deceleration begins (~1 ly)
+                            if dist < 1.0 && prev.map_or(true, |d| d >= 1.0)
+                                && self.drive.mode() == sa_ship::DriveMode::Warp
+                            {
+                                self.audio.announce(sa_audio::VoiceId::ApproachingDestination);
+                                log::info!("Approaching destination — warp deceleration engaged");
                             }
+
+                            // Warp → Impulse: auto-disengage at 0.01 ly
+                            // Player can manually engage cruise to continue approach.
+                            if self.drive.mode() == sa_ship::DriveMode::Warp
+                                && matches!(self.drive.status(), sa_ship::DriveStatus::Engaged)
+                                && dist < drive_integration::WARP_DISENGAGE_LY
+                            {
+                                self.drive.request_disengage();
+                                self.audio.announce(sa_audio::VoiceId::AllSystemsReady);
+                                log::info!("Warp disengaged at {:.4} ly ({:.0} AU) from target",
+                                    dist, dist / 1.581e-5);
+                            }
+
+                            // Cruise → Impulse: auto-disengage at ~50 AU
+                            if self.drive.mode() == sa_ship::DriveMode::Cruise
+                                && dist < drive_integration::CRUISE_DISENGAGE_LY
+                            {
+                                self.drive.request_disengage();
+                                log::info!("Cruise disengaged at {:.6} ly ({:.0} AU) from target",
+                                    dist, dist / 1.581e-5);
+                            }
+
                             self.prev_target_dist = Some(dist);
                         }
 
@@ -1417,8 +1414,9 @@ impl ApplicationHandler for App {
                                     }
                                 }
 
-                                // Clear navigation lock (prevent re-triggering)
-                                self.navigation.clear_target();
+                                // Keep the navigation lock — marker stays visible
+                                // after arrival. Gravity well won't re-trigger
+                                // because it's guarded by active_system.is_none().
                             }
                         }
                     } else {
@@ -1628,6 +1626,67 @@ impl ApplicationHandler for App {
                             self.camera.yaw = player.yaw;
                             self.camera.pitch = player.pitch;
                             self.camera.orientation_override = None;
+                        }
+                    }
+                }
+
+                // --- Deferred star lock-on (Tab) ---
+                // Runs AFTER camera orientation is fully set for this frame.
+                // Searches ALL rendered stars (not just 15 nearest), so the
+                // player can lock any visible star on screen.
+                if self.wants_star_lock {
+                    self.wants_star_lock = false;
+                    if let Some(gpu) = &self.gpu {
+                        let sw = gpu.config.width as f32;
+                        let sh = gpu.config.height as f32;
+                        let cx = sw / 2.0;
+                        let cy = sh / 2.0;
+                        let aspect = sw / sh;
+                        let vp = self.camera.view_projection_matrix(aspect);
+
+                        let visible = self.star_streaming.visible_stars(self.galactic_position);
+                        let cam_fwd = self.camera.forward();
+                        let mut best_screen_dist = f32::MAX;
+                        let mut best: Option<(usize, f32)> = None; // (index into visible, px)
+
+                        for (i, (placed, _dist_ly)) in visible.iter().enumerate() {
+                            let dx = (placed.position.x - self.galactic_position.x) as f32;
+                            let dy = (placed.position.y - self.galactic_position.y) as f32;
+                            let dz = (placed.position.z - self.galactic_position.z) as f32;
+                            let len = (dx * dx + dy * dy + dz * dz).sqrt();
+                            if len < 0.001 { continue; }
+                            let dir_norm = glam::Vec3::new(dx / len, dy / len, dz / len);
+                            // Reject stars outside ~30° cone (dot < 0.866)
+                            if cam_fwd.dot(dir_norm) < 0.866 { continue; }
+                            let dir = dir_norm * 90000.0;
+                            let clip = vp * glam::Vec4::new(dir.x, dir.y, dir.z, 1.0);
+                            if clip.w <= 0.0 { continue; }
+                            let sx = (clip.x / clip.w * 0.5 + 0.5) * sw;
+                            let sy = (1.0 - (clip.y / clip.w * 0.5 + 0.5)) * sh;
+                            let screen_dist = ((sx - cx).powi(2) + (sy - cy).powi(2)).sqrt();
+                            if screen_dist < best_screen_dist {
+                                best_screen_dist = screen_dist;
+                                best = Some((i, screen_dist));
+                            }
+                        }
+
+                        if let Some((idx, px_dist)) = best {
+                            let (placed, dist_ly) = &visible[idx];
+                            let nav_star = navigation::NavStar {
+                                id: placed.id,
+                                galactic_pos: placed.position,
+                                catalog_name: navigation::catalog_name_from_id(placed.id),
+                                distance_ly: *dist_ly,
+                                color: placed.star.color,
+                                spectral_class: placed.star.spectral_class,
+                                luminosity: placed.star.luminosity,
+                            };
+                            log::info!("LOCKED: {} ({:.2} ly, {:.0}px from center, {} candidates)",
+                                nav_star.catalog_name, nav_star.distance_ly, px_dist, visible.len());
+                            self.navigation.lock_star(nav_star);
+                            self.audio.play_sfx(sa_audio::SfxId::Confirm, None);
+                        } else {
+                            log::warn!("No star visible on screen");
                         }
                     }
                 }
@@ -1896,8 +1955,18 @@ impl ApplicationHandler for App {
                 {
                     let speed = ship.speed(&self.physics);
                     if let Some(screen) = interaction.get_mut(ids.speed_screen) {
+                        let speed_line = match self.drive.mode() {
+                            sa_ship::DriveMode::Warp if matches!(self.drive.status(), sa_ship::DriveStatus::Engaged) => {
+                                let ly_s = self.drive.current_speed_c() * 3.169e-8;
+                                format!("Speed: {:.3} ly/s", ly_s)
+                            }
+                            sa_ship::DriveMode::Cruise if matches!(self.drive.status(), sa_ship::DriveStatus::Engaged) => {
+                                format!("Speed: {:.0}c", self.drive.current_speed_c())
+                            }
+                            _ => format!("Speed: {:.1} m/s", speed),
+                        };
                         screen.set_screen_text(vec![
-                            format!("Speed: {:.1} m/s", speed),
+                            speed_line,
                             format!("Throttle: {:.0}%", ship.throttle * 100.0),
                             format!("Engine: {}", if ship.engine_on { "ON" } else { "OFF" }),
                         ]);
@@ -2296,7 +2365,16 @@ impl ApplicationHandler for App {
                             let speed = self.ship.as_ref()
                                 .map(|s| s.speed(&self.physics))
                                 .unwrap_or(0.0);
-                            format!("HELM {:.1}m/s", speed)
+                            match self.drive.mode() {
+                                sa_ship::DriveMode::Warp if matches!(self.drive.status(), sa_ship::DriveStatus::Engaged) => {
+                                    let ly_s = self.drive.current_speed_c() * 3.169e-8;
+                                    format!("WARP {:.3} ly/s", ly_s)
+                                }
+                                sa_ship::DriveMode::Cruise if matches!(self.drive.status(), sa_ship::DriveStatus::Engaged) => {
+                                    format!("CRUISE {:.0}c", self.drive.current_speed_c())
+                                }
+                                _ => format!("HELM {:.1}m/s", speed),
+                            }
                         } else {
                             "WALK".to_string()
                         };

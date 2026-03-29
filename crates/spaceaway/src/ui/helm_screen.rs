@@ -56,15 +56,29 @@ pub fn draw_helm_screen(ctx: &egui::Context, data: &HelmData) {
             );
             ui.add_space(8.0);
 
-            // Speed (large)
+            // Speed (large) — units depend on drive mode
+            let (speed_text, speed_unit) = match data.drive_mode {
+                sa_ship::DriveMode::Warp if matches!(data.drive_status, sa_ship::DriveStatus::Engaged) => {
+                    let ly_s = data.drive_speed_c * 3.169e-8;
+                    (format!("{:.3}", ly_s), "ly/s")
+                }
+                sa_ship::DriveMode::Cruise if matches!(data.drive_status, sa_ship::DriveStatus::Engaged) => {
+                    if data.drive_speed_c >= 10.0 {
+                        (format!("{:.0}", data.drive_speed_c), "c")
+                    } else {
+                        (format!("{:.1}", data.drive_speed_c), "c")
+                    }
+                }
+                _ => (format!("{:.1}", data.speed), "m/s"),
+            };
             ui.label(
-                egui::RichText::new(format!("{:.1}", data.speed))
+                egui::RichText::new(speed_text)
                     .color(HELM_BLUE)
                     .size(36.0)
                     .strong(),
             );
             ui.label(
-                egui::RichText::new("m/s")
+                egui::RichText::new(speed_unit)
                     .color(egui::Color32::from_white_alpha(140))
                     .size(12.0),
             );
@@ -231,7 +245,7 @@ pub fn draw_helm_screen(ctx: &egui::Context, data: &HelmData) {
                         .size(11.0),
                 );
                 ui.label(
-                    egui::RichText::new(format!("{:.2} ly  ETA {eta_str}", dist))
+                    egui::RichText::new(format!("{}  ETA {eta_str}", super::visor::format_distance_ly(dist)))
                         .color(egui::Color32::from_rgb(40, 200, 220))
                         .size(11.0),
                 );

@@ -181,6 +181,37 @@ impl StarStreaming {
     pub fn sector_count(&self) -> usize {
         self.sectors.len()
     }
+
+    /// Iterate all visible stars across loaded sectors (for lock-on targeting).
+    /// Yields (PlacedStar reference, distance_ly) for stars that pass the
+    /// brightness/fade threshold — exactly the stars rendered on screen.
+    pub fn visible_stars(&self, observer: WorldPos) -> Vec<(&PlacedStar, f64)> {
+        let mut result = Vec::new();
+        for sector in self.sectors.values() {
+            if sector.fade <= 0.0 { continue; }
+            for placed in &sector.stars {
+                let dx = (placed.position.x - observer.x) as f32;
+                let dy = (placed.position.y - observer.y) as f32;
+                let dz = (placed.position.z - observer.z) as f32;
+                let dist_sq = dx * dx + dy * dy + dz * dz;
+                if dist_sq < 0.001 { continue; }
+
+                let apparent = if dist_sq > 0.01 {
+                    placed.star.luminosity / (1.0 + dist_sq * 0.005)
+                } else {
+                    placed.star.luminosity
+                };
+                let log_apparent = (1.0 + apparent * 200.0).ln();
+                let brightness = (log_apparent / 10.0 + 0.30).clamp(0.30, 1.0);
+                let faded = brightness * sector.fade;
+                if faded < MIN_BRIGHTNESS { continue; }
+
+                let dist_ly = observer.distance_to(placed.position);
+                result.push((placed, dist_ly));
+            }
+        }
+        result
+    }
 }
 
 /// Compute the set of sectors that should be loaded around the observer.

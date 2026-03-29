@@ -371,7 +371,7 @@ fn draw_target_reticle(
     // Text below
     if let Some(n) = name {
         let dist_str = distance_ly
-            .map(|d| format!(" / {d:.1} ly"))
+            .map(|d| format!(" / {}", format_distance_ly(d)))
             .unwrap_or_default();
         let label = format!("{n}{dist_str}");
         let text_pos = egui::pos2(pos.x, pos.y + 18.0 * scale);
@@ -490,5 +490,29 @@ fn compute_degradation(state: &VisorState) -> (bool, f32, f32, f32) {
         let jx = jitter_base1 * 4.0;
         let jy = jitter_base2 * 4.0;
         (visible, jx, jy, 0.4)
+    }
+}
+
+/// Format a distance in light-years with appropriate units.
+/// >= 1 ly: "2.3 ly", < 1 ly: "630 AU", < 0.01 AU: meters.
+pub fn format_distance_ly(d: f64) -> String {
+    if d >= 1.0 {
+        format!("{d:.2} ly")
+    } else {
+        let au = d / 1.581e-5;
+        if au >= 0.01 {
+            if au >= 100.0 {
+                format!("{au:.0} AU")
+            } else {
+                format!("{au:.1} AU")
+            }
+        } else {
+            let meters = d * 9.461e15;
+            if meters >= 1000.0 {
+                format!("{:.0} km", meters / 1000.0)
+            } else {
+                format!("{meters:.0} m")
+            }
+        }
     }
 }

@@ -22,6 +22,7 @@ pub enum VoiceId {
     EnginesIgniting,
     Alert,
     SystemsOnline,
+    ApproachingDestination,
 }
 
 /// Voice priority (higher interrupts lower).
@@ -30,7 +31,8 @@ impl VoiceId {
         match self {
             Self::Danger | Self::Error => 3,       // Critical
             Self::EnergyLow | Self::Alert => 2,    // High
-            Self::EngagingWarp | Self::AllSystemsReady | Self::SystemsOnline => 1, // Medium
+            Self::EngagingWarp | Self::AllSystemsReady | Self::SystemsOnline
+                | Self::ApproachingDestination => 1, // Medium
             Self::EnginesIgniting => 0,             // Low
         }
     }
@@ -87,6 +89,7 @@ pub fn voice_path(id: VoiceId) -> &'static str {
         VoiceId::EnginesIgniting => "voice/engines_igniting.wav",
         VoiceId::Alert => "voice/alert.wav",
         VoiceId::SystemsOnline => "voice/systems_online.wav",
+        VoiceId::ApproachingDestination => "voice/all_systems_ready.wav",
     }
 }
 

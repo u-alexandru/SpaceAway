@@ -67,10 +67,22 @@ impl DriveController {
 
     /// Returns true if engagement was accepted. Cruise → Engaged immediately.
     /// Warp → Spooling(0.0). Impulse → false (use request_disengage).
+    ///
+    /// `ship_speed_ms`: current impulse velocity in m/s. Cruise and warp
+    /// require near-zero velocity (< 10 m/s) to engage.
     pub fn request_engage(&mut self, mode: DriveMode) -> bool {
+        self.request_engage_with_speed(mode, 0.0)
+    }
+
+    /// Engage with ship speed check. Rejects if moving too fast in impulse.
+    pub fn request_engage_with_speed(&mut self, mode: DriveMode, ship_speed_ms: f32) -> bool {
         match mode {
             DriveMode::Impulse => false,
             DriveMode::Cruise => {
+                // Allow from warp (downshift) or from near-stationary impulse
+                if self.mode == DriveMode::Impulse && ship_speed_ms > 10.0 {
+                    return false;
+                }
                 self.mode = DriveMode::Cruise;
                 self.status = DriveStatus::Engaged;
                 true
@@ -80,7 +92,10 @@ impl DriveController {
                 if self.mode == DriveMode::Warp {
                     return false;
                 }
-                // Disengage current drive first (Cruise→Impulse→Warp spool)
+                // Must be near-stationary in impulse, or already in cruise
+                if self.mode == DriveMode::Impulse && ship_speed_ms > 10.0 {
+                    return false;
+                }
                 self.mode = DriveMode::Warp;
                 self.status = DriveStatus::Spooling(0.0);
                 true
