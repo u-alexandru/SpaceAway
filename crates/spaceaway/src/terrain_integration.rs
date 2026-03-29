@@ -112,12 +112,18 @@ impl TerrainManager {
         physics: &mut PhysicsWorld,
         ship_down: [f32; 3],
     ) -> TerrainFrameResult {
-        self.planet_center_ly = planet_center_ly;
+        // DO NOT update planet_center_ly from orbital motion.
+        // The planet orbits with TIME_SCALE=30 which can move it out of
+        // the terrain activation zone within 1 second. Since the icosphere
+        // is hidden, the terrain IS the planet — it stays at the activation
+        // position. Galactic_position is also frozen in impulse mode, so
+        // both reference points are stable.
+        let _ = planet_center_ly; // unused — we keep the activation-time position
 
         let cam_rel_m = [
-            (camera_galactic_ly.x - planet_center_ly.x) * LY_TO_M,
-            (camera_galactic_ly.y - planet_center_ly.y) * LY_TO_M,
-            (camera_galactic_ly.z - planet_center_ly.z) * LY_TO_M,
+            (camera_galactic_ly.x - self.planet_center_ly.x) * LY_TO_M,
+            (camera_galactic_ly.y - self.planet_center_ly.y) * LY_TO_M,
+            (camera_galactic_ly.z - self.planet_center_ly.z) * LY_TO_M,
         ];
 
         let visible = select_visible_nodes(
@@ -186,10 +192,10 @@ impl TerrainManager {
             &visible_keys,
         );
 
-        // Build draw commands.
+        // Build draw commands using frozen planet position.
         let draw_commands = self.build_draw_commands(
             &visible,
-            planet_center_ly,
+            self.planet_center_ly,
             camera_galactic_ly,
         );
 
