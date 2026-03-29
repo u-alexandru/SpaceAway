@@ -141,6 +141,14 @@ impl ActiveSystem {
             }
         }
 
+        // Diagnostic: log every body's orbital parameters to verify parent_index
+        for (i, b) in bodies.iter().enumerate() {
+            log::info!(
+                "BODY[{}] '{}': parent={}, orbit_r={:.0}m, period={:.0}s, radius={:.0}km",
+                i, b.label, b.parent_index, b.orbital_radius_m, b.orbital_period_s, b.radius_m / 1000.0,
+            );
+        }
+
         Self {
             star: star.clone(),
             star_id,

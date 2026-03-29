@@ -21,13 +21,16 @@ use crate::terrain_colliders::TerrainColliders;
 const LY_TO_M: f64 = 9.461e15;
 
 /// Terrain activates when camera is within this multiple of the planet radius.
-/// Terrain activates close to the surface so LOD is fine enough to look correct.
-/// At 1.15× radius, camera is 15% above surface — quadtree produces LOD 4-6
-/// nodes (~200-600km chunks) which tessellate into a recognizable sphere.
-const ACTIVATE_RADIUS_MULT: f64 = 1.15;
+/// At 2.0× radius the initial LOD is coarse (LOD 0-2 panels), but streaming
+/// fills finer chunks within seconds as the player approaches. This wide zone
+/// ensures terrain activates before the player reaches the icosphere surface,
+/// even at cruise speeds (1c ≈ 4,800 km/frame).
+const ACTIVATE_RADIUS_MULT: f64 = 2.0;
 
-/// Terrain deactivates with hysteresis to prevent toggling.
-const DEACTIVATE_RADIUS_MULT: f64 = 1.3;
+/// Terrain deactivates with hysteresis to prevent toggling. The 0.5× gap
+/// between activation (2.0×) and deactivation (2.5×) is wide enough that
+/// orbital drift and cruise overshoot don't cause rapid toggling.
+const DEACTIVATE_RADIUS_MULT: f64 = 2.5;
 
 // ---------------------------------------------------------------------------
 // TerrainFrameResult
@@ -199,9 +202,15 @@ impl TerrainManager {
             camera_galactic_ly,
         );
 
+        // Don't hide the icosphere until terrain has enough chunks for visual
+        // coverage. With fewer than 6 chunks (one per cube face), the terrain
+        // sphere has visible gaps and the transition looks like the planet
+        // disappearing and being replaced by floating panels.
+        let hide_icosphere = self.gpu_meshes.len() >= 6;
+
         TerrainFrameResult {
             draw_commands,
-            hidden_body_index: Some(self.body_index),
+            hidden_body_index: if hide_icosphere { Some(self.body_index) } else { None },
             gravity: Some(gravity),
         }
     }

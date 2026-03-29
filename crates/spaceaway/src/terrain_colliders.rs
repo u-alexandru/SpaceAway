@@ -103,6 +103,14 @@ impl TerrainColliders {
         max_displacement_m: f64,
         visible_keys: &std::collections::HashSet<ChunkKey>,
     ) {
+        // On first call, initialize anchor to the camera position so the
+        // sphere barrier is placed correctly. Without this, anchor stays at
+        // [0,0,0] from the constructor and the barrier ends up at the physics
+        // origin instead of at the planet center relative to the camera.
+        if self.terrain_body.is_none() {
+            self.anchor_f64 = cam_rel_m;
+        }
+
         let terrain_body = *self.terrain_body.get_or_insert_with(|| {
             let rb = RigidBodyBuilder::fixed().build();
             physics.add_rigid_body(rb)
