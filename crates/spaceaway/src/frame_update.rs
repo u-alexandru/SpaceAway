@@ -1,0 +1,1062 @@
+use super::App;
+use crate::drive_integration;
+use crate::landing;
+use crate::navigation;
+use crate::ship_colliders;
+use crate::solar_system;
+use sa_math::WorldPos;
+use sa_universe::MasterSeed;
+use std::time::Instant;
+use winit::keyboard::KeyCode;
+
+impl App {
+    /// Update player physics, helm/walk mode, and camera for the current frame.
+    /// Called once per frame during the Playing phase.
+    pub(super) fn update_player_physics(&mut self, dt: f32) {
+        if self.fly_mode {
+            // Fly mode: move galactic position in light-years, bypass physics.
+            // camera.position tracks galactic_position in fly mode.
+            let (dx, dy) = self.input.mouse.delta();
+            self.camera.rotate(dx * 0.003, -dy * 0.003);
+
+            let fwd = self.camera.forward();
+            let right = self.camera.right();
+            let speed = self.fly_speed * dt as f64;
+
+            use winit::keyboard::KeyCode as KC;
+            if self.input.keyboard.is_pressed(KC::KeyW) {
+                self.galactic_position.x += fwd.x as f64 * speed;
+                self.galactic_position.y += fwd.y as f64 * speed;
+                self.galactic_position.z += fwd.z as f64 * speed;
+            }
+            if self.input.keyboard.is_pressed(KC::KeyS) {
+                self.galactic_position.x -= fwd.x as f64 * speed;
+                self.galactic_position.y -= fwd.y as f64 * speed;
+                self.galactic_position.z -= fwd.z as f64 * speed;
+            }
+            if self.input.keyboard.is_pressed(KC::KeyA) {
+                self.galactic_position.x -= right.x as f64 * speed;
+                self.galactic_position.z -= right.z as f64 * speed;
+            }
+            if self.input.keyboard.is_pressed(KC::KeyD) {
+                self.galactic_position.x += right.x as f64 * speed;
+                self.galactic_position.z += right.z as f64 * speed;
+            }
+            if self.input.keyboard.is_pressed(KC::Space) {
+                self.galactic_position.y += speed;
+            }
+            if self.input.keyboard.is_pressed(KC::ShiftLeft) {
+                self.galactic_position.y -= speed;
+            }
+            // Camera follows galactic position in fly mode
+            self.camera.position = self.galactic_position;
+        } else if self.helm.as_ref().map(|h| h.is_seated()).unwrap_or(false) {
+            // --- Seated at helm: WASD rotates ship, mouse free-looks ---
+            if let Some(ship) = &self.ship {
+                // Reset forces each frame so only current input applies
+                ship.reset_forces(&mut self.physics);
+
+                let wants_stand = if let Some(helm) = &self.helm {
+                    helm.update_seated(ship, &mut self.physics, &self.input, dt)
+                } else {
+                    false
+                };
+
+                // Drive mode selection (1/2/3) while seated at helm
+                if self.input.keyboard.just_pressed(KeyCode::Digit1) {
+                    self.drive.request_disengage();
+                    log::info!("Drive: IMPULSE");
+                }
+                if self.input.keyboard.just_pressed(KeyCode::Digit2) {
+                    // Block cruise inside the atmosphere (blend > 0.1).
+                    // Above atmosphere with terrain active: cruise is allowed
+                    // for approach but auto-disengages at atmosphere boundary.
+                    let in_atmosphere = self.terrain_gravity
+                        .as_ref()
+                        .is_some_and(|g| g.blend > 0.1);
+                    if in_atmosphere {
+                        log::warn!("Cannot engage cruise: inside atmosphere");
+                    } else {
+                        let ship_speed = self.ship.as_ref()
+                            .map(|s| s.speed(&self.physics))
+                            .unwrap_or(0.0);
+                        if self.drive.request_engage_with_speed(sa_ship::DriveMode::Cruise, ship_speed) {
+                            log::info!("Drive: CRUISE engaged");
+                        } else if ship_speed > 100.0 {
+                            log::warn!("Cannot engage cruise: ship moving at {:.0} m/s (slow down first)", ship_speed);
+                        }
+                    }
+                }
+
+                // Tab: lock nearest target to crosshair.
+                // In a solar system: lock nearest PLANET. Otherwise: lock nearest STAR.
+                if self.input.keyboard.just_pressed(KeyCode::Tab)
+                    && let Some(gpu) = &self.gpu {
+                        let sw = gpu.config.width as f32;
+                        let sh = gpu.config.height as f32;
+                        let cx = sw / 2.0;
+                        let cy = sh / 2.0;
+                        let aspect = sw / sh;
+                        let vp = self.camera.view_projection_matrix(aspect);
+                        let cam_fwd = self.camera.forward();
+
+                        let locked = if let Some(sys) = &self.active_system {
+                            // In a solar system — lock nearest planet to crosshair
+                            let positions = sys.compute_positions_ly_pub();
+                            let mut best_dist = f32::MAX;
+                            let mut best: Option<(usize, f32)> = None;
+
+                            for (i, pos) in positions.iter().enumerate() {
+                                if i == 0 { continue; } // skip star
+                                let Some(radius_m) = sys.body_radius_m(i) else { continue };
+                                let Some((_, _sub_type, _, _, _)) = sys.planet_data(i) else { continue };
+                                // Skip non-planets (atmosphere, rings)
+                                if radius_m < 100_000.0 { continue; }
+
+                                let dx = (pos.x - self.galactic_position.x) as f32;
+                                let dy = (pos.y - self.galactic_position.y) as f32;
+                                let dz = (pos.z - self.galactic_position.z) as f32;
+                                let len = (dx*dx + dy*dy + dz*dz).sqrt();
+                                if len < 1e-10 { continue; }
+                                let dir_norm = glam::Vec3::new(dx/len, dy/len, dz/len);
+                                // Only consider planets within ~60° of crosshair
+                                if cam_fwd.dot(dir_norm) < 0.5 { continue; }
+                                let dir = dir_norm * 90000.0;
+                                let clip = vp * glam::Vec4::new(dir.x, dir.y, dir.z, 1.0);
+                                if clip.w <= 0.0 { continue; }
+                                let sx = (clip.x / clip.w * 0.5 + 0.5) * sw;
+                                let sy = (1.0 - (clip.y / clip.w * 0.5 + 0.5)) * sh;
+                                let sd = ((sx - cx).powi(2) + (sy - cy).powi(2)).sqrt();
+                                if sd < best_dist {
+                                    best_dist = sd;
+                                    best = Some((i, sd));
+                                }
+                            }
+
+                            if let Some((idx, px_dist)) = best {
+                                let pos = positions[idx];
+                                let dist_ly = self.galactic_position.distance_to(pos);
+                                let radius_m = sys.body_radius_m(idx).unwrap_or(0.0);
+                                let (_, sub_type, _, _, _) = sys.planet_data(idx).unwrap();
+                                let name = format!("Planet {} ({:?}, {:.0}km)",
+                                    idx, sub_type, radius_m / 1000.0);
+                                let nav = navigation::NavStar {
+                                    id: sa_universe::ObjectId(0),
+                                    galactic_pos: pos,
+                                    catalog_name: name.clone(),
+                                    distance_ly: dist_ly,
+                                    color: [1.0, 1.0, 1.0],
+                                    spectral_class: sa_universe::SpectralClass::G,
+                                    luminosity: 1.0,
+                                };
+                                self.navigation.lock_star(nav);
+                                log::info!("LOCKED PLANET: {} ({:.6} ly, {:.0}px from center)",
+                                    name, dist_ly, px_dist);
+                                self.audio.play_sfx(sa_audio::SfxId::Confirm, None);
+                                true
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
+
+                        // Fallback: lock nearest star if no planet was locked
+                        if !locked {
+                            self.navigation.update_nearby(self.galactic_position);
+                            let mut best_screen_dist = f32::MAX;
+                            let mut best_idx: Option<usize> = None;
+                            for (i, star) in self.navigation.nearby_stars.iter().enumerate() {
+                                let dx = (star.galactic_pos.x - self.galactic_position.x) as f32;
+                                let dy = (star.galactic_pos.y - self.galactic_position.y) as f32;
+                                let dz = (star.galactic_pos.z - self.galactic_position.z) as f32;
+                                let len = (dx*dx + dy*dy + dz*dz).sqrt();
+                                if len < 0.001 { continue; }
+                                let dir_norm = glam::Vec3::new(dx/len, dy/len, dz/len);
+                                if cam_fwd.dot(dir_norm) < 0.866 { continue; }
+                                let dir = dir_norm * 90000.0;
+                                let clip = vp * glam::Vec4::new(dir.x, dir.y, dir.z, 1.0);
+                                if clip.w <= 0.0 { continue; }
+                                let sx = (clip.x / clip.w * 0.5 + 0.5) * sw;
+                                let sy = (1.0 - (clip.y / clip.w * 0.5 + 0.5)) * sh;
+                                let screen_dist = ((sx - cx).powi(2) + (sy - cy).powi(2)).sqrt();
+                                if screen_dist < best_screen_dist {
+                                    best_screen_dist = screen_dist;
+                                    best_idx = Some(i);
+                                }
+                            }
+                            if let Some(idx) = best_idx {
+                                self.navigation.lock_target(idx);
+                                if let Some(target) = &self.navigation.locked_target {
+                                    log::info!("LOCKED STAR: {} ({:.2} ly, {:.0}px from center)",
+                                        target.catalog_name, target.distance_ly, best_screen_dist);
+                                    self.audio.play_sfx(sa_audio::SfxId::Confirm, None);
+                                }
+                            } else {
+                                log::warn!("No target visible on screen");
+                            }
+                        }
+                }
+                if self.input.keyboard.just_pressed(KeyCode::Digit3) {
+                    // Block warp near planets (always — warp is for star-to-star).
+                    let in_atmosphere = self.terrain_gravity
+                        .as_ref()
+                        .is_some_and(|g| g.blend > 0.5);
+                    if self.terrain.is_some() || in_atmosphere {
+                        log::warn!("Cannot engage warp: too close to planet");
+                    } else if self.ship_resources.exotic_fuel > 0.0 {
+                        let ship_speed = self.ship.as_ref()
+                            .map(|s| s.speed(&self.physics))
+                            .unwrap_or(0.0);
+                        if self.drive.request_engage_with_speed(sa_ship::DriveMode::Warp, ship_speed) {
+                            log::info!("Drive: WARP spooling...");
+                            self.audio.announce(sa_audio::VoiceId::EngagingWarp);
+                            // Unload active system when entering warp
+                            if self.active_system.is_some() {
+                                if let Some(t) = &mut self.terrain { t.cleanup(&mut self.physics); }
+                                self.terrain = None;
+                                self.terrain_gravity = None;
+                                self.active_system = None;
+                                log::info!("Left solar system — entering warp");
+                            }
+                        } else if ship_speed > 10.0 {
+                            log::warn!("Cannot engage warp: ship moving at {:.0} m/s (stop first)", ship_speed);
+                        }
+                    } else {
+                        log::warn!("Cannot engage warp: no exotic fuel");
+                    }
+                }
+
+                // Update drive spool progress
+                self.drive.update(dt);
+
+                // Map throttle lever to drive speed when in cruise/warp
+                if self.drive.mode() != sa_ship::DriveMode::Impulse
+                    && let Some(ship) = &self.ship
+                {
+                    self.drive.set_speed_fraction(ship.throttle);
+                }
+
+                // Apply continuous thrust from throttle lever + engine button
+                ship.apply_thrust(&mut self.physics);
+
+                // Vertical thrust: Space = up, Shift = down (ship-local).
+                // 2× main thrust so the pilot can decelerate from
+                // terminal velocity (~270 m/s) against full gravity.
+                let vert_up = self.input.keyboard.is_pressed(KeyCode::Space);
+                let vert_down = self.input.keyboard.is_pressed(KeyCode::ShiftLeft);
+                if vert_up || vert_down {
+                    let sign = if vert_up { 1.0_f32 } else { -1.0 };
+                    if let Some(body) = self.physics.get_body(ship.body_handle) {
+                        let rot = *body.rotation();
+                        let up = rot * nalgebra::Vector3::new(0.0, sign, 0.0);
+                        let force = up * ship.max_thrust * 2.0;
+                        if let Some(body) = self.physics.get_body_mut(ship.body_handle) {
+                            body.add_force(force, true);
+                        }
+                    }
+                }
+
+                if wants_stand
+                    && let Some(helm) = &mut self.helm
+                {
+                    self.drive.request_disengage();
+                    // Set player yaw to ship's WORLD heading so they face the
+                    // ship's nose direction. Player.yaw is WORLD space.
+                    if let Some(body) = self.physics.get_body(ship.body_handle) {
+                        let rot = body.rotation();
+                        let fwd = rot * nalgebra::Vector3::new(0.0, 0.0, -1.0);
+                        if let Some(player) = &mut self.player {
+                            player.yaw = fwd.x.atan2(-fwd.z);
+                            player.pitch = 0.0;
+                        }
+                    }
+                    helm.stand_up();
+                    // Re-enable player and teleport to ship's current position
+                    // (ship may have moved while seated)
+                    if let Some(player) = &self.player {
+                        // Get ship state before mutable borrow
+                        let ship_pos = ship.position(&self.physics);
+                        let ship_vel = ship.speed_vector(&self.physics);
+                        // Compute rotated stand-up offset before mutable borrow
+                        let ship_rot = self.physics.get_body(ship.body_handle)
+                            .map(|b| *b.rotation())
+                            .unwrap_or(nalgebra::UnitQuaternion::identity());
+                        let local_offset = nalgebra::Vector3::new(0.0, -0.1, 2.8);
+                        let world_offset = ship_rot * local_offset;
+
+                        if let (Some((sx, sy, sz)), Some(body)) = (
+                            ship_pos,
+                            self.physics.get_body_mut(player.body_handle),
+                        ) {
+                            body.set_enabled(true);
+                            body.set_translation(
+                                nalgebra::Vector3::new(sx + world_offset.x, sy + world_offset.y, sz + world_offset.z),
+                                true,
+                            );
+                            // Match ship velocity so player doesn't slide on stand-up
+                            body.set_linvel(nalgebra::Vector3::new(ship_vel.0, ship_vel.1, ship_vel.2), true);
+                        }
+                    }
+                    log::info!("Left helm seated mode — player teleported to ship");
+                }
+            }
+
+            // Apply terrain gravity + atmospheric drag to ship body before step.
+            // Skip when LANDED — ship is frozen on the surface.
+            if self.landing.state() != landing::LandingState::Landed
+                && let Some(ref grav) = self.terrain_gravity
+                && grav.blend > 0.01
+                && let Some(ship) = &self.ship
+                && let Some(body) = self.physics.get_body_mut(ship.body_handle)
+            {
+                let helm_dt = dt.min(1.0 / 30.0);
+                let grav_accel = nalgebra::Vector3::new(
+                    grav.direction[0] * grav.magnitude,
+                    grav.direction[1] * grav.magnitude,
+                    grav.direction[2] * grav.magnitude,
+                );
+                let vel = body.linvel() + grav_accel * helm_dt;
+                // Atmospheric drag: terminal velocity ~200 m/s at surface
+                let atmo_drag = 0.05 * grav.blend;
+                let vel = vel * (1.0 - atmo_drag * helm_dt).max(0.0);
+                body.set_linvel(vel, true);
+            }
+
+            // Record ship position before physics step (for galactic tracking).
+            let ship_pos_pre_helm = self.ship.as_ref()
+                .and_then(|s| self.physics.get_body(s.body_handle))
+                .map(|b| b.translation().clone_owned());
+
+            // Physics step
+            let physics_dt = dt.min(1.0 / 30.0);
+            if physics_dt > 0.0 {
+                profiling::scope!("physics_step");
+                self.physics.step(physics_dt);
+            }
+
+            // Track ship physics into galactic_position (impulse only).
+            // When terrain is active, compute exactly from anchor + ship rapier pos.
+            // When terrain is NOT active, use delta-based tracking.
+            if self.drive.mode() == sa_ship::DriveMode::Impulse {
+                if let Some(terrain_mgr) = &self.terrain
+                    && let Some(ship) = &self.ship
+                    && let Some(body) = self.physics.get_body(ship.body_handle)
+                {
+                    // Exact galactic position: frozen_planet_center + (anchor + ship_rapier) / LY_TO_M
+                    let anchor = terrain_mgr.anchor_f64();
+                    let post = body.translation();
+                    let planet = terrain_mgr.frozen_planet_center_ly();
+                    let ly_to_m = 9.461e15_f64;
+                    self.galactic_position.x = planet.x + (anchor[0] + post.x as f64) / ly_to_m;
+                    self.galactic_position.y = planet.y + (anchor[1] + post.y as f64) / ly_to_m;
+                    self.galactic_position.z = planet.z + (anchor[2] + post.z as f64) / ly_to_m;
+                } else if let Some(pre) = ship_pos_pre_helm
+                    && let Some(ship) = &self.ship
+                    && let Some(body) = self.physics.get_body(ship.body_handle)
+                {
+                    let post = body.translation();
+                    let m_to_ly = 1.0 / 9.461e15_f64;
+                    self.galactic_position.x += (post.x as f64 - pre.x as f64) * m_to_ly;
+                    self.galactic_position.y += (post.y as f64 - pre.y as f64) * m_to_ly;
+                    self.galactic_position.z += (post.z as f64 - pre.z as f64) * m_to_ly;
+                }
+            }
+
+            // Auto-orient ship toward locked target in cruise/warp.
+            // Smoothly slerps the ship body rotation so its forward (-Z)
+            // aligns with the direction to the target.
+            if self.drive.mode() != sa_ship::DriveMode::Impulse
+                && let Some(target) = &self.navigation.locked_target
+                && let Some(ship) = &self.ship
+                && let Some(body) = self.physics.get_body_mut(ship.body_handle)
+            {
+                // Compute direction in f64 to handle both star targets (ly scale)
+                // and planet targets (AU scale = ~1e-5 ly). The old f32 threshold
+                // of 0.001 ly filtered out all in-system planets.
+                let dx_f64 = target.galactic_pos.x - self.galactic_position.x;
+                let dy_f64 = target.galactic_pos.y - self.galactic_position.y;
+                let dz_f64 = target.galactic_pos.z - self.galactic_position.z;
+                let len_f64 = (dx_f64 * dx_f64 + dy_f64 * dy_f64 + dz_f64 * dz_f64).sqrt();
+                if len_f64 > 1e-15 { // ~9.5 meters in ly — practically any nonzero distance
+                    let to_target = glam::Vec3::new(
+                        (dx_f64 / len_f64) as f32,
+                        (dy_f64 / len_f64) as f32,
+                        (dz_f64 / len_f64) as f32,
+                    );
+                    // Ship forward is -Z, so desired rotation takes -Z to to_target
+                    let desired = glam::Quat::from_rotation_arc(
+                        glam::Vec3::new(0.0, 0.0, -1.0),
+                        to_target,
+                    );
+                    let current_rot = body.rotation();
+                    let current = glam::Quat::from_xyzw(
+                        current_rot.i, current_rot.j, current_rot.k, current_rot.w,
+                    );
+                    // Fast slerp: 95% of the way per second (exponential smoothing)
+                    let t = (1.0 - (-3.0 * dt).exp()).clamp(0.0, 1.0);
+                    let new_rot = current.slerp(desired, t).normalize();
+                    let q = nalgebra::UnitQuaternion::from_quaternion(
+                        nalgebra::Quaternion::new(new_rot.w, new_rot.x, new_rot.y, new_rot.z),
+                    );
+                    body.set_rotation(q, true);
+                    // Zero angular velocity so manual steering doesn't fight
+                    body.set_angvel(nalgebra::Vector3::zeros(), true);
+                }
+            }
+
+            // Update galactic position based on drive speed (with deceleration)
+            if self.drive.mode() != sa_ship::DriveMode::Impulse {
+                let direction = if let Some(ship) = &self.ship {
+                    if let Some(body) = self.physics.get_body(ship.body_handle) {
+                        let rot = body.rotation();
+                        let fwd = rot * nalgebra::Vector3::new(0.0, 0.0, -1.0);
+                        [fwd.x as f64, fwd.y as f64, fwd.z as f64]
+                    } else {
+                        [0.0, 0.0, -1.0]
+                    }
+                } else {
+                    [0.0, 0.0, -1.0]
+                };
+
+                // Save position before warp movement
+                let pos_before = self.galactic_position;
+
+                // Compute target distance for deceleration
+                let target_dist = self.navigation.locked_target.as_ref()
+                    .map(|t| self.galactic_position.distance_to(t.galactic_pos));
+
+                // Apply warp movement with deceleration
+                let (delta, effective_speed) = drive_integration::galactic_position_delta_decel(
+                    &self.drive,
+                    direction,
+                    dt as f64,
+                    target_dist,
+                );
+                self.galactic_position.x += delta[0];
+                self.galactic_position.y += delta[1];
+                self.galactic_position.z += delta[2];
+
+                // When terrain is active and in cruise/warp, sync the
+                // ship's rapier position to match galactic_position.
+                // This keeps the rebase system consistent and ensures
+                // the sphere barrier is at the correct relative position.
+                if let Some(terrain_mgr) = &self.terrain
+                    && let Some(ship) = &self.ship
+                    && let Some(body) = self.physics.rigid_body_set.get_mut(ship.body_handle)
+                {
+                    let cam_rel = terrain_mgr.cam_rel_m(self.galactic_position);
+                    let anchor = terrain_mgr.anchor_f64();
+                    let new_rapier = [
+                        (cam_rel[0] - anchor[0]) as f32,
+                        (cam_rel[1] - anchor[1]) as f32,
+                        (cam_rel[2] - anchor[2]) as f32,
+                    ];
+                    body.set_translation(
+                        nalgebra::Vector3::new(new_rapier[0], new_rapier[1], new_rapier[2]),
+                        true,
+                    );
+                }
+
+                let pos_after = self.galactic_position;
+
+                // Auto-disengage cruise at atmosphere boundary when
+                // terrain is active. Cruise doesn't move the rapier
+                // body so the sphere barrier can't stop the ship.
+                if self.drive.mode() == sa_ship::DriveMode::Cruise
+                    && let Some(terrain_mgr) = &mut self.terrain
+                {
+                    let cam_rel = terrain_mgr.cam_rel_m(self.galactic_position);
+                    let dist_m = (cam_rel[0] * cam_rel[0]
+                        + cam_rel[1] * cam_rel[1]
+                        + cam_rel[2] * cam_rel[2]).sqrt();
+                    // Disengage ~100km above surface. Close enough that
+                    // impulse descent takes ~2 minutes, not 20.
+                    let atmo_boundary = terrain_mgr.planet_radius_m() + 100_000.0;
+                    if dist_m < atmo_boundary {
+                        // Clamp position to atmosphere boundary.
+                        let safe_dist = atmo_boundary / dist_m;
+                        let planet_ly = terrain_mgr.frozen_planet_center_ly();
+                        let ly_to_m = 9.461e15_f64;
+                        self.galactic_position.x = planet_ly.x + cam_rel[0] * safe_dist / ly_to_m;
+                        self.galactic_position.y = planet_ly.y + cam_rel[1] * safe_dist / ly_to_m;
+                        self.galactic_position.z = planet_ly.z + cam_rel[2] * safe_dist / ly_to_m;
+                        self.drive.request_disengage();
+                        // Flush stale terrain chunks — cruise moved too fast
+                        // for streaming to keep up. Old coarse chunks at
+                        // intermediate positions cause the icosphere to hide
+                        // while nothing visible replaces it.
+                        terrain_mgr.flush_for_teleport();
+                        log::info!("Cruise auto-disengage: entered atmosphere at {:.0}km altitude",
+                            (dist_m - terrain_mgr.planet_radius_m()) / 1000.0);
+                    }
+                }
+
+                // Approach voice + cascade auto-disengage
+                if let Some(dist) = target_dist {
+                    let prev = self.prev_target_dist;
+
+                    // Voice: "Approaching destination" when deceleration begins (~1 ly)
+                    if dist < 1.0 && prev.is_none_or(|d| d >= 1.0)
+                        && self.drive.mode() == sa_ship::DriveMode::Warp
+                    {
+                        self.audio.announce(sa_audio::VoiceId::ApproachingDestination);
+                        log::info!("Approaching destination — warp deceleration engaged");
+                    }
+
+                    // Warp → Impulse: auto-disengage at 0.01 ly
+                    // Player can manually engage cruise to continue approach.
+                    if self.drive.mode() == sa_ship::DriveMode::Warp
+                        && matches!(self.drive.status(), sa_ship::DriveStatus::Engaged)
+                        && dist < drive_integration::WARP_DISENGAGE_LY
+                    {
+                        self.drive.request_disengage();
+                        self.audio.announce(sa_audio::VoiceId::AllSystemsReady);
+                        log::info!("Warp disengaged at {:.4} ly ({:.0} AU) from target",
+                            dist, dist / 1.581e-5);
+                    }
+
+                    // Cruise → Impulse: auto-disengage at ~50 AU
+                    if self.drive.mode() == sa_ship::DriveMode::Cruise
+                        && dist < drive_integration::CRUISE_DISENGAGE_LY
+                    {
+                        self.drive.request_disengage();
+                        log::info!("Cruise disengaged at {:.6} ly ({:.0} AU) from target",
+                            dist, dist / 1.581e-5);
+                    }
+
+                    self.prev_target_dist = Some(dist);
+                }
+
+                // Free warp proximity warning (3 seconds lookahead)
+                if self.drive.mode() == sa_ship::DriveMode::Warp
+                    && matches!(self.drive.status(), sa_ship::DriveStatus::Engaged)
+                    && self.navigation.locked_target.is_none()
+                    && !self.proximity_warned
+                {
+                    let lookahead = effective_speed * 3.0;
+                    if self.navigation.check_proximity_warning(
+                        self.galactic_position, direction, lookahead,
+                    ).is_some() {
+                        self.audio.announce(sa_audio::VoiceId::Alert);
+                        self.proximity_warned = true;
+                        log::info!("PROXIMITY ALERT — star ahead");
+                    }
+                }
+
+                // Predictive gravity well auto-drop (ray-segment, catches flythroughs)
+                if self.drive.mode() == sa_ship::DriveMode::Warp
+                    && matches!(self.drive.status(), sa_ship::DriveStatus::Engaged)
+                    && self.active_system.is_none()
+                    && let Some((nav_star, drop_pos)) =
+                        self.navigation.check_gravity_well_predictive(pos_before, pos_after)
+                {
+                        // Place ship at well boundary, not inside
+                        self.galactic_position = drop_pos;
+                        self.drive.request_disengage();
+                        self.proximity_warned = false;
+                        self.prev_target_dist = None;
+                        log::info!("GRAVITY WELL — entering system: {}", nav_star.catalog_name);
+
+                        // Load the solar system
+                        let nav_id = nav_star.id;
+                        let nav_name = nav_star.catalog_name.clone();
+                        if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
+                            let sector_coord = sa_universe::SectorCoord::new(
+                                nav_id.sector_x().into(),
+                                nav_id.sector_y().into(),
+                                nav_id.sector_z().into(),
+                            );
+                            let sector = sa_universe::sector::generate_sector(
+                                MasterSeed(42),
+                                sector_coord,
+                            );
+                            if let Some(placed) = sector.stars.iter().find(|s| s.id == nav_id) {
+                                let system = solar_system::ActiveSystem::load(
+                                    nav_id,
+                                    placed,
+                                    &mut renderer.mesh_store,
+                                    &gpu.device,
+                                );
+                                log::info!("System loaded: {} bodies ({})", system.body_count(), nav_name);
+                                self.audio.announce(sa_audio::VoiceId::AllSystemsReady);
+                                // Clean up terrain before switching system
+                                if let Some(t) = &mut self.terrain { t.cleanup(&mut self.physics); }
+                                self.terrain = None;
+                                self.terrain_gravity = None;
+                                self.active_system = Some(system);
+                            }
+                        }
+
+                        // Keep the navigation lock — marker stays visible
+                        // after arrival. Gravity well won't re-trigger
+                        // because it's guarded by active_system.is_none().
+                }
+            } else {
+                // Not in cruise/warp — reset proximity warning and approach tracking
+                self.proximity_warned = false;
+                self.prev_target_dist = None;
+            }
+
+            // Sync interior collider rotation to match ship (same as walk mode).
+            // Needed so colliders are correct when the player stands up.
+            if let (Some(ship_ref), Some(ih)) = (&self.ship, ship_colliders::interior_body_handle()) {
+                let ship_rot = self.physics.get_body(ship_ref.body_handle)
+                    .map(|b| *b.rotation());
+                if let (Some(rot), Some(ib)) = (ship_rot, self.physics.get_body_mut(ih)) {
+                    ib.set_position(
+                        nalgebra::Isometry3::from_parts(
+                            nalgebra::Translation3::identity(),
+                            rot,
+                        ),
+                        true,
+                    );
+                }
+            }
+
+            // --- Landing system update (helm mode) ---
+            if let Some(ship) = &self.ship {
+                let ship_iso = self.physics.get_body(ship.body_handle)
+                    .map(|b| *b.position())
+                    .unwrap_or_else(nalgebra::Isometry3::identity);
+                let ship_speed_ms = ship.speed(&self.physics);
+                let ship_vel_raw = ship.speed_vector(&self.physics);
+                let ship_velocity = nalgebra::Vector3::new(
+                    ship_vel_raw.0, ship_vel_raw.1, ship_vel_raw.2,
+                );
+                let gravity_raw = self.terrain_gravity.as_ref()
+                    .map(|g| g.direction)
+                    .unwrap_or([0.0, -1.0, 0.0]);
+                let gravity_dir = nalgebra::Unit::new_normalize(
+                    nalgebra::Vector3::new(gravity_raw[0], gravity_raw[1], gravity_raw[2]),
+                );
+                let planet_gravity = self.terrain_gravity.as_ref()
+                    .map(|g| g.magnitude)
+                    .unwrap_or(0.0);
+                let terrain_active = self.terrain.is_some();
+                let landing_result = self.landing.update(landing::LandingParams {
+                    physics: &self.physics,
+                    ship_iso: &ship_iso,
+                    ship_speed_ms,
+                    ship_velocity,
+                    gravity_dir,
+                    planet_gravity,
+                    terrain_active,
+                    engine_on: ship.engine_on,
+                    throttle: ship.throttle,
+                });
+                self.last_clearance = landing_result.min_clearance;
+
+                // Diagnostic logging when terrain is active (throttled).
+                if terrain_active && self.time.frame_count().is_multiple_of(60) {
+                    log::info!(
+                        "LANDING_DIAG: state={:?}, speed={:.1}m/s, vertical={:.1}m/s, clearance={:.1}m, skid_contact={}",
+                        landing_result.state,
+                        ship_speed_ms,
+                        ship_velocity.dot(&gravity_dir).abs(),
+                        landing_result.min_clearance.unwrap_or(100.0),
+                        landing_result.skid_contact,
+                    );
+                }
+
+                // Freeze ship when LANDED; restore on unlock.
+                if landing_result.state == landing::LandingState::Landed
+                    && let Some(body) = self.physics.get_body_mut(ship.body_handle)
+                {
+                    body.set_linvel(nalgebra::Vector3::zeros(), true);
+                    body.set_angvel(nalgebra::Vector3::zeros(), true);
+                    body.set_gravity_scale(0.0, true);
+                }
+                // Restore gravity_scale when transitioning OUT of Landed.
+                if landing_result.previous_state == landing::LandingState::Landed
+                    && landing_result.state != landing::LandingState::Landed
+                    && let Some(body) = self.physics.get_body_mut(ship.body_handle)
+                {
+                    // Ship gravity_scale is always 0 (gravity applied manually).
+                    body.set_gravity_scale(0.0, true);
+                    body.set_linvel(nalgebra::Vector3::zeros(), true);
+                }
+                if let Some(ref impact) = landing_result.impact {
+                    log::info!(
+                        "IMPACT: {:?} at {:.1} m/s",
+                        impact.category,
+                        impact.impact_speed_ms
+                    );
+                    match impact.category {
+                        landing::ImpactCategory::Clean => {
+                            self.audio.play_sfx(sa_audio::SfxId::ImpactSoft, None);
+                        }
+                        landing::ImpactCategory::Minor => {
+                            self.audio.play_sfx(sa_audio::SfxId::ImpactHeavy, None);
+                        }
+                        landing::ImpactCategory::Major => {
+                            self.audio.play_sfx(sa_audio::SfxId::ImpactCrash, None);
+                            self.audio.play_alarm(sa_audio::AlarmId::StructuralDamage);
+                        }
+                        landing::ImpactCategory::Destroyed => {
+                            self.audio.play_sfx(sa_audio::SfxId::ImpactExplosion, None);
+                        }
+                    }
+                    self.events.emit(impact.clone());
+                }
+            }
+
+            // Camera: ship quaternion + helm mouse look offset.
+            // ONLY runs while still seated — must not run on the stand-up frame
+            // or orientation_override gets re-set after being cleared.
+            if self.helm.as_ref().map(|h| h.is_seated()).unwrap_or(false) {
+                let (dx, dy) = self.input.mouse.delta();
+                self.helm_look_yaw += dx * 0.003;
+                self.helm_look_pitch -= dy * 0.003;
+                let max_p = std::f32::consts::FRAC_PI_2 - 0.01;
+                self.helm_look_pitch = self.helm_look_pitch.clamp(-max_p, max_p);
+
+                if let Some(ship) = &self.ship
+                    && let Some(body) = self.physics.get_body(ship.body_handle)
+                {
+                    let r = body.rotation();
+                    let ship_quat = glam::Quat::from_xyzw(r.i, r.j, r.k, r.w);
+
+                    let look_offset = glam::Quat::from_rotation_y(-self.helm_look_yaw)
+                        * glam::Quat::from_rotation_x(self.helm_look_pitch);
+
+                    self.camera.orientation_override = Some(ship_quat * look_offset);
+                }
+            }
+
+            // Camera position fixed at helm viewpoint (moves with ship)
+            if let (Some(helm), Some(ship)) = (&self.helm, &self.ship)
+                && let Some((cx, cy, cz)) = helm.camera_position(&self.physics, ship)
+            {
+                self.camera.position = WorldPos::new(cx as f64, cy as f64, cz as f64);
+            }
+        } else {
+            // --- Walk mode: kinematic character controller ---
+            //
+            // CORRECT ORDER (prevents drift and teleporting):
+            // 1. Apply forces to ship
+            // 2. Run physics step (ship moves to final position)
+            // 3. Update query pipeline (colliders at final position)
+            // 4. Read ship's POST-STEP velocity
+            // 5. Move player using post-step velocity + move_shape
+            //
+            // This ensures the player moves relative to where the ship
+            // ACTUALLY IS after the step, not where it WAS before.
+
+            // MANUAL ship integration — no physics.step() needed.
+            // physics.step() is extremely expensive with many colliders
+            // (47ms at 345 m/s). Since the player is kinematic (uses
+            // move_shape, not contacts) and the ship is the only dynamic
+            // body, we integrate the ship manually: v += a*dt, p += v*dt.
+            let physics_dt = dt.min(1.0 / 30.0);
+            let t_phys = Instant::now();
+
+            // Record ship transform BEFORE integration (needed to carry player)
+            let (ship_pos_before, ship_rot_before) = self.ship.as_ref()
+                .and_then(|s| self.physics.get_body(s.body_handle))
+                .map(|b| (b.translation().clone_owned(), *b.rotation()))
+                .unwrap_or((nalgebra::Vector3::zeros(), nalgebra::UnitQuaternion::identity()));
+
+            // Manually integrate ship: apply thrust as velocity change.
+            // Skip all integration when landed — ship is frozen on the surface.
+            if self.landing.state() == landing::LandingState::Landed {
+                // Ship is locked on the ground — zero velocity and hold position.
+                if let Some(ship) = &self.ship
+                    && let Some(body) = self.physics.get_body_mut(ship.body_handle)
+                {
+                    body.set_linvel(nalgebra::Vector3::zeros(), true);
+                    body.set_angvel(nalgebra::Vector3::zeros(), true);
+                    body.set_gravity_scale(0.0, true);
+                }
+            } else if let Some(ship) = &self.ship
+                && let Some(body) = self.physics.get_body_mut(ship.body_handle)
+            {
+                    // Apply thrust: F = throttle * max_thrust * engine_on
+                    if ship.engine_on && ship.throttle > 0.0 {
+                        let rot = *body.rotation();
+                        let forward = rot * nalgebra::Vector3::new(0.0, 0.0, -1.0);
+                        let accel = forward * (ship.throttle * ship.max_thrust / body.mass());
+                        let vel = body.linvel() + accel * physics_dt;
+                        body.set_linvel(vel, true);
+                    }
+                    // Linear damping always applies (not just when engine on).
+                    // Without this, gravity accumulates velocity without bound.
+                    {
+                        let vel = body.linvel() * (1.0 - 0.001 * physics_dt).max(0.0);
+                        body.set_linvel(vel, true);
+                    }
+                    // Apply terrain gravity (planet surface pull).
+                    if let Some(ref grav) = self.terrain_gravity
+                        && grav.blend > 0.01
+                    {
+                        let grav_accel = nalgebra::Vector3::new(
+                            grav.direction[0] * grav.magnitude,
+                            grav.direction[1] * grav.magnitude,
+                            grav.direction[2] * grav.magnitude,
+                        );
+                        let vel = body.linvel() + grav_accel * physics_dt;
+                        body.set_linvel(vel, true);
+
+                        // Atmospheric drag: increases with gravity blend.
+                        // At full blend (surface), drag = 0.05/s → terminal velocity
+                        // ~200 m/s under Earth gravity (9.81/0.05 = 196 m/s).
+                        // At atmosphere edge (blend ~0), negligible drag.
+                        let atmo_drag = 0.05 * grav.blend;
+                        let vel = body.linvel() * (1.0 - atmo_drag * physics_dt).max(0.0);
+                        body.set_linvel(vel, true);
+                    }
+                    // Ground contact response (walk-mode substitute for
+                    // rapier contact solving, since physics.step() is skipped).
+                    // When SLIDING, cancel downward velocity and apply friction.
+                    if self.landing.state() == landing::LandingState::Sliding
+                        && let Some(ref grav) = self.terrain_gravity
+                    {
+                        let gdir = nalgebra::Vector3::new(
+                            grav.direction[0], grav.direction[1], grav.direction[2],
+                        );
+                        let vel = *body.linvel();
+                        let down_speed = vel.dot(&gdir);
+                        if down_speed > 0.0 {
+                            // Cancel velocity into ground (normal reaction).
+                            let corrected = vel - gdir * down_speed;
+                            body.set_linvel(corrected, true);
+                        }
+                        // Ground friction: combined friction 0.6 * 0.8 = 0.48.
+                        // Deceleration = friction * gravity.
+                        let friction_decel = 0.48 * grav.magnitude;
+                        let tangent_vel = *body.linvel();
+                        let tangent_speed = tangent_vel.magnitude();
+                        if tangent_speed > 0.01 {
+                            let decel = (friction_decel * physics_dt).min(tangent_speed);
+                            let braked = tangent_vel * (1.0 - decel / tangent_speed);
+                            body.set_linvel(braked, true);
+                        }
+                    }
+                    // Angular damping ALWAYS applies (not just when engine on).
+                    // Without this, Q/E roll torques create permanent spin.
+                    let angvel = body.angvel() * (1.0 - 5.0 * physics_dt).max(0.0);
+                    body.set_angvel(angvel, true);
+                    // Integrate position: p += v * dt
+                    let vel = *body.linvel();
+                    let pos = body.translation() + vel * physics_dt;
+                    let angvel = *body.angvel();
+                    let rot = *body.rotation();
+                    let drot = nalgebra::UnitQuaternion::new(angvel * physics_dt * 0.5);
+                    let new_rot = drot * rot;
+                    body.set_position(
+                        nalgebra::Isometry3::from_parts(
+                            nalgebra::Translation3::from(pos),
+                            new_rot,
+                        ),
+                        true,
+                    );
+            }
+            let phys_step_us = t_phys.elapsed().as_micros();
+
+            // Step 3: Get ship transform AFTER integration
+            let (ship_pos_after, ship_rot_after) = self.ship.as_ref()
+                .and_then(|s| self.physics.get_body(s.body_handle))
+                .map(|b| (b.translation().clone_owned(), *b.rotation()))
+                .unwrap_or((nalgebra::Vector3::zeros(), nalgebra::UnitQuaternion::identity()));
+
+            // Track ship physics into galactic_position (impulse only).
+            // When terrain is active, compute exactly from anchor + ship rapier pos.
+            // When terrain is NOT active, use delta-based tracking.
+            if self.drive.mode() == sa_ship::DriveMode::Impulse
+                && self.ship.is_some()
+            {
+                if let Some(terrain_mgr) = &self.terrain {
+                    let anchor = terrain_mgr.anchor_f64();
+                    let planet = terrain_mgr.frozen_planet_center_ly();
+                    let ly_to_m = 9.461e15_f64;
+                    self.galactic_position.x = planet.x + (anchor[0] + ship_pos_after.x as f64) / ly_to_m;
+                    self.galactic_position.y = planet.y + (anchor[1] + ship_pos_after.y as f64) / ly_to_m;
+                    self.galactic_position.z = planet.z + (anchor[2] + ship_pos_after.z as f64) / ly_to_m;
+                } else {
+                    let m_to_ly = 1.0 / 9.461e15_f64;
+                    self.galactic_position.x += (ship_pos_after.x as f64 - ship_pos_before.x as f64) * m_to_ly;
+                    self.galactic_position.y += (ship_pos_after.y as f64 - ship_pos_before.y as f64) * m_to_ly;
+                    self.galactic_position.z += (ship_pos_after.z as f64 - ship_pos_before.z as f64) * m_to_ly;
+                }
+            }
+
+            // --- Landing system update (walk mode) ---
+            if let Some(ship) = &self.ship {
+                let ship_iso = self.physics.get_body(ship.body_handle)
+                    .map(|b| *b.position())
+                    .unwrap_or_else(nalgebra::Isometry3::identity);
+                let ship_speed_ms = ship.speed(&self.physics);
+                let ship_vel_raw = ship.speed_vector(&self.physics);
+                let ship_velocity = nalgebra::Vector3::new(
+                    ship_vel_raw.0, ship_vel_raw.1, ship_vel_raw.2,
+                );
+                let gravity_raw = self.terrain_gravity.as_ref()
+                    .map(|g| g.direction)
+                    .unwrap_or([0.0, -1.0, 0.0]);
+                let gravity_dir = nalgebra::Unit::new_normalize(
+                    nalgebra::Vector3::new(gravity_raw[0], gravity_raw[1], gravity_raw[2]),
+                );
+                let planet_gravity = self.terrain_gravity.as_ref()
+                    .map(|g| g.magnitude)
+                    .unwrap_or(0.0);
+                let terrain_active = self.terrain.is_some();
+                let landing_result = self.landing.update(landing::LandingParams {
+                    physics: &self.physics,
+                    ship_iso: &ship_iso,
+                    ship_speed_ms,
+                    ship_velocity,
+                    gravity_dir,
+                    planet_gravity,
+                    terrain_active,
+                    engine_on: ship.engine_on,
+                    throttle: ship.throttle,
+                });
+                self.last_clearance = landing_result.min_clearance;
+
+                // Diagnostic logging when terrain is active (throttled).
+                if terrain_active && self.time.frame_count().is_multiple_of(60) {
+                    log::info!(
+                        "LANDING_DIAG: state={:?}, speed={:.1}m/s, vertical={:.1}m/s, clearance={:.1}m, skid_contact={}",
+                        landing_result.state,
+                        ship_speed_ms,
+                        ship_velocity.dot(&gravity_dir).abs(),
+                        landing_result.min_clearance.unwrap_or(100.0),
+                        landing_result.skid_contact,
+                    );
+                }
+
+                // Freeze ship when LANDED; restore on unlock.
+                if landing_result.state == landing::LandingState::Landed
+                    && let Some(body) = self.physics.get_body_mut(ship.body_handle)
+                {
+                    body.set_linvel(nalgebra::Vector3::zeros(), true);
+                    body.set_angvel(nalgebra::Vector3::zeros(), true);
+                    body.set_gravity_scale(0.0, true);
+                }
+                // Restore gravity_scale when transitioning OUT of Landed.
+                if landing_result.previous_state == landing::LandingState::Landed
+                    && landing_result.state != landing::LandingState::Landed
+                    && let Some(body) = self.physics.get_body_mut(ship.body_handle)
+                {
+                    body.set_gravity_scale(0.0, true);
+                    body.set_linvel(nalgebra::Vector3::zeros(), true);
+                }
+                if let Some(ref impact) = landing_result.impact {
+                    log::info!(
+                        "IMPACT: {:?} at {:.1} m/s",
+                        impact.category,
+                        impact.impact_speed_ms
+                    );
+                    match impact.category {
+                        landing::ImpactCategory::Clean => {
+                            self.audio.play_sfx(sa_audio::SfxId::ImpactSoft, None);
+                        }
+                        landing::ImpactCategory::Minor => {
+                            self.audio.play_sfx(sa_audio::SfxId::ImpactHeavy, None);
+                        }
+                        landing::ImpactCategory::Major => {
+                            self.audio.play_sfx(sa_audio::SfxId::ImpactCrash, None);
+                            self.audio.play_alarm(sa_audio::AlarmId::StructuralDamage);
+                        }
+                        landing::ImpactCategory::Destroyed => {
+                            self.audio.play_sfx(sa_audio::SfxId::ImpactExplosion, None);
+                        }
+                    }
+                    self.events.emit(impact.clone());
+                }
+            }
+
+            // Step 4: Carry player with ship.
+            // The player's world position is relative to the OLD ship position.
+            // Transform to local space (using old ship), then back to world (using new ship).
+            // This is an instant teleport — no collision sweep, no AABB cost.
+            // For a non-rotating ship: equivalent to adding ship displacement.
+            // For a rotating ship: also rotates the player around the ship origin.
+            let ship_rot_before_inv = ship_rot_before.inverse();
+            if let Some(player) = &self.player
+                && let Some(body) = self.physics.get_body_mut(player.body_handle)
+            {
+                let p = body.translation().clone_owned();
+                let local = ship_rot_before_inv * (p - ship_pos_before);
+                let carried = ship_pos_after + ship_rot_after * local;
+                body.set_translation(carried, true);
+            }
+
+            // Step 5: Sync interior collider ROTATION to match ship.
+            // Interior colliders are on a fixed body at world origin.
+            // We sync rotation (not position) so collision geometry matches
+            // the ship's visual orientation after roll/pitch/yaw.
+            // Position stays at origin — high-speed translation is handled by
+            // the player controller's origin-offset transform.
+            if let (Some(ship), Some(ih)) = (&self.ship, ship_colliders::interior_body_handle()) {
+                // Read ship rotation first (immutable borrow)
+                let ship_rot = self.physics.get_body(ship.body_handle)
+                    .map(|b| *b.rotation());
+                // Then set interior rotation (mutable borrow)
+                if let (Some(rot), Some(ib)) = (ship_rot, self.physics.get_body_mut(ih)) {
+                    ib.set_position(
+                        nalgebra::Isometry3::from_parts(
+                            nalgebra::Translation3::identity(),
+                            rot,
+                        ),
+                        true,
+                    );
+                }
+            }
+
+            // Sync child collider world positions + update query pipeline.
+            self.physics.sync_collider_positions();
+            let t_qp = Instant::now();
+            self.physics.update_query_pipeline();
+            let qp_us = t_qp.elapsed().as_micros();
+
+            log::trace!("phys_step: {}us, query_pipeline: {}us", phys_step_us, qp_us);
+
+            // Step 6: Move player in ship-local space.
+            // All collision detection happens in the ship's local coordinate
+            // system where colliders are stationary. Performance is O(1)
+            // regardless of ship speed.
+            let t_player = Instant::now();
+            if let Some(player) = &mut self.player {
+                player.update(
+                    &mut self.physics,
+                    &self.input,
+                    physics_dt,
+                    ship_pos_after,
+                    ship_rot_after,
+                );
+            }
+            let player_move_us = t_player.elapsed().as_micros();
+            // Encode breakdown: physics_us = phys_step*1000000 + qp*1000 + move_shape
+            // Read as: phys_step=X.XXms, qp=X.XXms, move=X.XXms
+            self.perf.physics_us = phys_step_us as u64 * 1000 + qp_us as u64;
+            self.perf.stars_us = player_move_us as u64;
+
+            if let Some(player) = &self.player {
+                // Eye position: offset along ship's up (correct after roll/pitch)
+                self.camera.position = player.position_ship_up(&self.physics, ship_rot_after);
+                // Camera: ship quaternion * (player look offset from ship heading).
+                // Player.yaw is WORLD space. Subtract ship's world yaw to get
+                // the ship-relative look offset. This way the camera follows
+                // the ship's roll while showing the correct look direction.
+                if let Some(ship) = &self.ship {
+                    if let Some(body) = self.physics.get_body(ship.body_handle) {
+                        let r = body.rotation();
+                        let ship_quat = glam::Quat::from_xyzw(r.i, r.j, r.k, r.w);
+                        let fwd = r * nalgebra::Vector3::new(0.0, 0.0, -1.0);
+                        let ship_yaw = fwd.x.atan2(-fwd.z);
+                        // Offset from ship heading
+                        let yaw_offset = player.yaw - ship_yaw;
+                        let look = glam::Quat::from_rotation_y(-yaw_offset)
+                            * glam::Quat::from_rotation_x(player.pitch);
+                        self.camera.orientation_override = Some(ship_quat * look);
+                    }
+                } else {
+                    self.camera.yaw = player.yaw;
+                    self.camera.pitch = player.pitch;
+                    self.camera.orientation_override = None;
+                }
+            }
+        }
+    }
+}
