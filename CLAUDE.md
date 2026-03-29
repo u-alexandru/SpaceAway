@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 SpaceAway is a cooperative first-person space exploration game with a custom Rust engine. 1-4 players crew a ship exploring a procedurally generated infinite universe. The engine is designed for AI-agent-driven development.
 
-See `docs/superpowers/specs/2026-03-27-spaceaway-engine-design.md` for the full design spec.
+See `docs/completed/specs/2026-03-27-spaceaway-engine-design.md` for the full design spec.
 
 ## Build Commands
 
