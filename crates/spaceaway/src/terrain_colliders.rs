@@ -126,7 +126,7 @@ impl TerrainColliders {
             let collider = ColliderBuilder::ball(radius_m as f32)
                 .collision_groups(InteractionGroups::new(
                     ship_colliders::TERRAIN,
-                    ship_colliders::PLAYER.union(ship_colliders::SHIP_HULL),
+                    ship_colliders::PLAYER.union(ship_colliders::SHIP_HULL).union(ship_colliders::SHIP_EXTERIOR),
                 ))
                 .position(nalgebra::Isometry3::translation(cx, cy, cz))
                 .build();
@@ -336,11 +336,12 @@ fn build_heightfield(
 
     let groups = InteractionGroups::new(
         ship_colliders::TERRAIN,
-        ship_colliders::PLAYER.union(ship_colliders::SHIP_HULL),
+        ship_colliders::PLAYER.union(ship_colliders::SHIP_HULL).union(ship_colliders::SHIP_EXTERIOR),
     );
 
     let collider = ColliderBuilder::heightfield(heights, scale)
         .collision_groups(groups)
+        .friction(0.8)
         .position(position)
         .build();
 
