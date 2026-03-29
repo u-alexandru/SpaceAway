@@ -1,3 +1,4 @@
+mod debug_state;
 mod drive_integration;
 mod landing;
 mod menu;
@@ -30,7 +31,6 @@ use sa_ship::ship::Ship;
 use sa_survival::{ResourceDeposit, ShipResources, SuitResources, generate_deposits};
 use sa_universe::{MasterSeed, Universe};
 use std::collections::HashSet;
-use std::io::Write;
 use std::sync::Arc;
 use std::time::Instant;
 use winit::application::ApplicationHandler;
@@ -482,130 +482,26 @@ impl App {
         }
     }
 
-    /// Write live debug state to /tmp/spaceaway_debug.json for external inspection.
-    #[allow(clippy::collapsible_if)]
     fn write_debug_state(&self) {
-        let mut lines = Vec::new();
-        lines.push("{".to_string());
-        lines.push(format!("  \"frame\": {},", self.time.frame_count()));
-        lines.push(format!("  \"view_mode\": \"{}\",", match self.view_mode {
-            6 => "PART_PREVIEW",
-            7 => "SHIP_PREVIEW",
-            _ => if self.helm.as_ref().is_some_and(|h| h.is_seated()) { "HELM" } else if self.fly_mode { "FLY" } else { "WALK" },
-        }));
-        lines.push(format!("  \"cursor_grabbed\": {},", self.cursor_grabbed));
-
-        // Player state
-        if let Some(player) = &self.player {
-            if let Some(body) = self.physics.get_body(player.body_handle) {
-                let p = body.translation();
-                let v = body.linvel();
-                lines.push("  \"player\": {".to_string());
-                lines.push(format!("    \"pos\": [{:.3}, {:.3}, {:.3}],", p.x, p.y, p.z));
-                lines.push(format!("    \"vel\": [{:.3}, {:.3}, {:.3}],", v.x, v.y, v.z));
-                lines.push(format!("    \"speed\": {:.3},", v.magnitude()));
-                lines.push(format!("    \"sleeping\": {},", body.is_sleeping()));
-                lines.push(format!("    \"grounded\": {},", player.grounded));
-                lines.push(format!("    \"yaw\": {:.3}, \"pitch\": {:.3}", player.yaw, player.pitch));
-                lines.push("  },".to_string());
-            }
-        }
-
-        // Ship state
-        if let Some(ship) = &self.ship {
-            if let Some(body) = self.physics.get_body(ship.body_handle) {
-                let p = body.translation();
-                let v = body.linvel();
-                lines.push("  \"ship\": {".to_string());
-                lines.push(format!("    \"pos\": [{:.3}, {:.3}, {:.3}],", p.x, p.y, p.z));
-                lines.push(format!("    \"vel\": [{:.3}, {:.3}, {:.3}],", v.x, v.y, v.z));
-                lines.push(format!("    \"throttle\": {:.3},", ship.throttle));
-                lines.push(format!("    \"engine_on\": {},", ship.engine_on));
-                lines.push(format!("    \"mass\": {:.1}", body.mass()));
-                lines.push("  },".to_string());
-            }
-        }
-
-        // Interaction state
-        if let Some(interaction) = &self.interaction {
-            lines.push("  \"interaction\": {".to_string());
-            lines.push(format!("    \"hovered\": {:?},", interaction.hovered()));
-            lines.push(format!("    \"dragging\": {},", interaction.is_dragging()));
-            // Debug ray info
-            let dr = interaction.debug_ray();
-            lines.push(format!(
-                "    \"debug_ray\": {{\"origin\": [{:.3}, {:.3}, {:.3}], \"dir\": [{:.3}, {:.3}, {:.3}], \"hit\": {:?}, \"hit_id\": {:?}}},",
-                dr.ray_origin[0], dr.ray_origin[1], dr.ray_origin[2],
-                dr.ray_dir[0], dr.ray_dir[1], dr.ray_dir[2],
-                dr.hit, dr.hit_id,
-            ));
-            // Show each interactable's collider world position
-            let mut interactable_lines = Vec::new();
-            for i in 0..10 { // max 10
-                if let Some(inter) = interaction.get(i) {
-                    if let Some(col) = self.physics.collider_set.get(inter.collider_handle) {
-                        let p = col.position().translation;
-                        interactable_lines.push(format!(
-                            "      {{\"id\": {}, \"label\": \"{}\", \"world_pos\": [{:.2}, {:.2}, {:.2}]}}",
-                            i, inter.label, p.x, p.y, p.z));
-                    }
-                } else { break; }
-            }
-            lines.push(format!("    \"interactables\": [{}]", interactable_lines.join(",")));
-            lines.push("  },".to_string());
-        }
-
-        // Camera
-        lines.push("  \"camera\": {".to_string());
-        lines.push(format!("    \"pos\": [{:.3}, {:.3}, {:.3}],", self.camera.position.x, self.camera.position.y, self.camera.position.z));
-        lines.push(format!("    \"yaw\": {:.3}, \"pitch\": {:.3}", self.camera.yaw, self.camera.pitch));
-        lines.push("  },".to_string());
-
-        // Input
-        lines.push("  \"input\": {".to_string());
-        lines.push(format!("    \"mouse_delta\": [{:.1}, {:.1}],", self.input.mouse.delta().0, self.input.mouse.delta().1));
-        lines.push(format!("    \"left_btn\": {}", self.input.mouse.left_pressed()));
-        lines.push("  },".to_string());
-
-        // Physics world stats
-        // Per-system timing breakdown
-        lines.push("  \"timing_ms\": {".to_string());
-        lines.push(format!("    \"total\": {:.2},", self.perf.total_us as f64 / 1000.0));
-        lines.push(format!("    \"player\": {:.2},", self.perf.player_us as f64 / 1000.0));
-        // physics = phys_step_us * 1000 + query_pipeline_us (encoded)
-        let phys_step_ms = (self.perf.physics_us / 1000) as f64 / 1000.0;
-        let qp_ms = (self.perf.physics_us % 1000) as f64 / 1000.0;
-        let move_shape_ms = self.perf.stars_us as f64 / 1000.0;
-        lines.push(format!("    \"phys_step\": {:.2},", phys_step_ms));
-        lines.push(format!("    \"query_pipeline\": {:.2},", qp_ms));
-        lines.push(format!("    \"move_shape\": {:.2},", move_shape_ms));
-        lines.push(format!("    \"render\": {:.2},", self.perf.render_us as f64 / 1000.0));
-        lines.push(format!("    \"fps\": {:.0}", self.perf.fps));
-        lines.push("  },".to_string());
-
-        // Player-to-ship relative position (should be constant when standing still)
-        if let (Some(player), Some(ship)) = (&self.player, &self.ship) {
-            if let (Some(pb), Some(sb)) = (self.physics.get_body(player.body_handle), self.physics.get_body(ship.body_handle)) {
-                let pp = pb.translation();
-                let sp = sb.translation();
-                lines.push(format!("  \"player_ship_offset\": [{:.3}, {:.3}, {:.3}],",
-                    pp.x - sp.x, pp.y - sp.y, pp.z - sp.z));
-            }
-        }
-
-        lines.push("  \"physics\": {".to_string());
-        lines.push(format!("    \"bodies\": {},", self.physics.rigid_body_set.len()));
-        lines.push(format!("    \"colliders\": {},", self.physics.collider_set.len()));
-        let grav = self.physics.gravity();
-        lines.push(format!("    \"gravity\": [{:.1}, {:.1}, {:.1}]", grav.0, grav.1, grav.2));
-        lines.push("  }".to_string());
-
-        lines.push("}".to_string());
-
-        let content = lines.join("\n");
-        if let Ok(mut f) = std::fs::File::create("/tmp/spaceaway_debug.json") {
-            let _ = f.write_all(content.as_bytes());
-        }
+        debug_state::write_debug_state(&debug_state::DebugSnapshot {
+            frame_count: self.time.frame_count(),
+            view_mode: self.view_mode,
+            helm: self.helm.as_ref(),
+            fly_mode: self.fly_mode,
+            cursor_grabbed: self.cursor_grabbed,
+            player: self.player.as_ref(),
+            ship: self.ship.as_ref(),
+            interaction: self.interaction.as_ref(),
+            camera: &self.camera,
+            input: &self.input,
+            physics: &self.physics,
+            perf_total_us: self.perf.total_us,
+            perf_player_us: self.perf.player_us,
+            perf_physics_us: self.perf.physics_us,
+            perf_stars_us: self.perf.stars_us,
+            perf_render_us: self.perf.render_us,
+            perf_fps: self.perf.fps,
+        });
     }
 
     fn grab_cursor(&mut self) {
