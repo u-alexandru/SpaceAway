@@ -24,7 +24,7 @@ pub struct Ship {
 impl Ship {
     /// Ship physics constants.
     pub const MASS: f32 = 50_000.0;
-    pub const DEFAULT_MAX_THRUST: f32 = 500_000.0;
+    pub const DEFAULT_MAX_THRUST: f32 = 750_000.0;
     pub const DEFAULT_MAX_RCS: f32 = 50_000.0;
     pub const DEFAULT_MAX_TORQUE: f32 = 5_000_000.0;
 
