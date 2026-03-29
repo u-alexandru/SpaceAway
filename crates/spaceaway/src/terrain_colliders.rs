@@ -95,6 +95,11 @@ impl TerrainColliders {
     }
 
     /// Update HeightField colliders for chunks near the camera.
+    ///
+    /// `ship_physics_pos`: the ship body's rapier translation. The terrain
+    /// body is repositioned here each frame so that collider offsets
+    /// (computed in galactic-relative meters) line up with the ship in
+    /// rapier's coordinate system.
     pub fn update(
         &mut self,
         physics: &mut PhysicsWorld,
@@ -102,6 +107,7 @@ impl TerrainColliders {
         radius_m: f64,
         max_displacement_m: f64,
         visible_keys: &std::collections::HashSet<ChunkKey>,
+        ship_physics_pos: [f32; 3],
     ) {
         // On first call, initialize anchor to the camera position so the
         // sphere barrier is placed correctly. Without this, anchor stays at
@@ -115,6 +121,22 @@ impl TerrainColliders {
             let rb = RigidBodyBuilder::fixed().build();
             physics.add_rigid_body(rb)
         });
+
+        // Move the terrain body to the ship's physics position each frame.
+        // Terrain colliders are positioned relative to this body using
+        // galactic-offset math (cam_rel_m). Without this, the colliders
+        // sit at the physics origin while the ship moves away — collision
+        // never occurs because they're in different regions of rapier space.
+        if let Some(body) = physics.rigid_body_set.get_mut(terrain_body) {
+            body.set_translation(
+                nalgebra::Vector3::new(
+                    ship_physics_pos[0],
+                    ship_physics_pos[1],
+                    ship_physics_pos[2],
+                ),
+                true,
+            );
+        }
 
         // Sphere barrier: a ball collider at planet radius that prevents
         // flying through the planet at coarse LODs (where HeightField

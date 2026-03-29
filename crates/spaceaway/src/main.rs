@@ -1254,13 +1254,15 @@ impl ApplicationHandler for App {
                             log::info!("Drive: IMPULSE");
                         }
                         if self.input.keyboard.just_pressed(KeyCode::Digit2) {
-                            // Block cruise only deep in atmosphere (gravity blend > 0.5),
-                            // not just when terrain is loaded (2× radius is still orbit).
+                            // Block cruise when terrain is active (near planet surface)
+                            // or deep in atmosphere. Cruise at planetary distances
+                            // overshoots the surface and bypasses collision.
+                            let terrain_active = self.terrain.is_some();
                             let in_atmosphere = self.terrain_gravity
                                 .as_ref()
                                 .is_some_and(|g| g.blend > 0.5);
-                            if in_atmosphere {
-                                log::warn!("Cannot engage cruise: inside atmosphere");
+                            if terrain_active || in_atmosphere {
+                                log::warn!("Cannot engage cruise: too close to planet surface");
                             } else {
                                 let ship_speed = self.ship.as_ref()
                                     .map(|s| s.speed(&self.physics))
@@ -2648,6 +2650,13 @@ impl ApplicationHandler for App {
                                 positions.get(terrain_mgr.body_index()).copied()
                             })
                             .unwrap_or(WorldPos::ORIGIN);
+                        let ship_phys_pos = self.ship.as_ref()
+                            .and_then(|s| self.physics.get_body(s.body_handle))
+                            .map(|b| {
+                                let t = b.translation();
+                                [t.x, t.y, t.z]
+                            })
+                            .unwrap_or([0.0; 3]);
                         let result = terrain_mgr.update(
                             self.galactic_position,
                             planet_pos,
@@ -2655,6 +2664,7 @@ impl ApplicationHandler for App {
                             &gpu.device,
                             &mut self.physics,
                             ship_down,
+                            ship_phys_pos,
                         );
                         if let Some(sys) = &mut self.active_system {
                             if sys.hidden_body_index != result.hidden_body_index {

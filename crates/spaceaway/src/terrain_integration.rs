@@ -106,6 +106,7 @@ impl TerrainManager {
     }
 
     /// Run one frame of terrain streaming and produce draw commands.
+    #[allow(clippy::too_many_arguments)]
     pub fn update(
         &mut self,
         camera_galactic_ly: WorldPos,
@@ -114,6 +115,7 @@ impl TerrainManager {
         device: &wgpu::Device,
         physics: &mut PhysicsWorld,
         ship_down: [f32; 3],
+        ship_physics_pos: [f32; 3],
     ) -> TerrainFrameResult {
         // DO NOT update planet_center_ly from orbital motion.
         // The planet orbits with TIME_SCALE=30 which can move it out of
@@ -193,6 +195,7 @@ impl TerrainManager {
             self.config.radius_m,
             self.max_displacement_m,
             &visible_keys,
+            ship_physics_pos,
         );
 
         // Build draw commands using frozen planet position.
