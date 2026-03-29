@@ -766,11 +766,13 @@ impl ApplicationHandler for App {
                     let is_seated = self.helm.as_ref().map(|h| h.is_seated()).unwrap_or(false);
                     if event.state.is_pressed() && !is_seated && self.phase == GamePhase::Playing {
                         match code {
-                            KeyCode::Digit1 => self.teleport_to(0), // mid-disc
-                            KeyCode::Digit2 => self.teleport_to(1), // above galaxy
-                            KeyCode::Digit3 => self.teleport_to(2), // galaxy edge
-                            KeyCode::Digit4 => self.teleport_to(3), // near center
-                            KeyCode::Digit5 => self.teleport_to(4), // near nebula
+                            // Debug galaxy teleports — only in fly mode to avoid
+                            // conflicting with drive keys (1/2/3) when walking.
+                            KeyCode::Digit1 if self.fly_mode => self.teleport_to(0),
+                            KeyCode::Digit2 if self.fly_mode => self.teleport_to(1),
+                            KeyCode::Digit3 if self.fly_mode => self.teleport_to(2),
+                            KeyCode::Digit4 if self.fly_mode => self.teleport_to(3),
+                            KeyCode::Digit5 if self.fly_mode => self.teleport_to(4),
                             KeyCode::KeyF => {
                                 self.fly_mode = !self.fly_mode;
                                 log::info!("Fly mode: {}", if self.fly_mode { "ON (WASD to fly, scroll to change speed)" } else { "OFF" });
@@ -1186,8 +1188,8 @@ impl ApplicationHandler for App {
                                     .unwrap_or(0.0);
                                 if self.drive.request_engage_with_speed(sa_ship::DriveMode::Cruise, ship_speed) {
                                     log::info!("Drive: CRUISE engaged");
-                                } else if ship_speed > 10.0 {
-                                    log::warn!("Cannot engage cruise: ship moving at {:.0} m/s (stop first)", ship_speed);
+                                } else if ship_speed > 100.0 {
+                                    log::warn!("Cannot engage cruise: ship moving at {:.0} m/s (slow down first)", ship_speed);
                                 }
                             }
                         }

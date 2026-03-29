@@ -79,8 +79,9 @@ impl DriveController {
         match mode {
             DriveMode::Impulse => false,
             DriveMode::Cruise => {
-                // Allow from warp (downshift) or from near-stationary impulse
-                if self.mode == DriveMode::Impulse && ship_speed_ms > 10.0 {
+                // Allow from warp (downshift) or from near-stationary impulse.
+                // Threshold 100 m/s — generous enough for residual drift/gravity.
+                if self.mode == DriveMode::Impulse && ship_speed_ms > 100.0 {
                     return false;
                 }
                 self.mode = DriveMode::Cruise;
@@ -93,7 +94,7 @@ impl DriveController {
                     return false;
                 }
                 // Must be near-stationary in impulse, or already in cruise
-                if self.mode == DriveMode::Impulse && ship_speed_ms > 10.0 {
+                if self.mode == DriveMode::Impulse && ship_speed_ms > 100.0 {
                     return false;
                 }
                 self.mode = DriveMode::Warp;
