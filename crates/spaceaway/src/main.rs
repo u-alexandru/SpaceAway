@@ -3098,7 +3098,10 @@ impl ApplicationHandler for App {
                             exotic_fuel: self.ship_resources.exotic_fuel,
                             system_info,
                             target_info,
-                            altitude_m: self.last_clearance,
+                            // Only show altitude when raycasts actually hit
+                            // terrain (< 100m). At 100m (MAX_RAY_DIST) the rays
+                            // missed — show SURF distance instead.
+                            altitude_m: self.last_clearance.filter(|&c| c < 99.0),
                             planet_dist_km: {
                                 // Show distance to nearest planet surface when < 1000km
                                 // and heading toward it (dot product check).
