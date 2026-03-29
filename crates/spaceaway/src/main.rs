@@ -844,12 +844,6 @@ impl ApplicationHandler for App {
                                         ship_mesh.vertices.len(), ship_mesh.triangle_count());
                                 }
                             }
-                            KeyCode::Digit0 => {
-                                // Return to normal scene view
-                                self.view_mode = 0;
-                                self.ship_part_mesh = None;
-                                log::info!("Returned to normal scene view");
-                            }
                             KeyCode::Tab => {
                                 // Flag for lock-on — actual projection happens in RedrawRequested
                                 // where the camera orientation is current for this frame.
@@ -1009,6 +1003,67 @@ impl ApplicationHandler for App {
                                     }
                                     log::info!("Jumped near {} ({:.2} ly) — press 8 to enter system",
                                         star.catalog_name, star.distance_ly);
+                                }
+                            }
+                            KeyCode::Digit0 => {
+                                // Debug: teleport 1km above the nearest planet surface.
+                                // If terrain is already active, use the frozen planet.
+                                // Otherwise, find the nearest planet in the system.
+                                let ly_to_m = 9.461e15_f64;
+                                let m_to_ly = 1.0 / ly_to_m;
+
+                                let planet_info: Option<(WorldPos, f64)> = if let Some(terrain_mgr) = &self.terrain {
+                                    Some((terrain_mgr.frozen_planet_center_ly(), terrain_mgr.planet_radius_m()))
+                                } else if let Some(sys) = &self.active_system {
+                                    let positions = sys.compute_positions_ly_pub();
+                                    let mut best: Option<(usize, f64)> = None;
+                                    for (i, pos) in positions.iter().enumerate() {
+                                        if let Some(_r) = sys.body_radius_m(i)
+                                            && sys.planet_data(i).is_some()
+                                        {
+                                            let dx = (self.galactic_position.x - pos.x) * ly_to_m;
+                                            let dy = (self.galactic_position.y - pos.y) * ly_to_m;
+                                            let dz = (self.galactic_position.z - pos.z) * ly_to_m;
+                                            let d = (dx*dx + dy*dy + dz*dz).sqrt();
+                                            if best.as_ref().is_none_or(|(_, bd)| d < *bd) {
+                                                best = Some((i, d));
+                                            }
+                                        }
+                                    }
+                                    best.and_then(|(i, _)| {
+                                        let r = sys.body_radius_m(i)?;
+                                        Some((*positions.get(i)?, r))
+                                    })
+                                } else {
+                                    None
+                                };
+
+                                if let Some((planet_pos, radius_m)) = planet_info {
+                                    // Place 1km above surface, along planet→ship direction
+                                    let dx = (self.galactic_position.x - planet_pos.x) * ly_to_m;
+                                    let dy = (self.galactic_position.y - planet_pos.y) * ly_to_m;
+                                    let dz = (self.galactic_position.z - planet_pos.z) * ly_to_m;
+                                    let dist = (dx*dx + dy*dy + dz*dz).sqrt().max(1.0);
+                                    let target_dist = radius_m + 1000.0; // 1km above surface
+                                    let scale = target_dist / dist;
+                                    self.galactic_position = WorldPos::new(
+                                        planet_pos.x + dx * scale * m_to_ly,
+                                        planet_pos.y + dy * scale * m_to_ly,
+                                        planet_pos.z + dz * scale * m_to_ly,
+                                    );
+                                    self.camera.position = self.galactic_position;
+                                    // Zero ship velocity
+                                    if let Some(ship) = &self.ship
+                                        && let Some(body) = self.physics.rigid_body_set.get_mut(ship.body_handle)
+                                    {
+                                        body.set_linvel(nalgebra::Vector3::zeros(), true);
+                                        body.set_angvel(nalgebra::Vector3::zeros(), true);
+                                    }
+                                    self.drive.request_disengage();
+                                    log::info!("Teleported 1km above planet surface (radius {:.0}km, alt 1km)",
+                                        radius_m / 1000.0);
+                                } else {
+                                    log::warn!("No planet found — press 8 to enter a system first");
                                 }
                             }
                             KeyCode::Backquote => {
@@ -1425,6 +1480,14 @@ impl ApplicationHandler for App {
 
                         // Apply continuous thrust from throttle lever + engine button
                         ship.apply_thrust(&mut self.physics);
+
+                        // Vertical RCS: Space = thrust up, Shift = thrust down (ship-local)
+                        let vert_up = self.input.keyboard.is_pressed(KeyCode::Space);
+                        let vert_down = self.input.keyboard.is_pressed(KeyCode::ShiftLeft);
+                        let vertical: f32 = if vert_up { 1.0 } else if vert_down { -1.0 } else { 0.0 };
+                        if vertical.abs() > 0.01 {
+                            ship.apply_rcs(&mut self.physics, 0.0, vertical, 0.0);
+                        }
 
                         if wants_stand
                             && let Some(helm) = &mut self.helm
@@ -2997,23 +3060,32 @@ impl ApplicationHandler for App {
                             altitude_m: self.last_clearance,
                         };
 
-                        let ship_pos = self.ship.as_ref()
-                            .and_then(|s| s.position(&self.physics))
-                            .unwrap_or((0.0, 0.0, 0.0));
-                        let contacts: Vec<ui::sensors_screen::SensorContact> = self.deposits.iter()
-                            .map(|dep| {
-                                let dx = dep.position[0] - ship_pos.0;
-                                let dy = dep.position[1] - ship_pos.1;
-                                let dz = dep.position[2] - ship_pos.2;
-                                let dist = (dx * dx + dy * dy + dz * dz).sqrt();
-                                ui::sensors_screen::SensorContact {
-                                    label: dep.kind.label().to_string(),
-                                    icon: dep.kind.icon().to_string(),
-                                    distance: dist,
-                                    gathered: self.gathered.contains(&dep.id),
-                                }
-                            })
-                            .collect();
+                        // Placeholder: deposits are positioned in rapier space at
+                        // game start. After origin rebase they become stale. Skip
+                        // contacts when terrain is active (deposits are in space,
+                        // not on planet surfaces). TODO: replace with galactic-
+                        // coordinate deposits in the resource gathering system.
+                        let contacts: Vec<ui::sensors_screen::SensorContact> = if self.terrain.is_some() {
+                            Vec::new()
+                        } else {
+                            let ship_pos = self.ship.as_ref()
+                                .and_then(|s| s.position(&self.physics))
+                                .unwrap_or((0.0, 0.0, 0.0));
+                            self.deposits.iter()
+                                .map(|dep| {
+                                    let dx = dep.position[0] - ship_pos.0;
+                                    let dy = dep.position[1] - ship_pos.1;
+                                    let dz = dep.position[2] - ship_pos.2;
+                                    let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+                                    ui::sensors_screen::SensorContact {
+                                        label: dep.kind.label().to_string(),
+                                        icon: dep.kind.icon().to_string(),
+                                        distance: dist,
+                                        gathered: self.gathered.contains(&dep.id),
+                                    }
+                                })
+                                .collect()
+                        };
                         let sensors_data = ui::sensors_screen::SensorsData {
                             contacts,
                             ship_fuel: self.ship_resources.fuel,
