@@ -2478,10 +2478,17 @@ impl ApplicationHandler for App {
 
                     // Append solar system bodies (planets, moons, star) if in a system
                     if let Some(system) = &mut self.active_system {
+                        let hidden = system.hidden_body_index;
+                        let total_bodies = system.body_count();
                         let system_commands = system.update(
                             dt as f64,
                             self.galactic_position,
                         );
+                        // Log every 60 frames when terrain is active
+                        if self.terrain.is_some() && self.time.frame_count() % 60 == 0 {
+                            log::info!("RENDER: {} solar cmds (hidden={:?}, bodies={}), {} terrain cmds",
+                                system_commands.len(), hidden, total_bodies, terrain_commands.len());
+                        }
                         commands.extend(system_commands);
                     }
 
