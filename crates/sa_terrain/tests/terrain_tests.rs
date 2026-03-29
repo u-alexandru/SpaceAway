@@ -212,7 +212,7 @@ fn quadtree_lod_selection_by_altitude() {
 
     for &(altitude, min_expected_lod, msg) in test_cases {
         let camera = [0.0, 0.0, config.radius_m + altitude];
-        let nodes = select_visible_nodes(camera, config.radius_m, max_lod, max_disp);
+        let nodes = select_visible_nodes(camera, config.radius_m, max_lod, max_disp, None);
 
         assert!(!nodes.is_empty(), "No nodes returned at altitude {altitude}m");
 
@@ -242,7 +242,7 @@ fn quadtree_lod_selection_by_altitude() {
     // Verify no LOD 0 nodes within 100km of camera at 1km altitude.
     {
         let camera = [0.0, 0.0, config.radius_m + 1000.0];
-        let nodes = select_visible_nodes(camera, config.radius_m, max_lod, max_disp);
+        let nodes = select_visible_nodes(camera, config.radius_m, max_lod, max_disp, None);
         let coarse_near = nodes.iter().any(|n| {
             let dx = n.center[0] - camera[0];
             let dy = n.center[1] - camera[1];
@@ -569,7 +569,7 @@ fn descent_streaming_produces_chunks() {
     for frame in 0..100 {
         let cam_rel_m = [0.0, 0.0, config.radius_m + start_altitude];
 
-        let visible = select_visible_nodes(cam_rel_m, config.radius_m, max_lod, max_disp);
+        let visible = select_visible_nodes(cam_rel_m, config.radius_m, max_lod, max_disp, None);
         let (new_chunks, _removed) = streaming.update(&visible, &config);
 
         for chunk in &new_chunks {

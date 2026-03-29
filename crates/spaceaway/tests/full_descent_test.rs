@@ -67,7 +67,7 @@ fn tick_terrain(
     ];
 
     let visible_nodes =
-        select_visible_nodes(cam_rel_m, PLANET_RADIUS_M, max_lod, max_displacement_m);
+        select_visible_nodes(cam_rel_m, PLANET_RADIUS_M, max_lod, max_displacement_m, None);
     let (new_chunks, removed_keys) = streaming.update(&visible_nodes, config);
 
     for chunk in &new_chunks {
@@ -440,6 +440,7 @@ fn full_descent_with_real_terrain() {
                 PLANET_RADIUS_M,
                 max_lod,
                 max_displacement_m,
+                None,
             );
             let vis_keys: HashSet<ChunkKey> = vis_nodes
                 .iter()

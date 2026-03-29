@@ -140,6 +140,7 @@ impl TerrainManager {
             self.config.radius_m,
             self.max_lod,
             self.max_displacement_m,
+            None, // TODO: pass frustum for culling
         );
 
         let (new_chunks, removed_keys) =

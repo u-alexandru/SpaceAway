@@ -4,6 +4,7 @@
 //! nodes subdivide when camera is closer than range, morph at 50%.
 
 use crate::cube_sphere::{CubeFace, cube_to_sphere};
+use crate::frustum::Frustum;
 
 /// Minimum range for finest LOD level (meters).
 const MIN_RANGE: f64 = 50.0;
@@ -47,12 +48,14 @@ pub fn max_lod_levels(face_size_m: f64) -> u8 {
 /// `camera_pos`: camera position in planet-relative meters.
 /// `planet_radius_m`: planet radius for sphere-surface calculations.
 /// `max_lod`: finest LOD level (from `max_lod_levels`).
+/// `frustum`: optional frustum planes for culling (in planet-relative space).
 #[profiling::function]
 pub fn select_visible_nodes(
     camera_pos: [f64; 3],
     planet_radius_m: f64,
     max_lod: u8,
     max_displacement: f64,
+    frustum: Option<&Frustum>,
 ) -> Vec<VisibleNode> {
     // When the camera is inside the planet (e.g., cruise overshoot or physics
     // glitch), project it onto the surface so LOD selection still produces
@@ -90,6 +93,7 @@ pub fn select_visible_nodes(
         select_recursive(
             face, 0, 0, 0,
             effective_cam, planet_radius_m, max_lod, max_displacement,
+            frustum,
             &mut nodes,
         );
     }
@@ -106,6 +110,7 @@ fn select_recursive(
     radius: f64,
     max_lod: u8,
     max_displacement: f64,
+    frustum: Option<&Frustum>,
     out: &mut Vec<VisibleNode>,
 ) {
     // Hard cap: stop subdivision if we've already collected enough nodes.
@@ -118,20 +123,23 @@ fn select_recursive(
     let dir = cube_to_sphere(face, u, v);
     let center = [dir[0] * radius, dir[1] * radius, dir[2] * radius];
 
+    // Node bounding radius: half the face-diagonal at this LOD, inflated by displacement.
+    let face_size = 2.0 * radius / subdivs as f64;
+    let displacement_at_lod = max_displacement.min(face_size * 0.5);
+    let node_radius = face_size * std::f64::consts::FRAC_1_SQRT_2 + displacement_at_lod;
+
+    // Frustum culling: reject entire subtree if bounding sphere is outside frustum.
+    if let Some(f) = frustum
+        && !f.contains_sphere(center, node_radius)
+    {
+        return;
+    }
+
     // Distance from camera to node center
     let dx = camera_pos[0] - center[0];
     let dy = camera_pos[1] - center[1];
     let dz = camera_pos[2] - center[2];
     let dist = (dx * dx + dy * dy + dz * dz).sqrt();
-
-    // Node bounding radius: half the face-diagonal at this LOD, inflated by displacement.
-    // Displacement scales with face_size (finer LODs have proportionally smaller height
-    // variation), not the planet-wide maximum. Using the full max_displacement at fine
-    // LODs would inflate tiny nodes by 100+ km, causing the quadtree to produce
-    // millions of nodes and freeze the game.
-    let face_size = 2.0 * radius / subdivs as f64;
-    let displacement_at_lod = max_displacement.min(face_size * 0.5);
-    let node_radius = face_size * std::f64::consts::FRAC_1_SQRT_2 + displacement_at_lod;
 
     let range = lod_range(lod);
 
@@ -176,7 +184,7 @@ fn select_recursive(
     });
     child_dists.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
     for &(cxi, cyi, _) in &child_dists {
-        select_recursive(face, child_lod, cxi, cyi, camera_pos, radius, max_lod, max_displacement, out);
+        select_recursive(face, child_lod, cxi, cyi, camera_pos, radius, max_lod, max_displacement, frustum, out);
     }
 }
 
@@ -209,7 +217,7 @@ mod tests {
         let radius = 6_371_000.0;
         let camera = [0.0, 0.0, radius];
         let max_lod = max_lod_levels(radius * 1.57);
-        let nodes = select_visible_nodes(camera, radius, max_lod, radius * 0.02);
+        let nodes = select_visible_nodes(camera, radius, max_lod, radius * 0.02, None);
         let finest = nodes.iter().filter(|n| n.lod == max_lod).count();
         assert!(finest > 0, "expected finest-LOD nodes near camera, got 0");
     }
@@ -219,7 +227,7 @@ mod tests {
         let radius = 6_371_000.0;
         let camera = [0.0, 0.0, radius * 10.0];
         let max_lod = max_lod_levels(radius * 1.57);
-        let nodes = select_visible_nodes(camera, radius, max_lod, radius * 0.02);
+        let nodes = select_visible_nodes(camera, radius, max_lod, radius * 0.02, None);
         let max_lod_seen = nodes.iter().map(|n| n.lod).max().unwrap_or(0);
         assert!(max_lod_seen < 5, "expected coarse nodes far away, got max lod {max_lod_seen}");
     }
@@ -229,7 +237,7 @@ mod tests {
         let radius = 1_000_000.0;
         let camera = [0.0, 0.0, 0.0];
         let max_lod = 10;
-        let nodes = select_visible_nodes(camera, radius, max_lod, 0.0);
+        let nodes = select_visible_nodes(camera, radius, max_lod, 0.0, None);
         let mut faces_seen = std::collections::HashSet::new();
         for n in &nodes {
             faces_seen.insert(n.face);
@@ -242,7 +250,7 @@ mod tests {
         let radius = 6_371_000.0;
         let camera = [0.0, 0.0, radius];
         let max_lod = 18;
-        let nodes = select_visible_nodes(camera, radius, max_lod, radius * 0.02);
+        let nodes = select_visible_nodes(camera, radius, max_lod, radius * 0.02, None);
         let nearest = nodes.iter()
             .filter(|n| n.lod == max_lod)
             .min_by(|a, b| {

@@ -4,6 +4,7 @@
 //! Integration with GPU and collision happens in the spaceaway binary crate.
 
 pub mod cube_sphere;
+pub mod frustum;
 pub mod quadtree;
 pub mod heightmap;
 pub mod biome;
