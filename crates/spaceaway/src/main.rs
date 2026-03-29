@@ -1423,12 +1423,19 @@ impl ApplicationHandler for App {
                         && let Some(ship) = &self.ship
                         && let Some(body) = self.physics.get_body_mut(ship.body_handle)
                     {
-                        let dx = (target.galactic_pos.x - self.galactic_position.x) as f32;
-                        let dy = (target.galactic_pos.y - self.galactic_position.y) as f32;
-                        let dz = (target.galactic_pos.z - self.galactic_position.z) as f32;
-                        let len = (dx * dx + dy * dy + dz * dz).sqrt();
-                        if len > 0.001 {
-                            let to_target = glam::Vec3::new(dx / len, dy / len, dz / len);
+                        // Compute direction in f64 to handle both star targets (ly scale)
+                        // and planet targets (AU scale = ~1e-5 ly). The old f32 threshold
+                        // of 0.001 ly filtered out all in-system planets.
+                        let dx_f64 = target.galactic_pos.x - self.galactic_position.x;
+                        let dy_f64 = target.galactic_pos.y - self.galactic_position.y;
+                        let dz_f64 = target.galactic_pos.z - self.galactic_position.z;
+                        let len_f64 = (dx_f64 * dx_f64 + dy_f64 * dy_f64 + dz_f64 * dz_f64).sqrt();
+                        if len_f64 > 1e-15 { // ~9.5 meters in ly — practically any nonzero distance
+                            let to_target = glam::Vec3::new(
+                                (dx_f64 / len_f64) as f32,
+                                (dy_f64 / len_f64) as f32,
+                                (dz_f64 / len_f64) as f32,
+                            );
                             // Ship forward is -Z, so desired rotation takes -Z to to_target
                             let desired = glam::Quat::from_rotation_arc(
                                 glam::Vec3::new(0.0, 0.0, -1.0),

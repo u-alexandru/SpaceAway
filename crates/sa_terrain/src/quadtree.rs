@@ -8,6 +8,9 @@ use crate::cube_sphere::{CubeFace, cube_to_sphere};
 /// Minimum range for finest LOD level (meters).
 const MIN_RANGE: f64 = 50.0;
 
+/// Hard cap on total visible nodes to prevent runaway subdivision.
+const MAX_VISIBLE_NODES: usize = 500;
+
 /// A visible terrain node selected by the quadtree traversal.
 #[derive(Debug, Clone)]
 pub struct VisibleNode {
@@ -68,8 +71,9 @@ pub fn select_visible_nodes(
         }).collect();
     }
 
-    let mut nodes = Vec::with_capacity(256);
+    let mut nodes = Vec::with_capacity(512);
     for face in CubeFace::ALL {
+        if nodes.len() >= MAX_VISIBLE_NODES { break; }
         select_recursive(
             face, 0, 0, 0,
             camera_pos, planet_radius_m, max_lod, max_displacement,
@@ -91,6 +95,9 @@ fn select_recursive(
     max_displacement: f64,
     out: &mut Vec<VisibleNode>,
 ) {
+    // Hard cap: stop subdivision if we've already collected enough nodes.
+    if out.len() >= MAX_VISIBLE_NODES { return; }
+
     // Compute node center on sphere surface
     let subdivs = 1u32 << lod;
     let u = -1.0 + (2.0 * x as f64 + 1.0) / subdivs as f64;
@@ -104,9 +111,14 @@ fn select_recursive(
     let dz = camera_pos[2] - center[2];
     let dist = (dx * dx + dy * dy + dz * dz).sqrt();
 
-    // Node bounding radius: half the face-diagonal at this LOD, inflated by displacement
+    // Node bounding radius: half the face-diagonal at this LOD, inflated by displacement.
+    // Displacement scales with face_size (finer LODs have proportionally smaller height
+    // variation), not the planet-wide maximum. Using the full max_displacement at fine
+    // LODs would inflate tiny nodes by 100+ km, causing the quadtree to produce
+    // millions of nodes and freeze the game.
     let face_size = 2.0 * radius / subdivs as f64;
-    let node_radius = face_size * std::f64::consts::FRAC_1_SQRT_2 + max_displacement;
+    let displacement_at_lod = max_displacement.min(face_size * 0.5);
+    let node_radius = face_size * std::f64::consts::FRAC_1_SQRT_2 + displacement_at_lod;
 
     let range = lod_range(lod);
 
