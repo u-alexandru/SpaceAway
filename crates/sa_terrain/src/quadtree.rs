@@ -262,4 +262,27 @@ mod tests {
             assert!(n.morph_factor < 0.5, "nearest finest node should have low morph, got {}", n.morph_factor);
         }
     }
+
+    #[test]
+    fn frustum_culling_rejects_sphere_outside() {
+        use crate::frustum::Frustum;
+        // Verify the frustum infrastructure works: a sphere clearly
+        // outside a tight frustum is rejected, and one inside is kept.
+        let frustum = Frustum {
+            planes: [
+                [1.0, 0.0, 0.0, 100.0],   // left: x > -100
+                [-1.0, 0.0, 0.0, 100.0],  // right: x < 100
+                [0.0, 1.0, 0.0, 100.0],   // bottom: y > -100
+                [0.0, -1.0, 0.0, 100.0],  // top: y < 100
+                [0.0, 0.0, 1.0, 100.0],   // near: z > -100
+                [0.0, 0.0, -1.0, 100.0],  // far: z < 100
+            ],
+        };
+        // Sphere at origin with r=10: should be inside
+        assert!(frustum.contains_sphere([0.0, 0.0, 0.0], 10.0));
+        // Sphere at x=500 with r=10: should be outside (500 > 100+10)
+        assert!(!frustum.contains_sphere([500.0, 0.0, 0.0], 10.0));
+        // Sphere at x=105 with r=10: partially inside (105-10=95 < 100)
+        assert!(frustum.contains_sphere([105.0, 0.0, 0.0], 10.0));
+    }
 }
