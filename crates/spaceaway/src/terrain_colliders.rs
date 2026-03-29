@@ -290,7 +290,7 @@ impl TerrainColliders {
                 !visible_keys.contains(key)
                     || self.chunk_cache
                         .get(key)
-                        .map(|c| chunk_dist(c.center_f64, cam_rel_m) > COLLIDER_RANGE_M * 1.2)
+                        .map(|c| chunk_dist(c.center_f64, cam_rel_m, radius_m) > COLLIDER_RANGE_M * 1.2)
                         .unwrap_or(true)
             })
             .copied()
@@ -317,7 +317,7 @@ impl TerrainColliders {
                 !self.colliders.contains_key(key)
                     && visible_keys.contains(key)
                     && key.lod >= min_collider_lod
-                    && chunk_dist(cached.center_f64, cam_rel_m) < COLLIDER_RANGE_M
+                    && chunk_dist(cached.center_f64, cam_rel_m, radius_m) < COLLIDER_RANGE_M
             })
             .map(|(key, _)| *key)
             .collect();
@@ -348,10 +348,26 @@ impl TerrainColliders {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn chunk_dist(center: [f64; 3], cam: [f64; 3]) -> f64 {
-    let dx = center[0] - cam[0];
-    let dy = center[1] - cam[1];
-    let dz = center[2] - cam[2];
+/// Distance from camera to the chunk's geometric surface position.
+///
+/// `center_f64` includes terrain displacement (can be 50-150km above the
+/// geometric sphere surface). Using it directly makes chunk_dist return
+/// ~75km even for chunks directly below the camera. Instead, project
+/// the center back to the sphere surface (normalize to radius) to get
+/// the distance the camera must travel to reach that patch of ground.
+fn chunk_dist(center: [f64; 3], cam: [f64; 3], radius_m: f64) -> f64 {
+    let center_len = (center[0] * center[0] + center[1] * center[1] + center[2] * center[2]).sqrt();
+    if center_len < 1.0 {
+        return f64::MAX;
+    }
+    // Project center to geometric sphere surface
+    let scale = radius_m / center_len;
+    let sx = center[0] * scale;
+    let sy = center[1] * scale;
+    let sz = center[2] * scale;
+    let dx = sx - cam[0];
+    let dy = sy - cam[1];
+    let dz = sz - cam[2];
     (dx * dx + dy * dy + dz * dz).sqrt()
 }
 
