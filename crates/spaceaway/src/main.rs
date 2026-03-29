@@ -1173,8 +1173,13 @@ impl ApplicationHandler for App {
                             log::info!("Drive: IMPULSE");
                         }
                         if self.input.keyboard.just_pressed(KeyCode::Digit2) {
-                            if self.terrain.is_some() {
-                                log::warn!("Cannot engage cruise: too close to planet surface");
+                            // Block cruise only deep in atmosphere (gravity blend > 0.5),
+                            // not just when terrain is loaded (2× radius is still orbit).
+                            let in_atmosphere = self.terrain_gravity
+                                .as_ref()
+                                .is_some_and(|g| g.blend > 0.5);
+                            if in_atmosphere {
+                                log::warn!("Cannot engage cruise: inside atmosphere");
                             } else {
                                 let ship_speed = self.ship.as_ref()
                                     .map(|s| s.speed(&self.physics))
@@ -1297,8 +1302,11 @@ impl ApplicationHandler for App {
                                 }
                         }
                         if self.input.keyboard.just_pressed(KeyCode::Digit3) {
-                            if self.terrain.is_some() {
-                                log::warn!("Cannot engage warp: too close to planet surface");
+                            let in_atmosphere = self.terrain_gravity
+                                .as_ref()
+                                .is_some_and(|g| g.blend > 0.5);
+                            if in_atmosphere {
+                                log::warn!("Cannot engage warp: inside atmosphere");
                             } else if self.ship_resources.exotic_fuel > 0.0 {
                                 let ship_speed = self.ship.as_ref()
                                     .map(|s| s.speed(&self.physics))
