@@ -21,10 +21,13 @@ use crate::terrain_colliders::TerrainColliders;
 const LY_TO_M: f64 = 9.461e15;
 
 /// Terrain activates when camera is within this multiple of the planet radius.
-const ACTIVATE_RADIUS_MULT: f64 = 2.0;
+/// Terrain activates close to the surface so LOD is fine enough to look correct.
+/// At 1.15× radius, camera is 15% above surface — quadtree produces LOD 4-6
+/// nodes (~200-600km chunks) which tessellate into a recognizable sphere.
+const ACTIVATE_RADIUS_MULT: f64 = 1.15;
 
-/// Terrain deactivates when camera exceeds this multiple of the planet radius.
-const DEACTIVATE_RADIUS_MULT: f64 = 2.5;
+/// Terrain deactivates with hysteresis to prevent toggling.
+const DEACTIVATE_RADIUS_MULT: f64 = 1.3;
 
 // ---------------------------------------------------------------------------
 // TerrainFrameResult
