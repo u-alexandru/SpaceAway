@@ -32,6 +32,30 @@ impl App {
             }
             best.map(|(i, pos, r, _)| (i, pos, r))
         });
+        // Update locked target position from current orbital data.
+        // Without this, the lock icon drifts from the planet because
+        // NavStar.galactic_pos is captured at lock time and never updated,
+        // but planets orbit at TIME_SCALE=30.
+        if let Some(ref mut target) = self.navigation.locked_target
+            && let Some(sys) = &self.active_system
+        {
+            let positions = sys.compute_positions_ly_pub();
+            // Find the nearest body to the locked target's stored position.
+            // The planet has moved in its orbit, but it's still the closest
+            // body to where we last recorded it.
+            let mut best: Option<(usize, f64)> = None;
+            for (i, pos) in positions.iter().enumerate() {
+                if sys.body_radius_m(i).is_none() { continue; }
+                let d = target.galactic_pos.distance_to(*pos);
+                if best.as_ref().is_none_or(|(_, bd)| d < *bd) {
+                    best = Some((i, d));
+                }
+            }
+            if let Some((idx, _)) = best {
+                target.galactic_pos = positions[idx];
+            }
+        }
+
         let landed = self.landing.state() == crate::landing::LandingState::Landed;
         let state = self.approach.update(self.galactic_position, find_planet, landed);
         self.approach_state = Some(state);

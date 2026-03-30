@@ -357,10 +357,13 @@ impl App {
             let dy_f64 = target.galactic_pos.y - self.galactic_position.y;
             let dz_f64 = target.galactic_pos.z - self.galactic_position.z;
             let len_f64 = (dx_f64 * dx_f64 + dy_f64 * dy_f64 + dz_f64 * dz_f64).sqrt();
-            // Stop auto-orient within 0.001 ly (~1 AU) of target.
+            // Skip auto-orient when extremely close to target (< 100 km).
             // At closer range the direction vector can flip 180° when the
-            // ship passes through the star, causing violent spinning.
-            if len_f64 > 0.001 {
+            // ship passes through the body, causing violent spinning.
+            // The approach system prevents reaching bodies, so this is a
+            // safety net. Previous value 0.001 ly (63 AU) was far too large
+            // and disabled auto-orient for all in-system planet locks.
+            if len_f64 > 1e-11 { // ~100 km in light-years
                 let to_target = glam::Vec3::new(
                     (dx_f64 / len_f64) as f32,
                     (dy_f64 / len_f64) as f32,

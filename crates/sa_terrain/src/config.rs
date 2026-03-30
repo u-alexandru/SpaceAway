@@ -16,7 +16,10 @@ pub const SKIRT_VERTEX_COUNT: u32 = 4 * GRID_SIZE;
 pub const VERTS_PER_HEIGHTMAP_CHUNK: u32 = GRID_VERTEX_COUNT + SKIRT_VERTEX_COUNT;
 
 // -- GPU memory --
-pub const HEIGHTMAP_BUDGET_BYTES: u64 = 30_000_000;
+/// 60MB ≈ 1034 slots at 58KB each. 30MB (511 slots) was too small —
+/// at close approach the quadtree selects ~367 visible nodes, causing
+/// streaming churn and visible gaps when only 177 fit.
+pub const HEIGHTMAP_BUDGET_BYTES: u64 = 60_000_000;
 pub const VOLUMETRIC_BUDGET_BYTES: u64 = 20_000_000;
 
 // -- Collision --
