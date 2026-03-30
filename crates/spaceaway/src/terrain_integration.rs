@@ -113,6 +113,53 @@ impl TerrainManager {
         self.surface_gravity_ms2
     }
 
+    /// Synchronously generate and upload LOD 0 chunks for all 6 cube faces.
+    /// Called once at terrain activation. These chunks serve as permanent
+    /// fallback ancestors for the LOD fallback system — when fine LOD nodes
+    /// haven't streamed yet, the renderer walks up to these coarse chunks
+    /// to ensure the planet is always fully covered.
+    ///
+    /// Without this, the quadtree at activation distance subdivides LOD 0
+    /// into LOD 1+, so LOD 0 is never in the visible list, never requested
+    /// from streaming, and the LOD fallback has no ultimate ancestor.
+    pub fn seed_base_chunks(
+        &mut self,
+        mesh_store: &mut MeshStore,
+        device: &wgpu::Device,
+    ) {
+        use sa_terrain::chunk::generate_chunk;
+
+        for face_idx in 0..6u8 {
+            let key = ChunkKey { face: face_idx, lod: 0, x: 0, y: 0 };
+            if self.gpu_meshes.contains_key(&key) {
+                continue; // already exists
+            }
+            let chunk = generate_chunk(key, &self.config);
+            let mesh_data = chunk_to_mesh_data(&chunk);
+            let handle = mesh_store.upload(device, &mesh_data);
+            self.gpu_meshes.insert(key, (handle, chunk.center_f64));
+        }
+        // Also seed LOD 1 (4 chunks per face = 24 total) for better coverage
+        for face_idx in 0..6u8 {
+            for x in 0..2u32 {
+                for y in 0..2u32 {
+                    let key = ChunkKey { face: face_idx, lod: 1, x, y };
+                    if self.gpu_meshes.contains_key(&key) {
+                        continue;
+                    }
+                    let chunk = generate_chunk(key, &self.config);
+                    let mesh_data = chunk_to_mesh_data(&chunk);
+                    let handle = mesh_store.upload(device, &mesh_data);
+                    self.gpu_meshes.insert(key, (handle, chunk.center_f64));
+                }
+            }
+        }
+        log::info!(
+            "Seeded {} base terrain chunks (6×LOD0 + 24×LOD1)",
+            self.gpu_meshes.len(),
+        );
+    }
+
     /// Run one frame of terrain streaming and produce draw commands.
     ///
     /// `vp_matrix`: optional view-projection matrix (column-major f64) for

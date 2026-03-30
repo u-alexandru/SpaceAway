@@ -73,9 +73,19 @@ impl App {
                 config.sub_type,
                 config.noise_seed,
             );
-            self.terrain = Some(terrain_integration::TerrainManager::new(
+            let mut terrain_mgr = terrain_integration::TerrainManager::new(
                 config, planet_pos, body_idx, surface_grav,
-            ));
+            );
+
+            // Seed LOD 0+1 chunks synchronously so the LOD fallback always
+            // has ancestors to render. Without this, the quadtree at activation
+            // distance subdivides LOD 0 (never emits it), so LOD 0 is never
+            // streamed, and the fallback has no ultimate ancestor.
+            if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
+                terrain_mgr.seed_base_chunks(&mut renderer.mesh_store, &gpu.device);
+            }
+
+            self.terrain = Some(terrain_mgr);
 
             // Unified physics origin rebase: on terrain activation,
             // shift all physics bodies so the ship is at the rapier origin.
