@@ -193,6 +193,7 @@ impl ChunkStreaming {
         &mut self,
         visible_nodes: &[VisibleNode],
         _config: &TerrainConfig,
+        camera_pos: [f64; 3],
     ) -> (Vec<ChunkData>, Vec<ChunkKey>) {
         let max_uploads = if self.burst_frames_remaining > 0 || self.cache.len() < BURST_THRESHOLD {
             if self.burst_frames_remaining > 0 {
@@ -235,14 +236,38 @@ impl ChunkStreaming {
 
         // ---------------------------------------------------------------
         // 2. Request generation for needed chunks not yet cached or
-        //    in-flight. No re-delivery of cached chunks — the caller
-        //    retains GPU meshes independently.
+        //    in-flight, sorted by distance to camera (nearest first).
+        //    Workers still use a FIFO channel, but we feed it in
+        //    priority order.
         // ---------------------------------------------------------------
-        for key in &needed {
-            if !self.cache.contains(key) && !self.in_flight.contains(key) {
-                self.in_flight.insert(*key);
-                let _ = self.request_tx.send(*key);
-            }
+        let mut requests: Vec<(ChunkKey, f64)> = needed
+            .iter()
+            .filter(|key| !self.cache.contains(key) && !self.in_flight.contains(key))
+            .map(|key| {
+                // Use visible node center for distance if available
+                let dist = visible_nodes.iter()
+                    .find(|n| {
+                        n.face as u8 == key.face
+                            && n.lod == key.lod
+                            && n.x == key.x
+                            && n.y == key.y
+                    })
+                    .map_or(f64::MAX, |n| {
+                        let dx = camera_pos[0] - n.center[0];
+                        let dy = camera_pos[1] - n.center[1];
+                        let dz = camera_pos[2] - n.center[2];
+                        dx * dx + dy * dy + dz * dz
+                    });
+                (*key, dist)
+            })
+            .collect();
+        requests.sort_by(|a, b| {
+            a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        for (key, _dist) in requests {
+            self.in_flight.insert(key);
+            let _ = self.request_tx.send(key);
         }
 
         // ---------------------------------------------------------------
@@ -370,7 +395,11 @@ mod tests {
         // Poll update() until a chunk arrives or we time out.
         let mut received = false;
         for _ in 0..200 {
-            let (new_chunks, _removed) = streaming.update(&visible, &config);
+            let (new_chunks, _removed) = streaming.update(
+                &visible,
+                &config,
+                [0.0, 0.0, config.radius_m],
+            );
             if !new_chunks.is_empty() {
                 received = true;
                 let chunk = &new_chunks[0];

@@ -2777,6 +2777,7 @@ dependencies = [
  "profiling",
  "sa_core",
  "sa_math",
+ "sa_terrain",
  "sa_universe",
  "wgpu",
  "wgpu-profiler",

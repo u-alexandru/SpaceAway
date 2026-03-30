@@ -570,7 +570,11 @@ fn descent_streaming_produces_chunks() {
         let cam_rel_m = [0.0, 0.0, config.radius_m + start_altitude];
 
         let visible = select_visible_nodes(cam_rel_m, config.radius_m, max_lod, max_disp, None);
-        let (new_chunks, _removed) = streaming.update(&visible, &config);
+        let (new_chunks, _removed) = streaming.update(
+            &visible,
+            &config,
+            [0.0, 0.0, config.radius_m + start_altitude],
+        );
 
         for chunk in &new_chunks {
             total_chunks_received += 1;

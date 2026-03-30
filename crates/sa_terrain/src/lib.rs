@@ -12,6 +12,7 @@ pub mod biome;
 pub mod chunk;
 pub mod streaming;
 pub mod gravity;
+pub mod collision_grid;
 
 use sa_universe::PlanetSubType;
 

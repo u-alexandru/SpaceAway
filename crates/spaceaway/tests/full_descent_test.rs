@@ -68,7 +68,7 @@ fn tick_terrain(
 
     let visible_nodes =
         select_visible_nodes(cam_rel_m, PLANET_RADIUS_M, max_lod, max_displacement_m, None);
-    let (new_chunks, removed_keys) = streaming.update(&visible_nodes, config);
+    let (new_chunks, removed_keys) = streaming.update(&visible_nodes, config, cam_rel_m);
 
     for chunk in &new_chunks {
         terrain_colliders.cache_chunk(chunk.key, chunk);

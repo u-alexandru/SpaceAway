@@ -202,7 +202,7 @@ impl TerrainManager {
         );
 
         let (new_chunks, removed_keys) =
-            self.streaming.update(&visible, &self.config);
+            self.streaming.update(&visible, &self.config, cam_rel_m);
 
         // Upload newly generated chunks to GPU and cache for colliders.
         for chunk in &new_chunks {
