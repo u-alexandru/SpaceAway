@@ -270,6 +270,16 @@ impl ApplicationHandler for App {
                 // --- PLAYING PHASE ---
                 profiling::scope!("playing_frame");
 
+                // Ensure previous frame's GPU work is done before game logic
+                // runs. Game systems may replace persistent GPU buffers (star
+                // vertex buffer, nebula instances) — without this wait, the
+                // GPU could still be reading the old buffer when it's dropped.
+                // Per-frame uniform buffers handle uniform contention, but
+                // persistent vertex/instance buffers still need this fence.
+                if let Some(gpu) = &self.gpu {
+                    gpu.device.poll(wgpu::Maintain::Wait);
+                }
+
                 self.schedule
                     .run(&mut self.world, &mut self.events, &self.time);
 
