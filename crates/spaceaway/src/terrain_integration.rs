@@ -140,13 +140,16 @@ impl TerrainManager {
             (camera_galactic_ly.z - self.planet_center_ly.z) * LY_TO_M,
         ];
 
-        let frustum = vp_planet_relative.map(sa_terrain::frustum::Frustum::from_vp_matrix);
+        // Frustum culling disabled — the VP-to-planet-relative transform was
+        // incorrect, culling the visible hemisphere. Infrastructure is in place
+        // (Frustum type + quadtree integration) but needs correct matrix math.
+        let _ = vp_planet_relative;
         let visible = select_visible_nodes(
             cam_rel_m,
             self.config.radius_m,
             self.max_lod,
             self.max_displacement_m,
-            frustum.as_ref(),
+            None,
         );
 
         let (new_chunks, removed_keys) =
