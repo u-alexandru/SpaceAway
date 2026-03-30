@@ -1,6 +1,34 @@
 use super::App;
 
 impl App {
+    /// Update approach state BEFORE helm_mode runs, so cruise speed cap
+    /// and flythrough prevention have current data.
+    pub(super) fn update_approach_state(&mut self) {
+        let find_planet = self.active_system.as_ref().and_then(|sys| {
+            let positions = sys.compute_positions_ly_pub();
+            let ly_to_m = 9.461e15_f64;
+            let mut best: Option<(usize, sa_math::WorldPos, f64, f64)> = None;
+            for (i, pos) in positions.iter().enumerate() {
+                let r = match sys.body_radius_m(i) {
+                    Some(r) => r,
+                    None => continue,
+                };
+                if sys.planet_data(i).is_none() { continue; }
+                let dx = (self.galactic_position.x - pos.x) * ly_to_m;
+                let dy = (self.galactic_position.y - pos.y) * ly_to_m;
+                let dz = (self.galactic_position.z - pos.z) * ly_to_m;
+                let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+                if best.as_ref().is_none_or(|b| dist < b.3) {
+                    best = Some((i, *pos, r, dist));
+                }
+            }
+            best.map(|(i, pos, r, _)| (i, pos, r))
+        });
+        let landed = self.landing.state() == crate::landing::LandingState::Landed;
+        let state = self.approach.update(self.galactic_position, find_planet, landed);
+        self.approach_state = Some(state);
+    }
+
     /// Update player physics, helm/walk mode, and camera for the current frame.
     /// Called once per frame during the Playing phase.
     pub(super) fn update_player_physics(&mut self, dt: f32) {

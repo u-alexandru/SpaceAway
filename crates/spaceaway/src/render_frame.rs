@@ -17,31 +17,11 @@ impl App {
         // --- Terrain streaming (before immutable renderer borrow) ---
         profiling::scope!("terrain_update");
 
-        // --- Approach state machine ---
-        let find_planet = self.active_system.as_ref().and_then(|sys| {
-            let positions = sys.compute_positions_ly_pub();
-            let ly_to_m = 9.461e15_f64;
-            let mut best: Option<(usize, sa_math::WorldPos, f64, f64)> = None;
-            for (i, pos) in positions.iter().enumerate() {
-                let r = match sys.body_radius_m(i) {
-                    Some(r) => r,
-                    None => continue,
-                };
-                if sys.planet_data(i).is_none() { continue; }
-                let dx = (self.galactic_position.x - pos.x) * ly_to_m;
-                let dy = (self.galactic_position.y - pos.y) * ly_to_m;
-                let dz = (self.galactic_position.z - pos.z) * ly_to_m;
-                let dist = (dx * dx + dy * dy + dz * dz).sqrt();
-                if best.as_ref().is_none_or(|b| dist < b.3) {
-                    best = Some((i, *pos, r, dist));
-                }
-            }
-            best.map(|(i, pos, r, _)| (i, pos, r))
-        });
-        let landed = self.landing.state() == crate::landing::LandingState::Landed;
-        let approach_state = self.approach.update(
-            self.galactic_position, find_planet, landed,
-        );
+        // Approach state was computed in update_approach_state() BEFORE
+        // helm_mode ran, so cruise speed cap and flythrough prevention
+        // had current data. Use the stored state here.
+        let approach_state = self.approach_state.clone()
+            .unwrap_or_else(crate::approach::ApproachState::default_distant);
 
         // Diagnostic: log planet distances every 60 frames
         if self.active_system.is_some()

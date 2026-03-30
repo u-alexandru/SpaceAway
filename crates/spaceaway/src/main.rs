@@ -280,6 +280,7 @@ impl ApplicationHandler for App {
 
                 // --- Player + Physics + Helm + Game Systems ---
                 let t0 = Instant::now();
+                self.update_approach_state();
                 self.update_player_physics(dt);
                 self.update_game_systems(dt);
                 self.perf.player_us = t0.elapsed().as_micros() as u64;

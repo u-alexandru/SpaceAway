@@ -33,6 +33,7 @@ pub enum ApproachPhase {
 }
 
 // ── Read-only snapshot ──────────────────────────────────────────────
+#[derive(Clone)]
 pub struct ApproachState {
     pub phase: ApproachPhase,
     pub altitude_m: f64,
@@ -46,6 +47,26 @@ pub struct ApproachState {
     pub can_engage_cruise: bool,
     pub can_engage_warp: bool,
     pub cruise_speed_cap_ms: Option<f64>,
+}
+
+impl ApproachState {
+    /// Default state when no approach computation has run yet.
+    pub fn default_distant() -> Self {
+        Self {
+            phase: ApproachPhase::Distant,
+            altitude_m: f64::MAX,
+            planet_pos_ly: None,
+            planet_radius_m: 0.0,
+            body_index: None,
+            terrain_active: false,
+            collision_active: false,
+            disengage_cruise: false,
+            cascade_warp_to_cruise: false,
+            can_engage_cruise: true,
+            can_engage_warp: true,
+            cruise_speed_cap_ms: None,
+        }
+    }
 }
 
 // ── Manager ─────────────────────────────────────────────────────────
