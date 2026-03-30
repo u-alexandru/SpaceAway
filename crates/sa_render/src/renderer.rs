@@ -98,10 +98,12 @@ impl Renderer {
             mapped_at_creation: false,
         });
         // Only enable timer queries if the GPU supports them (Metal may not).
-        let supports_timestamps = gpu.device.features().contains(wgpu::Features::TIMESTAMP_QUERY);
+        let _supports_timestamps = gpu.device.features().contains(wgpu::Features::TIMESTAMP_QUERY);
+        // DIAGNOSTIC: disable ALL profiler features to test if profiler
+        // queries inside the render pass cause the flickering.
         let gpu_profiler = GpuProfiler::new(&gpu.device, GpuProfilerSettings {
-            enable_timer_queries: supports_timestamps,
-            enable_debug_groups: true,
+            enable_timer_queries: false,
+            enable_debug_groups: false,
             max_num_pending_frames: 4,
         })
         .expect("Failed to create GPU profiler");
