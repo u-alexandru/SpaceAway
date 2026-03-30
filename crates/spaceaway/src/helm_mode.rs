@@ -409,6 +409,26 @@ impl App {
                 target_dist,
             );
 
+            // Cruise diagnostic: log approach state every 60 frames
+            if self.drive.mode() == sa_ship::DriveMode::Cruise
+                && self.time.frame_count().is_multiple_of(60)
+            {
+                if let Some(ref state) = self.approach_state {
+                    let delta_len = (delta[0]*delta[0] + delta[1]*delta[1] + delta[2]*delta[2]).sqrt();
+                    log::info!(
+                        "CRUISE_DIAG: phase={:?}, alt={:.0}km, cap={:?}m/s, delta={:.2e}ly, planet={}, body={:?}",
+                        state.phase,
+                        state.altitude_m / 1000.0,
+                        state.cruise_speed_cap_ms.map(|c| c as i64),
+                        delta_len,
+                        state.planet_pos_ly.is_some(),
+                        state.body_index,
+                    );
+                } else {
+                    log::warn!("CRUISE_DIAG: approach_state is None!");
+                }
+            }
+
             // Apply approach-manager cruise speed cap (altitude-proportional)
             if self.drive.mode() == sa_ship::DriveMode::Cruise
                 && let Some(ref state) = self.approach_state
@@ -430,20 +450,29 @@ impl App {
                 }
             }
 
-            // Ray-sphere flythrough prevention
-            if self.drive.mode() == sa_ship::DriveMode::Cruise
-                && let Some(ref state) = self.approach_state
-                && let Some(planet_pos) = state.planet_pos_ly
-            {
-                let planets = vec![(planet_pos, state.planet_radius_m)];
-                let origin = [self.galactic_position.x, self.galactic_position.y, self.galactic_position.z];
-                let (clamped, should_disengage) = crate::approach::clamp_cruise_delta(
-                    origin, delta, &planets,
-                );
-                delta = clamped;
-                if should_disengage {
-                    self.drive.request_disengage();
-                    log::info!("Cruise flythrough prevented: stopped at 100km boundary");
+            // Ray-sphere flythrough prevention — test ALL planets, not just nearest
+            if self.drive.mode() == sa_ship::DriveMode::Cruise {
+                let mut planets = Vec::new();
+                if let Some(sys) = &self.active_system {
+                    let positions = sys.compute_positions_ly_pub();
+                    for (i, pos) in positions.iter().enumerate() {
+                        if let Some(r) = sys.body_radius_m(i)
+                            && sys.planet_data(i).is_some()
+                        {
+                            planets.push((*pos, r));
+                        }
+                    }
+                }
+                if !planets.is_empty() {
+                    let origin = [self.galactic_position.x, self.galactic_position.y, self.galactic_position.z];
+                    let (clamped, should_disengage) = crate::approach::clamp_cruise_delta(
+                        origin, delta, &planets,
+                    );
+                    delta = clamped;
+                    if should_disengage {
+                        self.drive.request_disengage();
+                        log::info!("Cruise flythrough prevented: stopped at 100km boundary");
+                    }
                 }
             }
 
