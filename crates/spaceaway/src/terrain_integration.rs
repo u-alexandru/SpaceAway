@@ -236,6 +236,21 @@ impl TerrainManager {
         // whether we hold the handle. MeshStore never frees uploaded meshes.
         self.col.remove_evicted(physics, &removed_keys);
 
+        // Cap gpu_meshes to prevent unbounded GPU memory growth.
+        // Keep base chunks (LOD 0-1) for LOD fallback, evict finest LODs first.
+        const GPU_MESH_CAP: usize = 500;
+        if self.gpu_meshes.len() > GPU_MESH_CAP {
+            let mut keys: Vec<ChunkKey> = self.gpu_meshes.keys().copied().collect();
+            // Sort by LOD descending (finest first), then by distance from camera
+            keys.sort_by(|a, b| b.lod.cmp(&a.lod));
+            let excess = self.gpu_meshes.len() - GPU_MESH_CAP;
+            for key in keys.iter().take(excess) {
+                // Never evict LOD 0-1 (permanent fallback)
+                if key.lod <= 1 { continue; }
+                self.gpu_meshes.remove(key);
+            }
+        }
+
         // --- Gravity computation ---
         let gravity = sa_terrain::gravity::compute_gravity(
             cam_rel_m,

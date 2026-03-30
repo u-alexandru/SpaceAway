@@ -9,10 +9,11 @@ use crate::frustum::Frustum;
 /// Minimum range for finest LOD level (meters).
 const MIN_RANGE: f64 = 50.0;
 
-/// Hard cap on total visible nodes to prevent runaway subdivision.
-/// 800 ensures the face under the camera gets enough fine-LOD nodes
-/// even after other faces consume nodes for the far hemisphere.
-const MAX_VISIBLE_NODES: usize = 800;
+/// Hard cap on total visible nodes. Each node = 1 draw call + 1 GPU
+/// mesh upload. 300 balances draw call count (performance) with LOD
+/// coverage (all 6 cube faces represented). Nearest face is visited
+/// first so the area under the camera gets the finest available LOD.
+const MAX_VISIBLE_NODES: usize = 300;
 
 /// A visible terrain node selected by the quadtree traversal.
 #[derive(Debug, Clone)]
@@ -243,8 +244,10 @@ mod tests {
 
     #[test]
     fn all_six_faces_represented() {
+        // Camera at 5× radius — far enough that only coarse LODs are selected,
+        // ensuring all 6 faces fit within the node budget.
         let radius = 1_000_000.0;
-        let camera = [0.0, 0.0, 0.0];
+        let camera = [0.0, 0.0, radius * 5.0];
         let max_lod = 10;
         let nodes = select_visible_nodes(camera, radius, max_lod, 0.0, None);
         let mut faces_seen = std::collections::HashSet::new();
