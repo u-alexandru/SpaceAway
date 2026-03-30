@@ -30,7 +30,8 @@ Game Logic:   sa_universe        — procedural generation, galaxy, star systems
               sa_player          — first-person controller, interaction, inventory
               sa_meshgen         — modular ship mesh generation (hulls, parts, assembly)
 
-Engine:       sa_render          — wgpu renderer, flat-shaded low-poly pipeline, shaders
+Engine:       sa_render          — wgpu renderer, flat-shaded low-poly pipeline, terrain pipeline, slab allocator, shaders
+              sa_terrain         — CDLOD quadtree, config, collision grid, chunk streaming
               sa_physics         — Newtonian simulation, rapier3d integration, collision
               sa_input           — input mapping, keyboard/mouse state
 
@@ -42,6 +43,21 @@ Core:         sa_ecs             — hecs wrapper, system scheduling, Schedule
 All crates live in `crates/`. The `sa_` prefix is mandatory for all crate names.
 
 Planned crates (not yet created): `sa_net`, `sa_audio`, `sa_ship`, `sa_survival`.
+
+### Terrain System (sa_terrain + sa_render)
+
+CDLOD terrain with CPU mesh generation. See `docs/superpowers/specs/2026-03-30-terrain-redesign.md` for the full design spec.
+
+- **Config** (`sa_terrain/config.rs`): centralized terrain constants (grid size, LOD levels, budgets)
+- **Collision grid** (`sa_terrain/collision_grid.rs`): fixed-LOD 7x7 collision grid (pure math, no rapier). Never changes LOD under resting bodies to prevent energy injection.
+- **Terrain vertex** (`sa_render/terrain_vertex.rs`): GPU TerrainVertex with morph_target field (48 bytes)
+- **Slab allocator** (`sa_render/slab_allocator.rs`): budget-driven vertex buffer pool — heightmap tier (30MB, fixed 58KB slots) + volumetric tier (20MB, reserved for caves)
+- **Terrain pipeline** (`sa_render/terrain_pipeline.rs`): separate render pipeline for terrain (TerrainVertex + TerrainInstanceRaw with morph_factor), does not pollute the shared geometry pipeline
+- **Terrain shader** (`sa_render/shaders/terrain.wgsl`): CDLOD vertex morphing — odd vertices lerp toward parent-LOD position via morph_factor
+- **Shared index buffer**: all heightmap chunks use one static index buffer (same 33x33 topology)
+- **Icosphere coexistence**: depth-test icosphere at 0.999x planet radius, terrain occludes it naturally
+
+CPU mesh generation was chosen over GPU displacement to support both heightmap AND future volumetric terrain (caves/overhangs). Volumetric extension points are in place: `ChunkType` enum, volumetric slab tier, TriMesh collider path.
 
 ### Cross-Crate Communication
 
@@ -137,7 +153,7 @@ See `docs/modular-ship-standards.md` Section 8 and `docs/interior-standards.md` 
 | `Q/E` | Roll (left/right) |
 | `F` | Stand up (exit seat) |
 | `1` | Select Impulse drive |
-| `2` | Select Cruise drive (1c–500c) |
+| `2` | Select Cruise drive (1c–5,000c) |
 | `3` | Select Warp drive (100,000c–5,000,000c, 5s spool) |
 | `Tab` | Lock nearest star for navigation |
 
@@ -148,7 +164,7 @@ Throttle and engine controlled by clicking cockpit lever/button.
 Three tiers of travel with increasing speed and fuel cost:
 
 - **Impulse** (default): Newtonian physics, 0–1000 m/s. Uses hydrogen fuel.
-- **Cruise** (key 2): 1c–500c, for planet-to-planet within a system. Uses hydrogen at 10x rate.
+- **Cruise** (key 2): 1c–5,000c, for planet-to-planet within a system. Uses hydrogen at 10x rate.
 - **Warp** (key 3): 100,000c–5,000,000c, for star-to-star travel. Uses exotic fuel. 5-second spool time.
 
 Throttle lever controls speed within each tier (logarithmic mapping).
@@ -194,10 +210,11 @@ Primary target: macOS (Metal via wgpu). Secondary: Windows (DX12/Vulkan via wgpu
 - `2026-03-28-main-menu-design.md` — main menu with random celestial background scenes
 - `2026-03-28-visor-hud-design.md` — suit visor HUD with Orbitron font, degradation system
 - `2026-03-28-audio-system-design.md` — 5-channel spatial audio, computer voice, context music
+- `2026-03-30-terrain-redesign.md` — CDLOD terrain redesign: CPU meshgen, slab allocator, collision grid, volumetric extension points
 
 ## Upcoming Features (prioritized)
 
-1. **CDLOD terrain + landing** — cube-sphere quadtree, OpenSimplex2 fBm, walk on planet surfaces (`sa_terrain` crate)
+1. **CDLOD terrain — landing + surface walking** — terrain rendering and collision grid complete; next: ship landing sequence, player walkable surfaces (`sa_terrain` crate)
 2. **Resource gathering** — asteroid mining, gas giant scooping, exotic matter deposits
 3. **Navigation console** — full 3D star map, route planning, ship database with bookmarks
 4. **Alpha-blend render pass** — proper transparent atmosphere shells and planetary rings
