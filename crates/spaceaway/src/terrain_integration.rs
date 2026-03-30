@@ -386,25 +386,55 @@ impl TerrainManager {
             (planet_center_ly.z - camera_galactic_ly.z) * LY_TO_M,
         ];
 
+        // LOD fallback: when a fine chunk isn't GPU-ready, walk up the LOD
+        // tree to find a coarser ancestor that IS ready. This ensures the
+        // planet is always fully covered visually, even during LOD transitions
+        // when the streaming system hasn't caught up with the new node set.
+        //
+        // Without this, approaching a planet causes it to disappear: the
+        // quadtree selects finer nodes, but only coarser chunks exist in
+        // gpu_meshes. None of the fine nodes match → zero draw commands.
+        let mut rendered: std::collections::HashSet<ChunkKey> = std::collections::HashSet::new();
         let mut cmds = Vec::with_capacity(visible.len());
+
         for node in visible {
-            let key = ChunkKey {
+            // Try the exact chunk first
+            let mut key = ChunkKey {
                 face: node.face as u8,
                 lod: node.lod,
                 x: node.x,
                 y: node.y,
             };
-            if let Some(&(handle, center_f64)) = self.gpu_meshes.get(&key) {
-                let ox = (cam_offset_m[0] + center_f64[0]) as f32;
-                let oy = (cam_offset_m[1] + center_f64[1]) as f32;
-                let oz = (cam_offset_m[2] + center_f64[2]) as f32;
 
-                cmds.push(DrawCommand {
-                    mesh: handle,
-                    model_matrix: Mat4::from_translation(Vec3::new(ox, oy, oz)),
-                    pre_rebased: true,
-                });
+            // Walk up to coarser ancestors if the exact chunk isn't ready
+            let mut found = false;
+            loop {
+                if let Some(&(handle, center_f64)) = self.gpu_meshes.get(&key) {
+                    // Don't render the same ancestor twice (multiple fine
+                    // nodes can share one coarse ancestor)
+                    if rendered.insert(key) {
+                        let ox = (cam_offset_m[0] + center_f64[0]) as f32;
+                        let oy = (cam_offset_m[1] + center_f64[1]) as f32;
+                        let oz = (cam_offset_m[2] + center_f64[2]) as f32;
+
+                        cmds.push(DrawCommand {
+                            mesh: handle,
+                            model_matrix: Mat4::from_translation(Vec3::new(ox, oy, oz)),
+                            pre_rebased: true,
+                        });
+                    }
+                    found = true;
+                    break;
+                }
+                // Move to parent: halve coordinates, decrease LOD
+                if key.lod == 0 {
+                    break; // no coarser ancestor exists
+                }
+                key.x /= 2;
+                key.y /= 2;
+                key.lod -= 1;
             }
+            let _ = found;
         }
         cmds
     }
