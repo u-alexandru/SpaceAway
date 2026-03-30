@@ -644,9 +644,9 @@ impl App {
                         }
                     }
 
-                    // Keep the navigation lock — marker stays visible
-                    // after arrival. Gravity well won't re-trigger
-                    // because it's guarded by active_system.is_none().
+                    // Cascade to cruise so the approach system can decelerate
+                    self.drive.request_engage(sa_ship::DriveMode::Cruise);
+                    log::info!("Gravity well → cruise cascade");
             }
         } else {
             // Not in cruise/warp — reset proximity warning and approach tracking
