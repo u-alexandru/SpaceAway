@@ -213,22 +213,27 @@ impl App {
                 self.drive.set_speed_fraction(ship.throttle);
             }
 
-            // Apply continuous thrust from throttle lever + engine button
-            ship.apply_thrust(&mut self.physics);
+            // Apply thrust only in impulse mode. Cruise/warp move
+            // galactic_position directly — physics thrust is meaningless
+            // and causes the rapier body to drift at ~3000 m/s (confirmed
+            // from logs: 750kN / 50,000kg = 15 m/s² × 60s cruise).
+            if self.drive.mode() == sa_ship::DriveMode::Impulse {
+                ship.apply_thrust(&mut self.physics);
 
-            // Vertical thrust: Space = up, Shift = down (ship-local).
-            // 2× main thrust so the pilot can decelerate from
-            // terminal velocity (~270 m/s) against full gravity.
-            let vert_up = self.input.keyboard.is_pressed(KeyCode::Space);
-            let vert_down = self.input.keyboard.is_pressed(KeyCode::ShiftLeft);
-            if vert_up || vert_down {
-                let sign = if vert_up { 1.0_f32 } else { -1.0 };
-                if let Some(body) = self.physics.get_body(ship.body_handle) {
-                    let rot = *body.rotation();
-                    let up = rot * nalgebra::Vector3::new(0.0, sign, 0.0);
-                    let force = up * ship.max_thrust * 2.0;
-                    if let Some(body) = self.physics.get_body_mut(ship.body_handle) {
-                        body.add_force(force, true);
+                // Vertical thrust: Space = up, Shift = down (ship-local).
+                // 2× main thrust so the pilot can decelerate from
+                // terminal velocity (~270 m/s) against full gravity.
+                let vert_up = self.input.keyboard.is_pressed(KeyCode::Space);
+                let vert_down = self.input.keyboard.is_pressed(KeyCode::ShiftLeft);
+                if vert_up || vert_down {
+                    let sign = if vert_up { 1.0_f32 } else { -1.0 };
+                    if let Some(body) = self.physics.get_body(ship.body_handle) {
+                        let rot = *body.rotation();
+                        let up = rot * nalgebra::Vector3::new(0.0, sign, 0.0);
+                        let force = up * ship.max_thrust * 2.0;
+                        if let Some(body) = self.physics.get_body_mut(ship.body_handle) {
+                            body.add_force(force, true);
+                        }
                     }
                 }
             }
