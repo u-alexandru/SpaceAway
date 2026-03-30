@@ -7,9 +7,9 @@
 use sa_math::WorldPos;
 
 use crate::constants::{
-    APPROACH_TIME_SECONDS, CRUISE_DISENGAGE_ALT_M, DEPART_APPROACHING, DEPART_ORBIT,
-    EXCLUSION_RADIUS_M, LY_TO_M, PHASE_APPROACHING, PHASE_LANDING_M, PHASE_LOWER_ATMO,
-    PHASE_ORBIT, PHASE_UPPER_ATMO,
+    APPROACH_TIME_SECONDS, DEPART_APPROACHING, DEPART_ORBIT,
+    LY_TO_M, PHASE_APPROACHING, PHASE_LANDING_M, PHASE_LOWER_ATMO,
+    PHASE_ORBIT, PHASE_UPPER_ATMO, safe_standoff_m,
 };
 
 // ── Phase ───────────────────────────────────────────────────────────
@@ -181,7 +181,7 @@ impl ApproachManager {
                 phase,
                 LowerAtmosphere | Landing | Surface | Departing
             ),
-            disengage_cruise: has_planet && altitude_m <= CRUISE_DISENGAGE_ALT_M,
+            disengage_cruise: has_planet && altitude_m <= safe_standoff_m(planet_radius_m),
             cascade_warp_to_cruise: has_planet
                 && matches!(phase, Approaching | Orbit | UpperAtmosphere),
             can_engage_cruise: matches!(
@@ -190,7 +190,7 @@ impl ApproachManager {
             ),
             can_engage_warp: phase == Distant,
             cruise_speed_cap_ms: if has_planet {
-                Some(cruise_speed_cap_ms(altitude_m))
+                Some(cruise_speed_cap_ms(altitude_m, planet_radius_m))
             } else {
                 None
             },
@@ -217,9 +217,9 @@ fn compute_phase(altitude_m: f64, radius_m: f64) -> ApproachPhase {
 
 // ── Public helpers ──────────────────────────────────────────────────
 
-/// Speed cap proportional to altitude. Returns 0 below 100 km.
-pub fn cruise_speed_cap_ms(altitude_m: f64) -> f64 {
-    if altitude_m <= CRUISE_DISENGAGE_ALT_M {
+/// Speed cap proportional to altitude. Returns 0 below safe standoff.
+pub fn cruise_speed_cap_ms(altitude_m: f64, body_radius_m: f64) -> f64 {
+    if altitude_m <= safe_standoff_m(body_radius_m) {
         return 0.0;
     }
     altitude_m / APPROACH_TIME_SECONDS
@@ -264,7 +264,7 @@ pub fn clamp_cruise_delta(
 ) -> ([f64; 3], bool) {
     // Already inside any exclusion sphere → stop.
     for &(pos, radius_m) in planets {
-        let excl = (radius_m + EXCLUSION_RADIUS_M) / LY_TO_M;
+        let excl = (radius_m + safe_standoff_m(radius_m)) / LY_TO_M;
         let oc = [
             origin_ly[0] - pos.x,
             origin_ly[1] - pos.y,
@@ -277,7 +277,7 @@ pub fn clamp_cruise_delta(
 
     let mut best_t: Option<f64> = None;
     for &(pos, radius_m) in planets {
-        let excl = (radius_m + EXCLUSION_RADIUS_M) / LY_TO_M;
+        let excl = (radius_m + safe_standoff_m(radius_m)) / LY_TO_M;
         let center = [pos.x, pos.y, pos.z];
         if let Some(t) = ray_sphere_intersect(origin_ly, delta_ly, center, excl) {
             best_t = Some(match best_t {
@@ -366,14 +366,20 @@ mod tests {
     #[test]
     fn cruise_cap_proportional() {
         let alt = 800_000.0;
-        let cap = cruise_speed_cap_ms(alt);
+        // Use a small planet radius so 100km standoff applies
+        let cap = cruise_speed_cap_ms(alt, 6_371_000.0);
         assert!((cap - alt / APPROACH_TIME_SECONDS).abs() < 1.0);
     }
 
     #[test]
-    fn cruise_cap_zero_below_100km() {
-        assert_eq!(cruise_speed_cap_ms(50_000.0), 0.0);
-        assert_eq!(cruise_speed_cap_ms(100_000.0), 0.0);
+    fn cruise_cap_zero_below_standoff() {
+        // Small planet: standoff = max(100km, 0.5×6371km) = 3185km
+        let r = 6_371_000.0;
+        assert_eq!(cruise_speed_cap_ms(50_000.0, r), 0.0);
+        assert_eq!(cruise_speed_cap_ms(3_000_000.0, r), 0.0);
+        // Star: standoff = 0.5×427926km = 213963km
+        let star_r = 427_926_000.0;
+        assert_eq!(cruise_speed_cap_ms(200_000_000.0, star_r), 0.0);
     }
 
     #[test]

@@ -241,15 +241,24 @@ impl App {
     }
 
     fn handle_digit8(&mut self) {
+        // Clean up terrain before teleporting
+        if let Some(t) = &mut self.terrain { t.cleanup(&mut self.physics); }
+        self.terrain = None;
+        self.terrain_gravity = None;
+
         if let Some(system) = &mut self.active_system {
             let planets = &system.system.planets;
-            if planets.is_empty() { return; }
+            if planets.is_empty() {
+                log::warn!("No planets in this system");
+                return;
+            }
             let idx = self.teleport_counter as usize % planets.len();
             self.teleport_counter += 1;
             let planet = &planets[idx];
-            let meters_in_ly = 1.0 / 9.461e15_f64;
+            let m_to_ly = crate::constants::M_TO_LY;
             let planet_radius_m = planet.radius_earth as f64 * 6_371_000.0;
-            let view_dist_m = planet_radius_m * 1.8;
+            // 100km above surface
+            let view_dist_m = planet_radius_m + 100_000.0;
             let positions = system.compute_positions_ly_pub();
             let mut body_idx = 2;
             for pi in 0..idx {
@@ -262,28 +271,37 @@ impl App {
             let planet_pos = positions.get(body_idx)
                 .copied()
                 .unwrap_or(system.star_galactic_pos);
+            // Position above the planet (radially outward from star)
             let dx = planet_pos.x - system.star_galactic_pos.x;
+            let dy = planet_pos.y - system.star_galactic_pos.y;
             let dz = planet_pos.z - system.star_galactic_pos.z;
-            let dist_ly = (dx * dx + dz * dz).sqrt();
-            let (dir_x, dir_z) = if dist_ly > 1e-20 {
-                (dx / dist_ly, dz / dist_ly)
+            let dist_ly = (dx * dx + dy * dy + dz * dz).sqrt();
+            let (dir_x, dir_y, dir_z) = if dist_ly > 1e-20 {
+                (dx / dist_ly, dy / dist_ly, dz / dist_ly)
             } else {
-                (1.0, 0.0)
+                (1.0, 0.0, 0.0)
             };
-            let above_ly = view_dist_m * 0.4 * meters_in_ly;
             self.galactic_position = WorldPos::new(
-                planet_pos.x + dir_x * view_dist_m * meters_in_ly,
-                planet_pos.y + above_ly,
-                planet_pos.z + dir_z * view_dist_m * meters_in_ly,
+                planet_pos.x + dir_x * view_dist_m * m_to_ly,
+                planet_pos.y + dir_y * view_dist_m * m_to_ly,
+                planet_pos.z + dir_z * view_dist_m * m_to_ly,
             );
             self.camera.position = self.galactic_position;
             self.camera.orientation_override = None;
             self.camera.yaw = -std::f32::consts::FRAC_PI_2;
             self.camera.pitch = -0.2;
-            log::info!("→ Planet {} of {}: {:?} {:.0}km at {:.2}AU (viewing from {:.0}km)",
+            self.drive.request_disengage();
+            // Zero velocity so ship doesn't drift
+            if let Some(ship) = &self.ship
+                && let Some(body) = self.physics.rigid_body_set.get_mut(ship.body_handle)
+            {
+                body.set_linvel(nalgebra::Vector3::zeros(), true);
+                body.set_angvel(nalgebra::Vector3::zeros(), true);
+                body.set_translation(nalgebra::Vector3::zeros(), true);
+            }
+            log::info!("→ Planet {} of {}: {:?} {:.0}km at {:.2}AU (100km above surface)",
                 idx + 1, planets.len(), planet.sub_type,
-                planet.radius_earth * 6371.0, planet.orbital_radius_au,
-                view_dist_m / 1000.0);
+                planet.radius_earth * 6371.0, planet.orbital_radius_au);
         } else {
             self.handle_jump_to_star();
         }
