@@ -241,12 +241,6 @@ impl App {
     }
 
     fn handle_digit8(&mut self) {
-        // Clean up active terrain before teleporting — otherwise stale
-        // terrain chunks remain and the ship body stays at the old position.
-        if let Some(t) = &mut self.terrain { t.cleanup(&mut self.physics); }
-        self.terrain = None;
-        self.terrain_gravity = None;
-
         if let Some(system) = &mut self.active_system {
             let planets = &system.system.planets;
             if planets.is_empty() { return; }
