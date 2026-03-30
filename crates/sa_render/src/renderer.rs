@@ -98,12 +98,13 @@ impl Renderer {
             mapped_at_creation: false,
         });
         // Only enable timer queries if the GPU supports them (Metal may not).
-        let _supports_timestamps = gpu.device.features().contains(wgpu::Features::TIMESTAMP_QUERY);
-        // DIAGNOSTIC: disable ALL profiler features to test if profiler
-        // queries inside the render pass cause the flickering.
+        // Timer queries disabled at startup — they cause flickering on Metal
+        // by inserting GPU timestamp writes inside render passes that interfere
+        // with buffer synchronization. Enable on demand via toggle_gpu_profiler().
+        // Debug groups are safe and useful for Metal GPU Capture.
         let gpu_profiler = GpuProfiler::new(&gpu.device, GpuProfilerSettings {
             enable_timer_queries: false,
-            enable_debug_groups: false,
+            enable_debug_groups: true,
             max_num_pending_frames: 4,
         })
         .expect("Failed to create GPU profiler");
