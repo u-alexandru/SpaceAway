@@ -217,6 +217,7 @@ impl Renderer {
         } else {
             Vec3::new(1.0, 0.0, 0.0)
         };
+        // Per-frame sky uniform buffer + bind group (same pattern as geometry).
         let sky_uniforms = SkyUniforms {
             inv_view_proj: inv_view_proj.to_cols_array_2d(),
             galactic_center_dir: gc_dir.to_array(),
@@ -226,12 +227,21 @@ impl Renderer {
             warp_dir: drive_params.velocity_dir,
             flash_intensity: drive_params.flash_intensity,
         };
-        gpu.queue.write_buffer(
-            &self.sky_renderer.uniform_buffer,
-            0,
-            bytemuck::bytes_of(&sky_uniforms),
-        );
+        let frame_sky_buf = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Frame Sky Uniforms"),
+            contents: bytemuck::bytes_of(&sky_uniforms),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let frame_sky_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Frame Sky BG"),
+            layout: &self.sky_renderer.sky_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: frame_sky_buf.as_entire_binding(),
+            }],
+        });
 
+        // Per-frame star uniform buffer + bind group.
         let star_view = camera.view_matrix();
         let star_vp = camera.projection_matrix(aspect) * star_view;
         let star_uniforms = StarUniforms {
@@ -243,15 +253,21 @@ impl Renderer {
             velocity_dir: drive_params.velocity_dir,
             flash_intensity: drive_params.flash_intensity,
         };
-        gpu.queue.write_buffer(
-            &self.star_field.uniform_buffer,
-            0,
-            bytemuck::bytes_of(&star_uniforms),
-        );
+        let frame_star_buf = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Frame Star Uniforms"),
+            contents: bytemuck::bytes_of(&star_uniforms),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let frame_star_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Frame Star BG"),
+            layout: &self.star_field.bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: frame_star_buf.as_entire_binding(),
+            }],
+        });
 
-        // Nebula uniforms: use the star view_proj (rotation-only, no translation)
-        // because nebulae are at galaxy scale (light-years), effectively at infinity.
-        // The game binary places nebula instances as direction * large_distance.
+        // Per-frame nebula uniform buffers + bind groups.
         let view_mat = camera.view_matrix();
         let camera_right = Vec3::new(view_mat.col(0).x, view_mat.col(1).x, view_mat.col(2).x);
         let camera_up = Vec3::new(view_mat.col(0).y, view_mat.col(1).y, view_mat.col(2).y);
@@ -264,16 +280,32 @@ impl Renderer {
             velocity_dir: drive_params.velocity_dir,
             warp_intensity: drive_params.warp_intensity,
         };
-        gpu.queue.write_buffer(
-            &self.nebula_renderer.uniform_buffer,
-            0,
-            bytemuck::bytes_of(&nebula_uniforms),
-        );
-        gpu.queue.write_buffer(
-            &self.galaxy_renderer.uniform_buffer,
-            0,
-            bytemuck::bytes_of(&nebula_uniforms),
-        );
+        let frame_nebula_buf = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Frame Nebula Uniforms"),
+            contents: bytemuck::bytes_of(&nebula_uniforms),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let frame_nebula_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Frame Nebula BG"),
+            layout: &self.nebula_renderer.bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: frame_nebula_buf.as_entire_binding(),
+            }],
+        });
+        let frame_galaxy_buf = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Frame Galaxy Uniforms"),
+            contents: bytemuck::bytes_of(&nebula_uniforms),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let frame_galaxy_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Frame Galaxy BG"),
+            layout: &self.galaxy_renderer.bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: frame_galaxy_buf.as_entire_binding(),
+            }],
+        });
 
         let frame = match gpu.surface.get_current_texture() {
             Ok(frame) => frame,
@@ -367,7 +399,7 @@ impl Renderer {
         // Pass 1: Render sky to half-res offscreen texture
         {
             let sky_query = self.gpu_profiler.begin_query("sky_pass", &mut encoder);
-            self.sky_renderer.render_to_texture(&mut encoder);
+            self.sky_renderer.render_to_texture_with(&mut encoder, &frame_sky_bg);
             self.gpu_profiler.end_query(&mut encoder, sky_query);
         }
 
@@ -413,7 +445,7 @@ impl Renderer {
             {
                 let q = self.gpu_profiler.begin_query("star_field", &mut pass);
                 pass.set_pipeline(&self.star_field.pipeline);
-                pass.set_bind_group(0, &self.star_field.bind_group, &[]);
+                pass.set_bind_group(0, &frame_star_bg, &[]);
                 pass.set_vertex_buffer(0, self.star_field.vertex_buffer.slice(..));
                 pass.draw(0..6, 0..self.star_field.star_count);
                 self.gpu_profiler.end_query(&mut pass, q);
@@ -422,8 +454,8 @@ impl Renderer {
             // Nebulae (alpha blended, no depth write)
             {
                 let q = self.gpu_profiler.begin_query("nebula", &mut pass);
-                self.nebula_renderer.render(&mut pass);
-                self.galaxy_renderer.render(&mut pass);
+                self.nebula_renderer.render_with(&mut pass, &frame_nebula_bg);
+                self.galaxy_renderer.render_with(&mut pass, &frame_galaxy_bg);
                 self.gpu_profiler.end_query(&mut pass, q);
             }
 
@@ -516,9 +548,17 @@ impl Renderer {
         // Resolve GPU profiler queries before submitting.
         self.gpu_profiler.resolve_queries(&mut encoder);
 
-        // Keep per-frame GPU resources alive until after submit.
+        // Keep ALL per-frame GPU resources alive until after submit.
         frame_resources.push(FrameResource::Buffer(frame_uniform_buffer));
         frame_resources.push(FrameResource::BindGroup(frame_uniform_bind_group));
+        frame_resources.push(FrameResource::Buffer(frame_sky_buf));
+        frame_resources.push(FrameResource::BindGroup(frame_sky_bg));
+        frame_resources.push(FrameResource::Buffer(frame_star_buf));
+        frame_resources.push(FrameResource::BindGroup(frame_star_bg));
+        frame_resources.push(FrameResource::Buffer(frame_nebula_buf));
+        frame_resources.push(FrameResource::BindGroup(frame_nebula_bg));
+        frame_resources.push(FrameResource::Buffer(frame_galaxy_buf));
+        frame_resources.push(FrameResource::BindGroup(frame_galaxy_bg));
         if let Some(buf) = frame_instance_buffer {
             frame_resources.push(FrameResource::Buffer(buf));
         }

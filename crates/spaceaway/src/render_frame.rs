@@ -14,15 +14,6 @@ impl App {
         profiling::scope!("render");
         let t3 = Instant::now();
 
-        // Wait for previous frame's GPU work to complete before writing new
-        // uniform data. Without this, write_buffer overwrites sky/star/nebula
-        // buffers while the GPU still reads them, causing flickering on Metal.
-        // Placed here (before monitor submit) to avoid stalling on work we
-        // just submitted this frame.
-        if let Some(gpu) = &self.gpu {
-            gpu.device.poll(wgpu::Maintain::Wait);
-        }
-
         // --- Terrain streaming (before immutable renderer borrow) ---
         profiling::scope!("terrain_update");
         // Deactivation check

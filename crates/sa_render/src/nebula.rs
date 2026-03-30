@@ -40,6 +40,7 @@ pub struct NebulaRenderer {
     pub pipeline: wgpu::RenderPipeline,
     pub uniform_buffer: wgpu::Buffer,
     pub bind_group: wgpu::BindGroup,
+    pub bind_group_layout: wgpu::BindGroupLayout,
     pub instance_buffer: wgpu::Buffer,
     pub instance_count: u32,
 }
@@ -191,6 +192,7 @@ impl NebulaRenderer {
             pipeline,
             uniform_buffer,
             bind_group,
+            bind_group_layout,
             instance_buffer,
             instance_count: 0,
         }
@@ -212,13 +214,21 @@ impl NebulaRenderer {
 
     /// Draw all nebula instances. Call within an active render pass.
     pub fn render<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
+        self.render_with(pass, &self.bind_group);
+    }
+
+    /// Draw using an external (per-frame) bind group.
+    pub fn render_with<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'a>,
+        bind_group: &'a wgpu::BindGroup,
+    ) {
         if self.instance_count == 0 {
             return;
         }
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.set_bind_group(0, bind_group, &[]);
         pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
-        // 6 vertices per instance (2 triangles = billboard quad)
         pass.draw(0..6, 0..self.instance_count);
     }
 }
