@@ -23,9 +23,11 @@ impl App {
                 let vp = self.camera.view_projection_matrix(aspect);
 
                 let visible = self.star_streaming.visible_stars(self.galactic_position);
-                let cam_fwd = self.camera.forward();
                 let mut best_screen_dist = f32::MAX;
                 let mut best: Option<(usize, f32)> = None; // (index into visible, px)
+                // Margin around screen edges (pixels) — allows locking stars
+                // slightly outside the viewport for a forgiving feel.
+                let margin = 40.0_f32;
 
                 for (i, (placed, _dist_ly)) in visible.iter().enumerate() {
                     let dx = (placed.position.x - self.galactic_position.x) as f32;
@@ -34,13 +36,15 @@ impl App {
                     let len = (dx * dx + dy * dy + dz * dz).sqrt();
                     if len < 0.001 { continue; }
                     let dir_norm = glam::Vec3::new(dx / len, dy / len, dz / len);
-                    // Reject stars outside ~30° cone (dot < 0.866)
-                    if cam_fwd.dot(dir_norm) < 0.866 { continue; }
                     let dir = dir_norm * 90000.0;
                     let clip = vp * glam::Vec4::new(dir.x, dir.y, dir.z, 1.0);
-                    if clip.w <= 0.0 { continue; }
+                    if clip.w <= 0.0 { continue; } // behind camera
                     let sx = (clip.x / clip.w * 0.5 + 0.5) * sw;
                     let sy = (1.0 - (clip.y / clip.w * 0.5 + 0.5)) * sh;
+                    // Only consider stars within the screen bounds (+ margin)
+                    if sx < -margin || sx > sw + margin || sy < -margin || sy > sh + margin {
+                        continue;
+                    }
                     let screen_dist = ((sx - cx).powi(2) + (sy - cy).powi(2)).sqrt();
                     if screen_dist < best_screen_dist {
                         best_screen_dist = screen_dist;

@@ -58,7 +58,7 @@ impl App {
                     let cy = sh / 2.0;
                     let aspect = sw / sh;
                     let vp = self.camera.view_projection_matrix(aspect);
-                    let cam_fwd = self.camera.forward();
+                    let margin = 40.0_f32;
 
                     let locked = if let Some(sys) = &self.active_system {
                         // In a solar system — lock nearest planet to crosshair
@@ -79,13 +79,14 @@ impl App {
                             let len = (dx*dx + dy*dy + dz*dz).sqrt();
                             if len < 1e-10 { continue; }
                             let dir_norm = glam::Vec3::new(dx/len, dy/len, dz/len);
-                            // Only consider planets within ~60° of crosshair
-                            if cam_fwd.dot(dir_norm) < 0.5 { continue; }
                             let dir = dir_norm * 90000.0;
                             let clip = vp * glam::Vec4::new(dir.x, dir.y, dir.z, 1.0);
                             if clip.w <= 0.0 { continue; }
                             let sx = (clip.x / clip.w * 0.5 + 0.5) * sw;
                             let sy = (1.0 - (clip.y / clip.w * 0.5 + 0.5)) * sh;
+                            // Only consider planets within screen bounds + margin
+                            if sx < -margin || sx > sw + margin
+                                || sy < -margin || sy > sh + margin { continue; }
                             let sd = ((sx - cx).powi(2) + (sy - cy).powi(2)).sqrt();
                             if sd < best_dist {
                                 best_dist = sd;
@@ -121,37 +122,47 @@ impl App {
                         false
                     };
 
-                    // Fallback: lock nearest star if no planet was locked
+                    // Fallback: lock nearest star if no planet was locked.
+                    // Search ALL rendered stars (not just 15 nearest nav stars).
                     if !locked {
-                        self.navigation.update_nearby(self.galactic_position);
+                        let visible = self.star_streaming.visible_stars(self.galactic_position);
                         let mut best_screen_dist = f32::MAX;
-                        let mut best_idx: Option<usize> = None;
-                        for (i, star) in self.navigation.nearby_stars.iter().enumerate() {
-                            let dx = (star.galactic_pos.x - self.galactic_position.x) as f32;
-                            let dy = (star.galactic_pos.y - self.galactic_position.y) as f32;
-                            let dz = (star.galactic_pos.z - self.galactic_position.z) as f32;
+                        let mut best_star: Option<(usize, f32)> = None;
+                        for (i, (placed, _dist_ly)) in visible.iter().enumerate() {
+                            let dx = (placed.position.x - self.galactic_position.x) as f32;
+                            let dy = (placed.position.y - self.galactic_position.y) as f32;
+                            let dz = (placed.position.z - self.galactic_position.z) as f32;
                             let len = (dx*dx + dy*dy + dz*dz).sqrt();
                             if len < 0.001 { continue; }
                             let dir_norm = glam::Vec3::new(dx/len, dy/len, dz/len);
-                            if cam_fwd.dot(dir_norm) < 0.866 { continue; }
                             let dir = dir_norm * 90000.0;
                             let clip = vp * glam::Vec4::new(dir.x, dir.y, dir.z, 1.0);
                             if clip.w <= 0.0 { continue; }
                             let sx = (clip.x / clip.w * 0.5 + 0.5) * sw;
                             let sy = (1.0 - (clip.y / clip.w * 0.5 + 0.5)) * sh;
+                            if sx < -margin || sx > sw + margin
+                                || sy < -margin || sy > sh + margin { continue; }
                             let screen_dist = ((sx - cx).powi(2) + (sy - cy).powi(2)).sqrt();
                             if screen_dist < best_screen_dist {
                                 best_screen_dist = screen_dist;
-                                best_idx = Some(i);
+                                best_star = Some((i, screen_dist));
                             }
                         }
-                        if let Some(idx) = best_idx {
-                            self.navigation.lock_target(idx);
-                            if let Some(target) = &self.navigation.locked_target {
-                                log::info!("LOCKED STAR: {} ({:.2} ly, {:.0}px from center)",
-                                    target.catalog_name, target.distance_ly, best_screen_dist);
-                                self.audio.play_sfx(sa_audio::SfxId::Confirm, None);
-                            }
+                        if let Some((idx, px_dist)) = best_star {
+                            let (placed, dist_ly) = &visible[idx];
+                            let nav = navigation::NavStar {
+                                id: placed.id,
+                                galactic_pos: placed.position,
+                                catalog_name: navigation::catalog_name_from_id(placed.id),
+                                distance_ly: *dist_ly,
+                                color: placed.star.color,
+                                spectral_class: placed.star.spectral_class,
+                                luminosity: placed.star.luminosity,
+                            };
+                            log::info!("LOCKED STAR: {} ({:.2} ly, {:.0}px from center)",
+                                nav.catalog_name, nav.distance_ly, px_dist);
+                            self.navigation.lock_star(nav);
+                            self.audio.play_sfx(sa_audio::SfxId::Confirm, None);
                         } else {
                             log::warn!("No target visible on screen");
                         }
