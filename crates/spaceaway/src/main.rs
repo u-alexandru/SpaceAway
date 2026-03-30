@@ -1,3 +1,4 @@
+pub mod approach;
 mod debug_state;
 mod drive_integration;
 mod frame_update;
