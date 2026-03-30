@@ -51,15 +51,17 @@ pub const CRUISE_DISENGAGE_ALT_M: f64 = 100_000.0;
 /// For larger bodies (stars), use `safe_standoff_m()` which scales with radius.
 pub const EXCLUSION_RADIUS_M: f64 = 100_000.0;
 
-/// Fraction of body radius used as safe standoff distance for large bodies.
-/// Stars: 0.5 × 427,000 km = 213,500 km (outside photosphere).
-/// Planets: 0.5 × 7,700 km = 3,850 km (but floored at 100 km).
-pub const SAFE_STANDOFF_FRACTION: f64 = 0.5;
-
 /// Compute safe standoff distance for a body (meters).
-/// Returns max(100 km, 0.5 × radius) — safe for both planets and stars.
+/// - Planets (radius < 100,000 km): 100 km — reachable by impulse in ~2 min.
+/// - Stars (radius ≥ 100,000 km): 0.5× radius — outside photosphere/corona.
 pub fn safe_standoff_m(body_radius_m: f64) -> f64 {
-    (body_radius_m * SAFE_STANDOFF_FRACTION).max(EXCLUSION_RADIUS_M)
+    if body_radius_m >= 100_000_000.0 {
+        // Star: stay well outside (100,000 km = stars, 0.5× radius)
+        body_radius_m * 0.5
+    } else {
+        // Planet/moon: 100 km above surface
+        EXCLUSION_RADIUS_M
+    }
 }
 
 /// Maximum ship speed (m/s) to allow cruise/warp engagement.

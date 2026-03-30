@@ -373,11 +373,13 @@ mod tests {
 
     #[test]
     fn cruise_cap_zero_below_standoff() {
-        // Small planet: standoff = max(100km, 0.5×6371km) = 3185km
+        // Planet (< 100,000 km radius): standoff = 100 km
         let r = 6_371_000.0;
         assert_eq!(cruise_speed_cap_ms(50_000.0, r), 0.0);
-        assert_eq!(cruise_speed_cap_ms(3_000_000.0, r), 0.0);
-        // Star: standoff = 0.5×427926km = 213963km
+        assert_eq!(cruise_speed_cap_ms(100_000.0, r), 0.0);
+        // Above 100km: should have speed
+        assert!(cruise_speed_cap_ms(200_000.0, r) > 0.0);
+        // Star (≥ 100,000 km radius): standoff = 0.5 × radius
         let star_r = 427_926_000.0;
         assert_eq!(cruise_speed_cap_ms(200_000_000.0, star_r), 0.0);
     }
