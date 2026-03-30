@@ -176,11 +176,17 @@ impl TerrainManager {
             }
         }
 
-        // Remove GPU meshes for chunks evicted from the LRU cache.
-        // These are truly gone and won't be re-used without re-generation.
-        for key in &removed_keys {
-            self.gpu_meshes.remove(key);
-        }
+        // LRU eviction: remove collision data but KEEP GPU mesh handles.
+        // The LRU cache manages CPU memory (full ChunkData: vertices, heights).
+        // GPU mesh handles in gpu_meshes are tiny (32 bytes each) and are
+        // needed by the LOD fallback: when the quadtree selects fine nodes
+        // that haven't streamed yet, the ancestor walk needs coarser chunks
+        // to still be in gpu_meshes. Without this, approaching a planet
+        // causes it to disappear — the coarsest chunks (uploaded first) get
+        // evicted first, and the LOD fallback has no ancestor to render.
+        //
+        // GPU mesh buffers (~70KB each) remain on the GPU regardless of
+        // whether we hold the handle. MeshStore never frees uploaded meshes.
         self.col.remove_evicted(physics, &removed_keys);
 
         // --- Gravity computation ---
