@@ -150,9 +150,36 @@ impl TerrainColliders {
         physics: &mut PhysicsWorld,
         rebase_bodies: &RebaseBodies,
     ) {
-        // On first call, initialize anchor to the camera position.
+        // On first call, initialize anchor so that planet-relative positions
+        // map correctly into the existing rapier coordinate space.
+        //
+        // The ship is already at some rapier position (e.g. (60, -59, -30))
+        // from prior physics. cam_rel_m is the ship/camera's true planet-
+        // relative position. The anchor must satisfy:
+        //   ship_rapier_pos = cam_rel_m - anchor
+        // so:
+        //   anchor = cam_rel_m - ship_rapier_pos
+        //
+        // This ensures colliders placed at (chunk - anchor) end up at the
+        // correct rapier position relative to the ship body.
         if self.terrain_body.is_none() {
-            self.anchor_f64 = cam_rel_m;
+            let ship_rapier = rebase_bodies
+                .ship
+                .and_then(|h| physics.rigid_body_set.get(h))
+                .map(|b| *b.translation())
+                .unwrap_or(nalgebra::Vector3::zeros());
+            self.anchor_f64 = [
+                cam_rel_m[0] - ship_rapier.x as f64,
+                cam_rel_m[1] - ship_rapier.y as f64,
+                cam_rel_m[2] - ship_rapier.z as f64,
+            ];
+            log::info!(
+                "Collision anchor init: ship_rapier=({:.1},{:.1},{:.1}), \
+                 cam_rel_m=({:.0},{:.0},{:.0}), anchor=({:.0},{:.0},{:.0})",
+                ship_rapier.x, ship_rapier.y, ship_rapier.z,
+                cam_rel_m[0], cam_rel_m[1], cam_rel_m[2],
+                self.anchor_f64[0], self.anchor_f64[1], self.anchor_f64[2],
+            );
         }
 
         let terrain_body = *self.terrain_body.get_or_insert_with(|| {
@@ -333,7 +360,11 @@ fn build_heightfield_from_grid(
     .normalize();
 
     let normal = tu.cross(&tv).normalize();
-    let tv_ortho = normal.cross(&tu).normalize();
+    // Use tu × normal (not normal × tu) to get a right-handed frame.
+    // normal × tu gives a left-handed frame (det = -1) for some faces,
+    // producing an improper rotation that shrinks the collider's AABB
+    // and creates gaps between adjacent heightfields.
+    let tv_ortho = tu.cross(&normal).normalize();
 
     let rotation = nalgebra::UnitQuaternion::from_rotation_matrix(
         &nalgebra::Rotation3::from_matrix_unchecked(nalgebra::Matrix3::from_columns(&[
@@ -341,13 +372,12 @@ fn build_heightfield_from_grid(
         ])),
     );
 
-    // Offset the center vertically: rapier HeightField center is at
-    // scale.y * 0.5 above the base. We placed center at avg_r, but with
-    // the [0,1] rescaled matrix, the base is at min_h and top at max_h.
-    // The HeightField center in local Y is at (min_h + max_h) / 2.
-    // We need to offset from avg_r to (min_h + max_h) / 2 along the normal.
-    let mid_h = (min_h as f64 + max_h as f64) * 0.5;
-    let h_offset = (mid_h - avg_r) as f32;
+    // Rapier HeightField: local Y=0 is at the isometry position,
+    // heights go upward. With [0,1] rescaled values, Y=0 corresponds
+    // to min_h and Y=height_range to max_h. We need Y=0 at min_h's
+    // radial position, so offset from avg_r (where cx/cy/cz sits)
+    // down to min_h along the surface normal.
+    let h_offset = (min_h as f64 - avg_r) as f32;
     let final_cx = cx + normal.x * h_offset;
     let final_cy = cy + normal.y * h_offset;
     let final_cz = cz + normal.z * h_offset;
@@ -362,6 +392,15 @@ fn build_heightfield_from_grid(
         ship_colliders::PLAYER
             .union(ship_colliders::SHIP_HULL)
             .union(ship_colliders::SHIP_EXTERIOR),
+    );
+
+    log::debug!(
+        "HF collider: face={} lod={} x={} y={}, \
+         avg_r={:.0}, min_h={:.0}, max_h={:.0}, range={:.1}, \
+         rapier_pos=({:.1},{:.1},{:.1}), chunk_size={:.0}",
+        key.face, key.lod, key.x, key.y,
+        avg_r, min_h, max_h, height_range,
+        final_cx, final_cy, final_cz, chunk_size_m,
     );
 
     let collider = ColliderBuilder::heightfield(height_matrix_scaled, scale)

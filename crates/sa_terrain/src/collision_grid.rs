@@ -238,7 +238,10 @@ pub fn generate_collision_heights(key: ChunkKey, config: &TerrainConfig) -> Vec<
 
             // Store absolute radius (meters from planet center) so the
             // integration layer can build colliders in world space.
-            let r = config.radius_m + h as f64 * amplitude;
+            // Center displacement around radius: h ∈ [0,1] → (h-0.5) maps
+            // to [-0.5, 0.5], so the average surface sits at radius_m and
+            // mountains/valleys extend symmetrically above/below.
+            let r = config.radius_m + (h as f64 - 0.5) * amplitude;
             heights.push(r as f32);
         }
     }

@@ -214,8 +214,9 @@ impl App {
             vec![]
         };
 
-        // Force anchor rebase on first collision frame to ensure fresh
-        // rapier origin before HeightField colliders are placed.
+        // Force anchor rebase on first collision frame to centre the rapier
+        // origin on the ship. Runs AFTER update_collision_grid so the newly
+        // placed colliders are shifted together with the ship body.
         if first_collision
             && let Some(terrain_mgr) = &mut self.terrain
         {
