@@ -192,11 +192,34 @@ impl TerrainManager {
             (camera_galactic_ly.z - self.planet_center_ly.z) * LY_TO_M,
         ];
 
+        // Cap max_lod based on altitude to prevent LOD cascade.
+        // Without this, crossing one LOD boundary (e.g., LOD 9→10 at 62km)
+        // cascades ALL the way to LOD 18 because every finer LOD's range +
+        // node_radius exceeds the camera distance. This floods the quadtree
+        // with 800 LOD-18 nodes (50m patches at 62km — sub-pixel) that have
+        // no GPU meshes, causing the planet to disappear.
+        //
+        // The cap ensures only screen-relevant LODs are requested. At altitude
+        // h, the finest useful patch covers ~h/10 of the view. Below 100m
+        // altitude, full LOD is allowed.
+        let cam_dist = (cam_rel_m[0] * cam_rel_m[0]
+            + cam_rel_m[1] * cam_rel_m[1]
+            + cam_rel_m[2] * cam_rel_m[2]).sqrt();
+        let altitude_m = (cam_dist - self.config.radius_m).max(1.0);
+        let effective_max_lod = if altitude_m > 100.0 {
+            let face_size = self.config.radius_m * std::f64::consts::FRAC_PI_2;
+            let useful_patch = (altitude_m / 10.0).max(50.0);
+            let lod = (face_size / useful_patch).log2().ceil() as u8;
+            lod.min(self.max_lod)
+        } else {
+            self.max_lod
+        };
+
         let frustum = vp_planet_relative.map(sa_terrain::frustum::Frustum::from_vp_matrix);
         let visible = select_visible_nodes(
             cam_rel_m,
             self.config.radius_m,
-            self.max_lod,
+            effective_max_lod,
             self.max_displacement_m,
             frustum.as_ref(),
         );
