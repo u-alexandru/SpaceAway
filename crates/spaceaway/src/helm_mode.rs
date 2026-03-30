@@ -412,46 +412,85 @@ impl App {
             };
 
             // Apply warp/cruise movement with deceleration
-            let (delta, effective_speed) = drive_integration::galactic_position_delta_decel(
+            let (mut delta, effective_speed) = drive_integration::galactic_position_delta_decel(
                 &self.drive,
                 direction,
                 dt as f64,
                 target_dist,
             );
-            self.galactic_position.x += delta[0];
-            self.galactic_position.y += delta[1];
-            self.galactic_position.z += delta[2];
 
-            // Cruise planet boundary: clamp position to 100km above surface.
-            // This runs BEFORE rapier sync so the ship body never ends up
-            // inside the planet — even if a single frame overshoots.
+            // Cruise planet flythrough prevention: before moving, check if
+            // the delta would cross any planet's 100km boundary. At 5000c
+            // one frame = 25M km — post-hoc clamping doesn't work because
+            // the ship ends up on the far side of the planet.
             if self.drive.mode() == sa_ship::DriveMode::Cruise
                 && let Some((planet_pos, planet_radius_m)) = self.nearest_planet_info()
             {
                 let ly_to_m = 9.461e15_f64;
-                let cam_rel = [
-                    (self.galactic_position.x - planet_pos.x) * ly_to_m,
-                    (self.galactic_position.y - planet_pos.y) * ly_to_m,
-                    (self.galactic_position.z - planet_pos.z) * ly_to_m,
-                ];
-                let dist_m = (cam_rel[0] * cam_rel[0]
-                    + cam_rel[1] * cam_rel[1]
-                    + cam_rel[2] * cam_rel[2]).sqrt();
-                let atmo_boundary = planet_radius_m + 100_000.0;
-                if dist_m < atmo_boundary && dist_m > 1.0 {
-                    let scale = atmo_boundary / dist_m;
-                    self.galactic_position.x = planet_pos.x + cam_rel[0] * scale / ly_to_m;
-                    self.galactic_position.y = planet_pos.y + cam_rel[1] * scale / ly_to_m;
-                    self.galactic_position.z = planet_pos.z + cam_rel[2] * scale / ly_to_m;
+                let atmo_boundary_m = planet_radius_m + 100_000.0;
+                let atmo_boundary_ly = atmo_boundary_m / ly_to_m;
+
+                // Current distance from planet center
+                let dx = self.galactic_position.x - planet_pos.x;
+                let dy = self.galactic_position.y - planet_pos.y;
+                let dz = self.galactic_position.z - planet_pos.z;
+                let dist_before = (dx * dx + dy * dy + dz * dz).sqrt();
+
+                // Distance after proposed move
+                let nx = self.galactic_position.x + delta[0] - planet_pos.x;
+                let ny = self.galactic_position.y + delta[1] - planet_pos.y;
+                let nz = self.galactic_position.z + delta[2] - planet_pos.z;
+                let dist_after = (nx * nx + ny * ny + nz * nz).sqrt();
+
+                // If we'd cross the boundary (or closest approach is inside)
+                if dist_before > atmo_boundary_ly && dist_after < atmo_boundary_ly {
+                    // Scale delta so we stop at exactly the boundary
+                    // Binary search for the fraction t where dist = boundary
+                    let mut lo = 0.0_f64;
+                    let mut hi = 1.0_f64;
+                    for _ in 0..20 {
+                        let mid = (lo + hi) * 0.5;
+                        let mx = self.galactic_position.x + delta[0] * mid - planet_pos.x;
+                        let my = self.galactic_position.y + delta[1] * mid - planet_pos.y;
+                        let mz = self.galactic_position.z + delta[2] * mid - planet_pos.z;
+                        let md = (mx * mx + my * my + mz * mz).sqrt();
+                        if md < atmo_boundary_ly { hi = mid; } else { lo = mid; }
+                    }
+                    delta[0] *= lo;
+                    delta[1] *= lo;
+                    delta[2] *= lo;
+                    // Apply truncated delta then disengage
+                    self.galactic_position.x += delta[0];
+                    self.galactic_position.y += delta[1];
+                    self.galactic_position.z += delta[2];
                     self.drive.request_disengage();
                     if let Some(terrain_mgr) = &mut self.terrain
                         && let Some(renderer) = &mut self.renderer
                     {
                         terrain_mgr.flush_for_teleport(&mut renderer.terrain_slab);
                     }
-                    log::info!("Cruise auto-disengage: {:.0}km above planet surface",
-                        (atmo_boundary - planet_radius_m) / 1000.0);
+                    log::info!("Cruise auto-disengage: 100km above planet (flythrough prevented)");
+                } else if dist_after < atmo_boundary_ly && dist_before < atmo_boundary_ly {
+                    // Already inside boundary — clamp to boundary
+                    let dist_m = dist_before * ly_to_m;
+                    if dist_m > 1.0 {
+                        let scale = atmo_boundary_m / dist_m;
+                        self.galactic_position.x = planet_pos.x + dx * scale;
+                        self.galactic_position.y = planet_pos.y + dy * scale;
+                        self.galactic_position.z = planet_pos.z + dz * scale;
+                    }
+                    self.drive.request_disengage();
+                    log::info!("Cruise auto-disengage: clamped to 100km boundary");
+                } else {
+                    // Normal movement — not crossing boundary
+                    self.galactic_position.x += delta[0];
+                    self.galactic_position.y += delta[1];
+                    self.galactic_position.z += delta[2];
                 }
+            } else {
+                self.galactic_position.x += delta[0];
+                self.galactic_position.y += delta[1];
+                self.galactic_position.z += delta[2];
             }
 
             // Sync rapier body AFTER planet clamp so it never ends up inside.
