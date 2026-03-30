@@ -411,7 +411,7 @@ impl App {
                     .map(|t| self.galactic_position.distance_to(t.galactic_pos))
             };
 
-            // Apply warp movement with deceleration
+            // Apply warp/cruise movement with deceleration
             let (delta, effective_speed) = drive_integration::galactic_position_delta_decel(
                 &self.drive,
                 direction,
@@ -422,10 +422,39 @@ impl App {
             self.galactic_position.y += delta[1];
             self.galactic_position.z += delta[2];
 
-            // When terrain is active and in cruise/warp, sync the
-            // ship's rapier position to match galactic_position.
-            // This keeps the rebase system consistent and ensures
-            // the sphere barrier is at the correct relative position.
+            // Cruise planet boundary: clamp position to 100km above surface.
+            // This runs BEFORE rapier sync so the ship body never ends up
+            // inside the planet — even if a single frame overshoots.
+            if self.drive.mode() == sa_ship::DriveMode::Cruise
+                && let Some((planet_pos, planet_radius_m)) = self.nearest_planet_info()
+            {
+                let ly_to_m = 9.461e15_f64;
+                let cam_rel = [
+                    (self.galactic_position.x - planet_pos.x) * ly_to_m,
+                    (self.galactic_position.y - planet_pos.y) * ly_to_m,
+                    (self.galactic_position.z - planet_pos.z) * ly_to_m,
+                ];
+                let dist_m = (cam_rel[0] * cam_rel[0]
+                    + cam_rel[1] * cam_rel[1]
+                    + cam_rel[2] * cam_rel[2]).sqrt();
+                let atmo_boundary = planet_radius_m + 100_000.0;
+                if dist_m < atmo_boundary && dist_m > 1.0 {
+                    let scale = atmo_boundary / dist_m;
+                    self.galactic_position.x = planet_pos.x + cam_rel[0] * scale / ly_to_m;
+                    self.galactic_position.y = planet_pos.y + cam_rel[1] * scale / ly_to_m;
+                    self.galactic_position.z = planet_pos.z + cam_rel[2] * scale / ly_to_m;
+                    self.drive.request_disengage();
+                    if let Some(terrain_mgr) = &mut self.terrain
+                        && let Some(renderer) = &mut self.renderer
+                    {
+                        terrain_mgr.flush_for_teleport(&mut renderer.terrain_slab);
+                    }
+                    log::info!("Cruise auto-disengage: {:.0}km above planet surface",
+                        (atmo_boundary - planet_radius_m) / 1000.0);
+                }
+            }
+
+            // Sync rapier body AFTER planet clamp so it never ends up inside.
             if let Some(terrain_mgr) = &self.terrain
                 && let Some(ship) = &self.ship
                 && let Some(body) = self.physics.rigid_body_set.get_mut(ship.body_handle)
@@ -444,45 +473,6 @@ impl App {
             }
 
             let pos_after = self.galactic_position;
-
-            // Auto-disengage cruise at 100km above any planet surface.
-            // Uses the solar system directly so it works even before
-            // terrain activates (at 5000c, terrain zone crosses in one frame).
-            if self.drive.mode() == sa_ship::DriveMode::Cruise
-                && let Some((planet_pos, planet_radius_m)) = self.nearest_planet_info()
-            {
-                    let ly_to_m = 9.461e15_f64;
-                    let cam_rel = [
-                        (self.galactic_position.x - planet_pos.x) * ly_to_m,
-                        (self.galactic_position.y - planet_pos.y) * ly_to_m,
-                        (self.galactic_position.z - planet_pos.z) * ly_to_m,
-                    ];
-                    let dist_m = (cam_rel[0] * cam_rel[0]
-                        + cam_rel[1] * cam_rel[1]
-                        + cam_rel[2] * cam_rel[2]).sqrt();
-                    let atmo_boundary = planet_radius_m + 100_000.0;
-                    if dist_m < atmo_boundary && dist_m > 1.0 {
-                        // Clamp position to 100km above surface.
-                        let scale = atmo_boundary / dist_m;
-                        self.galactic_position.x = planet_pos.x + cam_rel[0] * scale / ly_to_m;
-                        self.galactic_position.y = planet_pos.y + cam_rel[1] * scale / ly_to_m;
-                        self.galactic_position.z = planet_pos.z + cam_rel[2] * scale / ly_to_m;
-                        self.drive.request_disengage();
-                        // Zero ship velocity so player doesn't drift
-                        if let Some(ship) = &self.ship
-                            && let Some(body) = self.physics.rigid_body_set.get_mut(ship.body_handle)
-                        {
-                            body.set_linvel(nalgebra::Vector3::zeros(), true);
-                        }
-                        if let Some(terrain_mgr) = &mut self.terrain
-                            && let Some(renderer) = &mut self.renderer
-                        {
-                            terrain_mgr.flush_for_teleport(&mut renderer.terrain_slab);
-                        }
-                        log::info!("Cruise auto-disengage: {:.0}km above planet surface",
-                            (atmo_boundary - planet_radius_m) / 1000.0);
-                    }
-            }
 
             // Approach voice + cascade auto-disengage
             if let Some(dist) = target_dist {
@@ -509,11 +499,11 @@ impl App {
                 }
 
                 // Cruise → Impulse: auto-disengage near locked star target.
-                // Skip when terrain is active — the planet approach handler
+                // Skip when near a planet — the planet boundary handler
                 // (above) manages cruise disengage at 100km from surface.
                 if self.drive.mode() == sa_ship::DriveMode::Cruise
                     && dist < drive_integration::CRUISE_DISENGAGE_LY
-                    && self.terrain.is_none()
+                    && self.nearest_planet_info().is_none()
                 {
                     self.drive.request_disengage();
                     log::info!("Cruise disengaged at {:.6} ly ({:.0} AU) from target",
