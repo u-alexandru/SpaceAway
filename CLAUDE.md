@@ -215,7 +215,8 @@ Primary target: macOS (Metal via wgpu). Secondary: Windows (DX12/Vulkan via wgpu
 ## Upcoming Features (prioritized)
 
 1. **CDLOD terrain — landing + surface walking** — terrain rendering and collision grid complete; next: ship landing sequence, player walkable surfaces (`sa_terrain` crate)
-2. **Resource gathering** — asteroid mining, gas giant scooping, exotic matter deposits
+2. **Gas/ice giant entry** — atmospheric dive into gas giants (HotGiant, WarmGiant, ColdGiant, CyanIce, TealIce) with upgraded ship hull. Currently excluded from terrain activation due to rapier f32 AABB limits at 80,000+ km radius. Requires: double-precision physics or origin-rebased chunk placement, atmospheric pressure/heat systems, layered cloud rendering. Ship upgrade prerequisite: reinforced hull + heat shielding.
+3. **Resource gathering** — asteroid mining, gas giant scooping, exotic matter deposits
 3. **Navigation console** — full 3D star map, route planning, ship database with bookmarks
 4. **Alpha-blend render pass** — proper transparent atmosphere shells and planetary rings
 5. **FBX/GLTF asset import** — load purchased 3D models (buttons, levers) via `gltf` crate

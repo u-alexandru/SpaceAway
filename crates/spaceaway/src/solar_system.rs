@@ -279,9 +279,11 @@ impl ActiveSystem {
     pub fn planet_data(&self, index: usize) -> Option<(u64, sa_universe::PlanetSubType, f32, f32, f32)> {
         let body = self.bodies.get(index)?;
         for planet in &self.system.planets {
-            // Gas/ice giants are not landable — no terrain, no collision.
-            // Activating terrain on an 80,000 km radius body causes rapier
-            // to panic (f32 AABB overflow at 400,000+ km coordinates).
+            // Gas/ice giants: currently excluded from terrain activation.
+            // Rapier panics at 80,000+ km radius (f32 AABB overflow).
+            // FUTURE: atmospheric dive with upgraded ship hull. Needs
+            // double-precision physics or origin-rebased chunk placement.
+            // See CLAUDE.md "Upcoming Features" item 2.
             if matches!(planet.sub_type,
                 sa_universe::PlanetSubType::HotGiant
                 | sa_universe::PlanetSubType::WarmGiant
