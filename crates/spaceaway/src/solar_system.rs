@@ -279,6 +279,18 @@ impl ActiveSystem {
     pub fn planet_data(&self, index: usize) -> Option<(u64, sa_universe::PlanetSubType, f32, f32, f32)> {
         let body = self.bodies.get(index)?;
         for planet in &self.system.planets {
+            // Gas/ice giants are not landable — no terrain, no collision.
+            // Activating terrain on an 80,000 km radius body causes rapier
+            // to panic (f32 AABB overflow at 400,000+ km coordinates).
+            if matches!(planet.sub_type,
+                sa_universe::PlanetSubType::HotGiant
+                | sa_universe::PlanetSubType::WarmGiant
+                | sa_universe::PlanetSubType::ColdGiant
+                | sa_universe::PlanetSubType::CyanIce
+                | sa_universe::PlanetSubType::TealIce
+            ) {
+                continue;
+            }
             let planet_radius_m = planet.radius_earth as f64 * 6_371_000.0;
             if (body.radius_m - planet_radius_m).abs() < 1000.0 {
                 // Displacement as fraction of radius, capped at 20km max.
