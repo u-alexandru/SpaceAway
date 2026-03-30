@@ -69,6 +69,10 @@ pub struct TerrainManager {
     surface_gravity_ms2: f32,
     /// Collider management state.
     col: TerrainColliders,
+    /// Once true, the icosphere stays hidden until terrain deactivates.
+    /// Prevents flickering when LOD changes increase visible node count
+    /// faster than streaming can fill them.
+    icosphere_committed: bool,
     /// Frame counter for periodic diagnostics.
     diag_frame: u64,
 }
@@ -98,6 +102,7 @@ impl TerrainManager {
             max_displacement_m,
             surface_gravity_ms2,
             col: TerrainColliders::new(),
+            icosphere_committed: false,
             diag_frame: 0,
         }
     }
@@ -253,27 +258,36 @@ impl TerrainManager {
             camera_galactic_ly,
         );
 
-        // Don't hide the icosphere until terrain has enough chunks for visual
-        // coverage. Require BOTH conditions:
-        // 1. At least 6 chunks (one per cube face for basic geometric coverage)
-        // 2. At least 33% of visible nodes are GPU-ready (ensures the terrain
-        //    covers enough of the visible area to not look like floating panels)
+        // Icosphere hiding with commit-and-hold:
+        // Once the icosphere is hidden, it STAYS hidden until terrain deactivates.
+        // This prevents flickering when the camera moves closer and the quadtree
+        // produces more visible nodes (finer LODs) that haven't streamed yet —
+        // the existing coarser chunks still cover the area visually.
         //
-        // 33% (not 50%) because streaming fills nearest-first: the hemisphere
-        // facing the camera fills first while the back hemisphere takes longer.
-        // 33% coverage of visible nodes means the front hemisphere is mostly
-        // filled, which is good enough to hide the icosphere.
-        let visible_in_gpu = visible.iter().filter(|n| {
-            let key = ChunkKey {
-                face: n.face as u8,
-                lod: n.lod,
-                x: n.x,
-                y: n.y,
-            };
-            self.gpu_meshes.contains_key(&key)
-        }).count();
-        let hide_icosphere = visible_in_gpu >= 6
-            && visible_in_gpu * 3 >= visible.len();
+        // Initial hide requires 33% of visible nodes to be GPU-ready AND at
+        // least 6 chunks (one per face). After that, the decision is locked.
+        let hide_icosphere = if self.icosphere_committed {
+            true
+        } else {
+            let visible_in_gpu = visible.iter().filter(|n| {
+                let key = ChunkKey {
+                    face: n.face as u8,
+                    lod: n.lod,
+                    x: n.x,
+                    y: n.y,
+                };
+                self.gpu_meshes.contains_key(&key)
+            }).count();
+            let ready = visible_in_gpu >= 6 && visible_in_gpu * 3 >= visible.len();
+            if ready {
+                self.icosphere_committed = true;
+                log::info!(
+                    "Icosphere hidden: {}/{} visible chunks GPU-ready",
+                    visible_in_gpu, visible.len(),
+                );
+            }
+            ready
+        };
 
         TerrainFrameResult {
             draw_commands,
