@@ -352,7 +352,10 @@ impl App {
             let dy_f64 = target.galactic_pos.y - self.galactic_position.y;
             let dz_f64 = target.galactic_pos.z - self.galactic_position.z;
             let len_f64 = (dx_f64 * dx_f64 + dy_f64 * dy_f64 + dz_f64 * dz_f64).sqrt();
-            if len_f64 > 1e-15 { // ~9.5 meters in ly — practically any nonzero distance
+            // Stop auto-orient within 0.001 ly (~1 AU) of target.
+            // At closer range the direction vector can flip 180° when the
+            // ship passes through the star, causing violent spinning.
+            if len_f64 > 0.001 {
                 let to_target = glam::Vec3::new(
                     (dx_f64 / len_f64) as f32,
                     (dy_f64 / len_f64) as f32,
