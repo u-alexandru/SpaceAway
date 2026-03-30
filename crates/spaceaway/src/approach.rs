@@ -6,18 +6,11 @@
 
 use sa_math::WorldPos;
 
-// ── Constants ───────────────────────────────────────────────────────
-const LY_TO_M: f64 = 9.461e15;
-const PHASE_APPROACHING: f64 = 50.0; // × radius
-const PHASE_ORBIT: f64 = 5.0;
-const PHASE_UPPER_ATMO: f64 = 2.0;
-const PHASE_LOWER_ATMO: f64 = 0.2;
-const PHASE_LANDING_M: f64 = 500.0;
-const DEPART_APPROACHING: f64 = 60.0; // hysteresis
-const DEPART_ORBIT: f64 = 6.0;
-const APPROACH_TIME_SECONDS: f64 = 8.0;
-const CRUISE_DISENGAGE_ALT_M: f64 = 100_000.0;
-const EXCLUSION_RADIUS_M: f64 = 100_000.0;
+use crate::constants::{
+    APPROACH_TIME_SECONDS, CRUISE_DISENGAGE_ALT_M, DEPART_APPROACHING, DEPART_ORBIT,
+    EXCLUSION_RADIUS_M, LY_TO_M, PHASE_APPROACHING, PHASE_LANDING_M, PHASE_LOWER_ATMO,
+    PHASE_ORBIT, PHASE_UPPER_ATMO,
+};
 
 // ── Phase ───────────────────────────────────────────────────────────
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

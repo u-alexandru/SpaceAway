@@ -1,4 +1,5 @@
 use super::App;
+use crate::constants::{AU_IN_LY, LY_TO_M, SYSTEM_BOUNDARY_AU};
 use crate::terrain_colliders;
 use crate::terrain_integration;
 use crate::ui;
@@ -179,9 +180,9 @@ impl App {
                 let aspect = gpu.config.width as f32 / gpu.config.height as f32;
                 let vp_f32 = self.camera.view_projection_matrix(aspect);
                 let planet_ly = terrain_mgr.frozen_planet_center_ly();
-                let cam_rel_x = (self.galactic_position.x - planet_ly.x) * 9.461e15;
-                let cam_rel_y = (self.galactic_position.y - planet_ly.y) * 9.461e15;
-                let cam_rel_z = (self.galactic_position.z - planet_ly.z) * 9.461e15;
+                let cam_rel_x = (self.galactic_position.x - planet_ly.x) * LY_TO_M;
+                let cam_rel_y = (self.galactic_position.y - planet_ly.y) * LY_TO_M;
+                let cam_rel_z = (self.galactic_position.z - planet_ly.z) * LY_TO_M;
                 let translate = glam::Mat4::from_translation(Vec3::new(
                     -cam_rel_x as f32, -cam_rel_y as f32, -cam_rel_z as f32,
                 ));
@@ -286,7 +287,7 @@ impl App {
                 );
             } else if let Some(sys) = &self.active_system {
                 let positions = sys.compute_positions_ly_pub();
-                let ly_to_m = 9.461e15_f64;
+                let ly_to_m = LY_TO_M;
                 let mut best_dist_km = f64::MAX;
                 let mut best_ratio = f64::MAX;
                 for (i, pos) in positions.iter().enumerate() {
@@ -353,7 +354,7 @@ impl App {
                     planet_dist_km: {
                         // Show distance to nearest planet surface when < 1000km
                         // and heading toward it (dot product check).
-                        let ly_to_m = 9.461e15_f64;
+                        let ly_to_m = LY_TO_M;
                         let mut best: Option<f32> = None;
                         // Always show when terrain is active (any altitude).
                         // In a system without terrain, show within 50,000km.
@@ -522,8 +523,7 @@ impl App {
             // otherwise the system loads on warp arrival and immediately unloads.
             if let Some(system) = &self.active_system {
                 let dist = self.galactic_position.distance_to(system.star_galactic_pos);
-                let au_in_ly = 1.581e-5_f64;
-                if dist > 1000.0 * au_in_ly {
+                if dist > SYSTEM_BOUNDARY_AU * AU_IN_LY {
                     log::info!("Left system boundary -- unloading");
                     if let Some(t) = &mut self.terrain { t.cleanup(&mut self.physics); }
                     self.terrain = None;
@@ -615,7 +615,7 @@ impl App {
                             let live_dist = self.galactic_position.distance_to(target.galactic_pos);
 
                             // Convert galactic ly position to camera-relative meters
-                            let ly_to_m: f64 = 9.461e15;
+                            let ly_to_m: f64 = LY_TO_M;
                             let dx = (target.galactic_pos.x - self.galactic_position.x) * ly_to_m;
                             let dy = (target.galactic_pos.y - self.galactic_position.y) * ly_to_m;
                             let dz = (target.galactic_pos.z - self.galactic_position.z) * ly_to_m;

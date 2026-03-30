@@ -175,7 +175,7 @@ pub fn warp_deceleration(distance_to_target_ly: f64) -> f64 {
 
 /// Distance at which warp auto-disengages to cruise (~0.01 ly ≈ 630 AU).
 /// Cruise can comfortably cover this distance.
-pub const WARP_DISENGAGE_LY: f64 = 0.01;
+pub use crate::constants::WARP_DISENGAGE_LY;
 
 /// Like galactic_position_delta but with deceleration toward a target.
 /// `target_distance_ly`: distance to locked target (None = no deceleration).

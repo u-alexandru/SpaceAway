@@ -1,4 +1,5 @@
 use super::App;
+use crate::constants::{AU_IN_LY, LY_TO_M, M_TO_LY, WARP_DISENGAGE_LY};
 use crate::drive_integration;
 use crate::landing;
 use crate::navigation;
@@ -322,19 +323,17 @@ impl App {
                 let anchor = terrain_mgr.anchor_f64();
                 let post = body.translation();
                 let planet = terrain_mgr.frozen_planet_center_ly();
-                let ly_to_m = 9.461e15_f64;
-                self.galactic_position.x = planet.x + (anchor[0] + post.x as f64) / ly_to_m;
-                self.galactic_position.y = planet.y + (anchor[1] + post.y as f64) / ly_to_m;
-                self.galactic_position.z = planet.z + (anchor[2] + post.z as f64) / ly_to_m;
+                self.galactic_position.x = planet.x + (anchor[0] + post.x as f64) / LY_TO_M;
+                self.galactic_position.y = planet.y + (anchor[1] + post.y as f64) / LY_TO_M;
+                self.galactic_position.z = planet.z + (anchor[2] + post.z as f64) / LY_TO_M;
             } else if let Some(pre) = ship_pos_pre_helm
                 && let Some(ship) = &self.ship
                 && let Some(body) = self.physics.get_body(ship.body_handle)
             {
                 let post = body.translation();
-                let m_to_ly = 1.0 / 9.461e15_f64;
-                self.galactic_position.x += (post.x as f64 - pre.x as f64) * m_to_ly;
-                self.galactic_position.y += (post.y as f64 - pre.y as f64) * m_to_ly;
-                self.galactic_position.z += (post.z as f64 - pre.z as f64) * m_to_ly;
+                self.galactic_position.x += (post.x as f64 - pre.x as f64) * M_TO_LY;
+                self.galactic_position.y += (post.y as f64 - pre.y as f64) * M_TO_LY;
+                self.galactic_position.z += (post.z as f64 - pre.z as f64) * M_TO_LY;
             }
         }
 
@@ -419,8 +418,7 @@ impl App {
                     // At or below disengage altitude — zero delta
                     delta = [0.0, 0.0, 0.0];
                 } else {
-                    let ly_to_m = 9.461e15_f64;
-                    let cap_ly_s = cap_ms / ly_to_m;
+                    let cap_ly_s = cap_ms / LY_TO_M;
                     let max_delta = cap_ly_s * dt as f64;
                     let delta_len = (delta[0]*delta[0] + delta[1]*delta[1] + delta[2]*delta[2]).sqrt();
                     if delta_len > max_delta && delta_len > 1e-30 {
@@ -500,11 +498,11 @@ impl App {
                 // well at 50 AU won't fire because warp disengages at 630 AU).
                 if self.drive.mode() == sa_ship::DriveMode::Warp
                     && matches!(self.drive.status(), sa_ship::DriveStatus::Engaged)
-                    && dist < drive_integration::WARP_DISENGAGE_LY
+                    && dist < WARP_DISENGAGE_LY
                 {
                     self.drive.request_disengage();
                     log::info!("Warp disengaged at {:.4} ly ({:.0} AU) from target",
-                        dist, dist / 1.581e-5);
+                        dist, dist / AU_IN_LY);
 
                     // Load solar system from locked star (same as gravity well)
                     if self.active_system.is_none()

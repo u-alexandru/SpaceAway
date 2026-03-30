@@ -12,8 +12,7 @@ use sa_terrain::{ChunkKey, TerrainConfig};
 
 use spaceaway::terrain_colliders::TerrainColliders;
 
-/// Light-years to meters conversion factor.
-const LY_TO_M: f64 = 9.461e15;
+use crate::constants::LY_TO_M;
 
 // ---------------------------------------------------------------------------
 // TerrainFrameResult

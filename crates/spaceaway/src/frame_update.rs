@@ -1,4 +1,5 @@
 use super::App;
+use crate::constants::LY_TO_M;
 
 impl App {
     /// Update approach state BEFORE helm_mode runs, so cruise speed cap
@@ -6,7 +7,7 @@ impl App {
     pub(super) fn update_approach_state(&mut self) {
         let find_planet = self.active_system.as_ref().and_then(|sys| {
             let positions = sys.compute_positions_ly_pub();
-            let ly_to_m = 9.461e15_f64;
+            let ly_to_m = LY_TO_M;
             let mut best: Option<(usize, sa_math::WorldPos, f64, f64)> = None;
             for (i, pos) in positions.iter().enumerate() {
                 let r = match sys.body_radius_m(i) {

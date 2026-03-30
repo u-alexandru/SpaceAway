@@ -17,21 +17,10 @@ use sa_ship::Ship;
 
 use spaceaway::ship_colliders::TERRAIN;
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-/// Max raycast distance for ground detection (metres).
-const MAX_RAY_DIST: f32 = 100.0;
-
-/// Clearance below which FLYING → SLIDING triggers (metres).
-const SLIDING_THRESHOLD: f32 = 1.0;
-
-/// Clearance above which SLIDING → FLYING may trigger (metres, all skids).
-const FLYING_THRESHOLD: f32 = 10.0;
-
-/// Speed below which SLIDING → LANDED lock is allowed (m/s).
-const LOCK_SPEED_THRESHOLD: f32 = 5.0;
+use crate::constants::{
+    FLYING_THRESHOLD_M, IMPACT_CLEAN_MS, IMPACT_MAJOR_MS, IMPACT_MINOR_MS,
+    LANDING_RAY_DIST_M, LOCK_SPEED_THRESHOLD_MS, SLIDING_THRESHOLD_M,
+};
 
 // ---------------------------------------------------------------------------
 // Public types — kept at top of file per convention
@@ -53,11 +42,11 @@ pub enum ImpactCategory {
 impl ImpactCategory {
     /// Classify a combined impact speed (m/s).
     pub fn from_speed(speed_ms: f32) -> Self {
-        if speed_ms < 10.0 {
+        if speed_ms < IMPACT_CLEAN_MS {
             ImpactCategory::Clean
-        } else if speed_ms < 30.0 {
+        } else if speed_ms < IMPACT_MINOR_MS {
             ImpactCategory::Minor
-        } else if speed_ms < 80.0 {
+        } else if speed_ms < IMPACT_MAJOR_MS {
             ImpactCategory::Major
         } else {
             ImpactCategory::Destroyed
@@ -87,7 +76,7 @@ pub struct LandingImpactEvent {
 pub enum LandingState {
     /// Airborne — no skid is near the terrain.
     Flying,
-    /// At least one skid is within `SLIDING_THRESHOLD` of terrain.
+    /// At least one skid is within `SLIDING_THRESHOLD_M` of terrain.
     /// The ship may be rolling/sliding on the surface.
     Sliding,
     /// Player has locked the ship down; ship is stationary on terrain.
@@ -103,7 +92,7 @@ pub struct LandingUpdate {
     pub previous_state: LandingState,
     /// Minimum clearance across all skids, or `None` when no terrain is detected.
     pub min_clearance: Option<f32>,
-    /// Whether any skid raycast detected terrain contact (clearance < SLIDING_THRESHOLD).
+    /// Whether any skid raycast detected terrain contact (clearance < SLIDING_THRESHOLD_M).
     pub skid_contact: bool,
     /// Impact event if the state transitioned to `Sliding` (first ground contact) this frame, else `None`.
     pub impact: Option<LandingImpactEvent>,
@@ -180,7 +169,7 @@ impl LandingSystem {
         // Cast downward rays from each skid position.
         let clearances = self.cast_skid_rays(p.physics, p.ship_iso, &p.gravity_dir);
         let min_clearance = clearances.iter().copied().reduce(f32::min);
-        let skid_contact = min_clearance.is_some_and(|c| c < SLIDING_THRESHOLD);
+        let skid_contact = min_clearance.is_some_and(|c| c < SLIDING_THRESHOLD_M);
 
         let mut impact_event: Option<LandingImpactEvent> = None;
         let consume_lock = self.lock_requested;
@@ -188,7 +177,7 @@ impl LandingSystem {
 
         match self.state {
             LandingState::Flying => {
-                if min_clearance.is_some_and(|c| c < SLIDING_THRESHOLD) {
+                if min_clearance.is_some_and(|c| c < SLIDING_THRESHOLD_M) {
                     // FLYING → SLIDING: actual ground contact — emit impact event now.
                     // Use the vertical speed component (along gravity) for impact severity,
                     // so a horizontal graze at high speed doesn't register as a hard landing.
@@ -207,12 +196,12 @@ impl LandingSystem {
 
             LandingState::Sliding => {
                 // Allow unlock request to be a no-op here (already sliding).
-                if consume_lock && p.ship_speed_ms < LOCK_SPEED_THRESHOLD {
+                if consume_lock && p.ship_speed_ms < LOCK_SPEED_THRESHOLD_MS {
                     // Transition to Landed — lock the ship in place.
                     self.state = LandingState::Landed;
                 } else {
                     // Check if we can return to Flying.
-                    let all_clear = min_clearance.map(|c| c > FLYING_THRESHOLD).unwrap_or(true);
+                    let all_clear = min_clearance.map(|c| c > FLYING_THRESHOLD_M).unwrap_or(true);
                     if all_clear && p.engine_on && p.throttle > 0.0 {
                         self.state = LandingState::Flying;
                     }
@@ -244,7 +233,7 @@ impl LandingSystem {
     /// Cast one ray per skid along the gravity direction and return clearances.
     ///
     /// Returns an array of 4 floats.  If a skid ray misses terrain the
-    /// corresponding value is `MAX_RAY_DIST` (treated as "no terrain nearby").
+    /// corresponding value is `LANDING_RAY_DIST_M` (treated as "no terrain nearby").
     fn cast_skid_rays(
         &self,
         physics: &PhysicsWorld,
@@ -255,14 +244,14 @@ impl LandingSystem {
             QueryFilter::default().groups(InteractionGroups::new(Group::ALL, TERRAIN));
 
         let ray_dir = gravity_dir.into_inner();
-        let mut clearances = [MAX_RAY_DIST; 4];
+        let mut clearances = [LANDING_RAY_DIST_M; 4];
 
         for (i, local) in Ship::skid_positions().iter().enumerate() {
             let local_pt = Point3::new(local[0], local[1], local[2]);
             let world_pt = ship_iso.transform_point(&local_pt);
 
             if let Some((_handle, toi)) =
-                physics.cast_ray(world_pt, ray_dir, MAX_RAY_DIST, true, filter)
+                physics.cast_ray(world_pt, ray_dir, LANDING_RAY_DIST_M, true, filter)
             {
                 clearances[i] = toi;
             }
@@ -290,7 +279,7 @@ fn per_skid_speeds_from_clearance(clearances: &[f32; 4], ship_speed_ms: f32) -> 
     // Weight each skid by (1 / clearance).  Skids with max clearance get 0.
     let mut weights = [0.0f32; 4];
     for (i, &c) in clearances.iter().enumerate() {
-        if c < MAX_RAY_DIST {
+        if c < LANDING_RAY_DIST_M {
             weights[i] = 1.0 / c.max(0.01);
         }
     }
@@ -442,7 +431,7 @@ mod tests {
 
     #[test]
     fn per_skid_speeds_uniform_when_no_terrain() {
-        let clearances = [MAX_RAY_DIST; 4];
+        let clearances = [LANDING_RAY_DIST_M; 4];
         let speeds = per_skid_speeds_from_clearance(&clearances, 8.0);
         for s in &speeds {
             assert!((*s - 2.0).abs() < 1e-4, "expected 2.0, got {s}");
@@ -451,7 +440,7 @@ mod tests {
 
     #[test]
     fn per_skid_speeds_sum_to_total() {
-        let clearances = [0.5, 0.8, 2.0, MAX_RAY_DIST];
+        let clearances = [0.5, 0.8, 2.0, LANDING_RAY_DIST_M];
         let speed = 20.0;
         let speeds = per_skid_speeds_from_clearance(&clearances, speed);
         let total: f32 = speeds.iter().sum();

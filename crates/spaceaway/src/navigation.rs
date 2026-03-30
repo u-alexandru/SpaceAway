@@ -6,6 +6,8 @@ use sa_universe::sector::{SectorCoord, generate_sector};
 use sa_universe::seed::MasterSeed;
 use sa_universe::{ObjectId, SpectralClass};
 
+use crate::constants::{AU_IN_LY, GRAVITY_WELL_AU, MAX_NEARBY_STARS, NEARBY_STAR_RANGE_LY};
+
 /// A nearby star visible for navigation.
 #[derive(Clone)]
 pub struct NavStar {
@@ -78,8 +80,7 @@ impl Navigation {
                     let sector = generate_sector(self.seed, coord);
                     for placed in &sector.stars {
                         let dist = galactic_pos.distance_to(placed.position);
-                        if dist < 50.0 && dist > 0.01 {
-                            // within 50 ly, not self
+                        if dist < NEARBY_STAR_RANGE_LY && dist > 0.01 {
                             stars.push(NavStar {
                                 id: placed.id,
                                 galactic_pos: placed.position,
@@ -96,7 +97,7 @@ impl Navigation {
         }
 
         stars.sort_by(|a, b| a.distance_ly.partial_cmp(&b.distance_ly).unwrap());
-        stars.truncate(15); // Keep closest 15
+        stars.truncate(MAX_NEARBY_STARS);
         self.nearby_stars = stars;
     }
 
@@ -125,8 +126,7 @@ impl Navigation {
     /// Otherwise it will re-trigger on the current system's star every frame.
     /// Call only during warp when no system is active.
     pub fn check_gravity_well(&self, galactic_pos: WorldPos) -> Option<&NavStar> {
-        let au_in_ly: f64 = 1.581e-5; // 1 AU in light-years
-        let drop_distance_ly = 50.0 * au_in_ly; // 50 AU
+        let drop_distance_ly = GRAVITY_WELL_AU * AU_IN_LY;
 
         // Check locked target first
         if let Some(target) = &self.locked_target {
@@ -212,8 +212,7 @@ impl Navigation {
         pos_before: WorldPos,
         pos_after: WorldPos,
     ) -> Option<(NavStar, WorldPos)> {
-        let au_in_ly: f64 = 1.581e-5;
-        let well_radius = 50.0 * au_in_ly;
+        let well_radius = GRAVITY_WELL_AU * AU_IN_LY;
 
         // Segment vector
         let seg = [
@@ -290,8 +289,7 @@ impl Navigation {
         velocity_dir: [f64; 3],
         lookahead_ly: f64,
     ) -> Option<&NavStar> {
-        let au_in_ly: f64 = 1.581e-5;
-        let well_radius = 50.0 * au_in_ly;
+        let well_radius = GRAVITY_WELL_AU * AU_IN_LY;
 
         let future_pos = WorldPos::new(
             pos.x + velocity_dir[0] * lookahead_ly,
