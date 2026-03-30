@@ -495,8 +495,9 @@ impl App {
                     log::info!("Approaching destination — warp deceleration engaged");
                 }
 
-                // Warp → Impulse: auto-disengage at 0.01 ly
-                // Then cascade to cruise if approaching a planet.
+                // Warp → auto-disengage at 0.01 ly from locked target.
+                // Also load the solar system if not already loaded (gravity
+                // well at 50 AU won't fire because warp disengages at 630 AU).
                 if self.drive.mode() == sa_ship::DriveMode::Warp
                     && matches!(self.drive.status(), sa_ship::DriveStatus::Engaged)
                     && dist < drive_integration::WARP_DISENGAGE_LY
@@ -505,18 +506,44 @@ impl App {
                     log::info!("Warp disengaged at {:.4} ly ({:.0} AU) from target",
                         dist, dist / 1.581e-5);
 
-                    // Warp → cruise cascade when approaching a planet
-                    if let Some(ref state) = self.approach_state {
-                        if state.cascade_warp_to_cruise {
-                            self.drive.request_engage(sa_ship::DriveMode::Cruise);
-                            self.audio.announce(sa_audio::VoiceId::AllSystemsReady);
-                            log::info!("Warp → cruise cascade: approaching planet");
-                        } else {
-                            self.audio.announce(sa_audio::VoiceId::AllSystemsReady);
-                        }
-                    } else {
-                        self.audio.announce(sa_audio::VoiceId::AllSystemsReady);
+                    // Load solar system from locked star (same as gravity well)
+                    if self.active_system.is_none()
+                        && let Some(target) = &self.navigation.locked_target
+                    {
+                            let nav_id = target.id;
+                            let nav_name = target.catalog_name.clone();
+                            if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
+                                let sector_coord = sa_universe::SectorCoord::new(
+                                    nav_id.sector_x().into(),
+                                    nav_id.sector_y().into(),
+                                    nav_id.sector_z().into(),
+                                );
+                                let sector = sa_universe::sector::generate_sector(
+                                    MasterSeed(42),
+                                    sector_coord,
+                                );
+                                if let Some(placed) = sector.stars.iter().find(|s| s.id == nav_id) {
+                                    let system = solar_system::ActiveSystem::load(
+                                        nav_id,
+                                        placed,
+                                        &mut renderer.mesh_store,
+                                        &gpu.device,
+                                    );
+                                    log::info!("System loaded on warp arrival: {} bodies ({})",
+                                        system.body_count(), nav_name);
+                                    if let Some(t) = &mut self.terrain { t.cleanup(&mut self.physics); }
+                                    self.terrain = None;
+                                    self.terrain_gravity = None;
+                                    self.active_system = Some(system);
+                                }
+                            }
                     }
+
+                    // Cascade to cruise if there's a planet nearby
+                    // (approach_state will be updated next frame with the new system)
+                    self.drive.request_engage(sa_ship::DriveMode::Cruise);
+                    self.audio.announce(sa_audio::VoiceId::AllSystemsReady);
+                    log::info!("Warp → cruise cascade on arrival");
                 }
 
                 self.prev_target_dist = Some(dist);
