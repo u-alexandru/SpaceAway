@@ -4,7 +4,7 @@ pub const SPEED_OF_LIGHT: f64 = 299_792_458.0;
 pub const METERS_PER_LY: f64 = 9.461e15;
 pub const LY_PER_SECOND_AT_C: f64 = 3.169e-8;
 pub const CRUISE_MIN_C: f64 = 0.00033; // ~100 km/s — fills gap between impulse and interplanetary
-pub const CRUISE_MAX_C: f64 = 500.0;
+pub const CRUISE_MAX_C: f64 = 5_000.0;
 pub const WARP_MIN_C: f64 = 100_000.0;
 pub const WARP_MAX_C: f64 = 5_000_000.0;
 pub const WARP_SPOOL_TIME: f32 = 5.0;
@@ -253,13 +253,13 @@ mod tests {
     }
 
     #[test]
-    fn cruise_ly_s_at_500c() {
+    fn cruise_ly_s_at_5000c() {
         let mut dc = DriveController::new();
         dc.request_engage(DriveMode::Cruise);
         dc.set_speed_fraction(1.0);
         let ly_s = dc.current_speed_ly_s();
-        // 500c * 3.169e-8 ≈ 1.5845e-5
-        assert!((ly_s - 1.585e-5).abs() < 1e-7, "ly_s={ly_s}");
+        // 5000c * 3.169e-8 ≈ 1.5845e-4
+        assert!((ly_s - 1.585e-4).abs() < 1e-6, "ly_s={ly_s}");
     }
 
     #[test]
@@ -300,7 +300,7 @@ mod tests {
         let mut dc = DriveController::new();
         dc.request_engage(DriveMode::Cruise);
         dc.set_speed_fraction(1.0);
-        assert!(dc.current_speed_c() > 400.0, "should be at cruise speed");
+        assert!(dc.current_speed_c() > 4000.0, "should be at cruise speed");
         // Engage warp — should start spooling, speed drops to 0
         assert!(dc.request_engage(DriveMode::Warp));
         assert_eq!(dc.mode(), DriveMode::Warp);

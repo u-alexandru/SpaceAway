@@ -95,11 +95,11 @@ impl DriveVisualState {
             target_beta = 0.0;
             target_streak = 0.0;
             target_warp = 0.0;
-        } else if speed_c <= 500.0 {
-            // Cruise range (1c–500c)
+        } else if speed_c <= 5_000.0 {
+            // Cruise range (1c–5,000c)
             target_beta = 0.99;
-            // Logarithmic streak: 0 at 1c, ~80 at 500c
-            let t = (speed_c.max(1.0) as f32).log2() / (500.0_f32).log2();
+            // Logarithmic streak: 0 at 1c, ~80 at 5,000c
+            let t = (speed_c.max(1.0) as f32).log2() / (5_000.0_f32).log2();
             target_streak = t * 80.0;
             target_warp = 0.0;
         } else {
@@ -257,10 +257,10 @@ mod tests {
     fn cruise_delta_moves_forward() {
         let mut dc = DriveController::new();
         dc.request_engage(DriveMode::Cruise);
-        dc.set_speed_fraction(1.0); // 500c
+        dc.set_speed_fraction(1.0); // 5000c
         let delta = galactic_position_delta(&dc, [0.0, 0.0, -1.0], 1.0);
         assert!(delta[2] < -1e-6, "should move in -Z, got {}", delta[2]);
-        assert!((delta[2].abs() - 1.585e-5).abs() < 1e-7, "delta={}", delta[2]);
+        assert!((delta[2].abs() - 1.585e-4).abs() < 1e-6, "delta={}", delta[2]);
     }
 
     #[test]
