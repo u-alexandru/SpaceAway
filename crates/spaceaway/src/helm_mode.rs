@@ -28,13 +28,15 @@ impl App {
                 log::info!("Drive: IMPULSE");
             }
             if self.input.keyboard.just_pressed(KeyCode::Digit2) {
-                // Block cruise inside the atmosphere (blend > 0.1).
-                // Above atmosphere with terrain active: cruise is allowed
-                // for approach but auto-disengages at atmosphere boundary.
+                // Block cruise via approach manager (too close to planet surface)
+                let blocked_by_approach = self.approach_state.as_ref()
+                    .is_some_and(|s| !s.can_engage_cruise);
                 let in_atmosphere = self.terrain_gravity
                     .as_ref()
                     .is_some_and(|g| g.blend > 0.1);
-                if in_atmosphere {
+                if blocked_by_approach {
+                    log::warn!("Cannot engage cruise: too close to planet surface");
+                } else if in_atmosphere {
                     log::warn!("Cannot engage cruise: inside atmosphere");
                 } else {
                     let ship_speed = self.ship.as_ref()
@@ -169,11 +171,13 @@ impl App {
                     }
             }
             if self.input.keyboard.just_pressed(KeyCode::Digit3) {
-                // Block warp near planets (always — warp is for star-to-star).
+                // Block warp via approach manager or terrain/atmosphere checks
+                let blocked_by_approach = self.approach_state.as_ref()
+                    .is_some_and(|s| !s.can_engage_warp);
                 let in_atmosphere = self.terrain_gravity
                     .as_ref()
                     .is_some_and(|g| g.blend > 0.5);
-                if self.terrain.is_some() || in_atmosphere {
+                if blocked_by_approach || self.terrain.is_some() || in_atmosphere {
                     log::warn!("Cannot engage warp: too close to planet");
                 } else if self.ship_resources.exotic_fuel > 0.0 {
                     let ship_speed = self.ship.as_ref()
@@ -394,22 +398,9 @@ impl App {
             // Save position before warp movement
             let pos_before = self.galactic_position;
 
-            // Compute target distance for deceleration.
-            // In cruise mode, check ALL planets in the active system (not just
-            // terrain-active ones) so deceleration starts before terrain activates.
-            // At 5000c the ship can cross an entire terrain zone in one frame.
-            let target_dist = if self.drive.mode() == sa_ship::DriveMode::Cruise {
-                let planet_alt_ly = self.nearest_planet_altitude_ly();
-                if let Some(alt) = planet_alt_ly {
-                    Some(alt)
-                } else {
-                    self.navigation.locked_target.as_ref()
-                        .map(|t| self.galactic_position.distance_to(t.galactic_pos))
-                }
-            } else {
-                self.navigation.locked_target.as_ref()
-                    .map(|t| self.galactic_position.distance_to(t.galactic_pos))
-            };
+            // Target distance for deceleration (used by warp; cruise uses approach speed cap)
+            let target_dist = self.navigation.locked_target.as_ref()
+                .map(|t| self.galactic_position.distance_to(t.galactic_pos));
 
             // Apply warp/cruise movement with deceleration
             let (mut delta, effective_speed) = drive_integration::galactic_position_delta_decel(
@@ -419,78 +410,57 @@ impl App {
                 target_dist,
             );
 
-            // Cruise planet flythrough prevention: before moving, check if
-            // the delta would cross any planet's 100km boundary. At 5000c
-            // one frame = 25M km — post-hoc clamping doesn't work because
-            // the ship ends up on the far side of the planet.
+            // Apply approach-manager cruise speed cap (altitude-proportional)
             if self.drive.mode() == sa_ship::DriveMode::Cruise
-                && let Some((planet_pos, planet_radius_m)) = self.nearest_planet_info()
+                && let Some(ref state) = self.approach_state
+                && let Some(cap_ms) = state.cruise_speed_cap_ms
             {
-                let ly_to_m = 9.461e15_f64;
-                let atmo_boundary_m = planet_radius_m + 100_000.0;
-                let atmo_boundary_ly = atmo_boundary_m / ly_to_m;
-
-                // Current distance from planet center
-                let dx = self.galactic_position.x - planet_pos.x;
-                let dy = self.galactic_position.y - planet_pos.y;
-                let dz = self.galactic_position.z - planet_pos.z;
-                let dist_before = (dx * dx + dy * dy + dz * dz).sqrt();
-
-                // Distance after proposed move
-                let nx = self.galactic_position.x + delta[0] - planet_pos.x;
-                let ny = self.galactic_position.y + delta[1] - planet_pos.y;
-                let nz = self.galactic_position.z + delta[2] - planet_pos.z;
-                let dist_after = (nx * nx + ny * ny + nz * nz).sqrt();
-
-                // If we'd cross the boundary (or closest approach is inside)
-                if dist_before > atmo_boundary_ly && dist_after < atmo_boundary_ly {
-                    // Scale delta so we stop at exactly the boundary
-                    // Binary search for the fraction t where dist = boundary
-                    let mut lo = 0.0_f64;
-                    let mut hi = 1.0_f64;
-                    for _ in 0..20 {
-                        let mid = (lo + hi) * 0.5;
-                        let mx = self.galactic_position.x + delta[0] * mid - planet_pos.x;
-                        let my = self.galactic_position.y + delta[1] * mid - planet_pos.y;
-                        let mz = self.galactic_position.z + delta[2] * mid - planet_pos.z;
-                        let md = (mx * mx + my * my + mz * mz).sqrt();
-                        if md < atmo_boundary_ly { hi = mid; } else { lo = mid; }
-                    }
-                    delta[0] *= lo;
-                    delta[1] *= lo;
-                    delta[2] *= lo;
-                    // Apply truncated delta then disengage
-                    self.galactic_position.x += delta[0];
-                    self.galactic_position.y += delta[1];
-                    self.galactic_position.z += delta[2];
-                    self.drive.request_disengage();
-                    if let Some(terrain_mgr) = &mut self.terrain
-                        && let Some(renderer) = &mut self.renderer
-                    {
-                        terrain_mgr.flush_for_teleport(&mut renderer.terrain_slab);
-                    }
-                    log::info!("Cruise auto-disengage: 100km above planet (flythrough prevented)");
-                } else if dist_after < atmo_boundary_ly && dist_before < atmo_boundary_ly {
-                    // Already inside boundary — clamp to boundary
-                    let dist_m = dist_before * ly_to_m;
-                    if dist_m > 1.0 {
-                        let scale = atmo_boundary_m / dist_m;
-                        self.galactic_position.x = planet_pos.x + dx * scale;
-                        self.galactic_position.y = planet_pos.y + dy * scale;
-                        self.galactic_position.z = planet_pos.z + dz * scale;
-                    }
-                    self.drive.request_disengage();
-                    log::info!("Cruise auto-disengage: clamped to 100km boundary");
+                if cap_ms <= 0.0 {
+                    // At or below disengage altitude — zero delta
+                    delta = [0.0, 0.0, 0.0];
                 } else {
-                    // Normal movement — not crossing boundary
-                    self.galactic_position.x += delta[0];
-                    self.galactic_position.y += delta[1];
-                    self.galactic_position.z += delta[2];
+                    let ly_to_m = 9.461e15_f64;
+                    let cap_ly_s = cap_ms / ly_to_m;
+                    let max_delta = cap_ly_s * dt as f64;
+                    let delta_len = (delta[0]*delta[0] + delta[1]*delta[1] + delta[2]*delta[2]).sqrt();
+                    if delta_len > max_delta && delta_len > 1e-30 {
+                        let scale = max_delta / delta_len;
+                        delta[0] *= scale;
+                        delta[1] *= scale;
+                        delta[2] *= scale;
+                    }
                 }
-            } else {
-                self.galactic_position.x += delta[0];
-                self.galactic_position.y += delta[1];
-                self.galactic_position.z += delta[2];
+            }
+
+            // Ray-sphere flythrough prevention
+            if self.drive.mode() == sa_ship::DriveMode::Cruise
+                && let Some(ref state) = self.approach_state
+                && let Some(planet_pos) = state.planet_pos_ly
+            {
+                let planets = vec![(planet_pos, state.planet_radius_m)];
+                let origin = [self.galactic_position.x, self.galactic_position.y, self.galactic_position.z];
+                let (clamped, should_disengage) = crate::approach::clamp_cruise_delta(
+                    origin, delta, &planets,
+                );
+                delta = clamped;
+                if should_disengage {
+                    self.drive.request_disengage();
+                    log::info!("Cruise flythrough prevented: stopped at 100km boundary");
+                }
+            }
+
+            // Apply delta
+            self.galactic_position.x += delta[0];
+            self.galactic_position.y += delta[1];
+            self.galactic_position.z += delta[2];
+
+            // Cruise auto-disengage via approach manager
+            if self.drive.mode() == sa_ship::DriveMode::Cruise
+                && let Some(ref state) = self.approach_state
+                && state.disengage_cruise
+            {
+                self.drive.request_disengage();
+                log::info!("Cruise auto-disengage: {:.0}km above surface", state.altitude_m / 1000.0);
             }
 
             // Sync rapier body AFTER planet clamp so it never ends up inside.
@@ -526,27 +496,27 @@ impl App {
                 }
 
                 // Warp → Impulse: auto-disengage at 0.01 ly
-                // Player can manually engage cruise to continue approach.
+                // Then cascade to cruise if approaching a planet.
                 if self.drive.mode() == sa_ship::DriveMode::Warp
                     && matches!(self.drive.status(), sa_ship::DriveStatus::Engaged)
                     && dist < drive_integration::WARP_DISENGAGE_LY
                 {
                     self.drive.request_disengage();
-                    self.audio.announce(sa_audio::VoiceId::AllSystemsReady);
                     log::info!("Warp disengaged at {:.4} ly ({:.0} AU) from target",
                         dist, dist / 1.581e-5);
-                }
 
-                // Cruise → Impulse: auto-disengage near locked star target.
-                // Skip when near a planet — the planet boundary handler
-                // (above) manages cruise disengage at 100km from surface.
-                if self.drive.mode() == sa_ship::DriveMode::Cruise
-                    && dist < drive_integration::CRUISE_DISENGAGE_LY
-                    && self.nearest_planet_info().is_none()
-                {
-                    self.drive.request_disengage();
-                    log::info!("Cruise disengaged at {:.6} ly ({:.0} AU) from target",
-                        dist, dist / 1.581e-5);
+                    // Warp → cruise cascade when approaching a planet
+                    if let Some(ref state) = self.approach_state {
+                        if state.cascade_warp_to_cruise {
+                            self.drive.request_engage(sa_ship::DriveMode::Cruise);
+                            self.audio.announce(sa_audio::VoiceId::AllSystemsReady);
+                            log::info!("Warp → cruise cascade: approaching planet");
+                        } else {
+                            self.audio.announce(sa_audio::VoiceId::AllSystemsReady);
+                        }
+                    } else {
+                        self.audio.announce(sa_audio::VoiceId::AllSystemsReady);
+                    }
                 }
 
                 self.prev_target_dist = Some(dist);
@@ -766,39 +736,4 @@ impl App {
         }
     }
 
-    /// Find the nearest planet's altitude in light-years (for cruise deceleration).
-    /// Works with the active solar system directly — no terrain required.
-    fn nearest_planet_altitude_ly(&self) -> Option<f64> {
-        let (planet_pos, radius_m) = self.nearest_planet_info()?;
-        let ly_to_m = 9.461e15_f64;
-        let dx = (self.galactic_position.x - planet_pos.x) * ly_to_m;
-        let dy = (self.galactic_position.y - planet_pos.y) * ly_to_m;
-        let dz = (self.galactic_position.z - planet_pos.z) * ly_to_m;
-        let dist = (dx * dx + dy * dy + dz * dz).sqrt();
-        let alt = dist - radius_m;
-        Some(alt / ly_to_m)
-    }
-
-    /// Find the nearest planet's position and radius.
-    fn nearest_planet_info(&self) -> Option<(sa_math::WorldPos, f64)> {
-        let sys = self.active_system.as_ref()?;
-        let ly_to_m = 9.461e15_f64;
-        let positions = sys.compute_positions_ly_pub();
-        let mut best: Option<(sa_math::WorldPos, f64, f64)> = None;
-        for (i, pos) in positions.iter().enumerate() {
-            let r = match sys.body_radius_m(i) {
-                Some(r) => r,
-                None => continue,
-            };
-            if sys.planet_data(i).is_none() { continue; }
-            let dx = (self.galactic_position.x - pos.x) * ly_to_m;
-            let dy = (self.galactic_position.y - pos.y) * ly_to_m;
-            let dz = (self.galactic_position.z - pos.z) * ly_to_m;
-            let dist = (dx * dx + dy * dy + dz * dz).sqrt();
-            if best.is_none_or(|(_, _, d)| dist < d) {
-                best = Some((*pos, r, dist));
-            }
-        }
-        best.map(|(pos, r, _)| (pos, r))
-    }
 }
