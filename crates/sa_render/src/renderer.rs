@@ -168,6 +168,12 @@ impl Renderer {
         let aspect = gpu.aspect_ratio();
         let view_proj = camera.view_projection_matrix(aspect);
 
+        // Ensure the previous frame's GPU work completes before we write
+        // new uniform data. Without this, write_buffer can overwrite buffers
+        // (sky, star, nebula) that the GPU is still reading from the previous
+        // frame, causing "old vs new camera view" flickering on Metal.
+        gpu.device.poll(wgpu::Maintain::Wait);
+
         // Camera world position for origin rebasing (physics meters)
         let cam_pos = camera.position;
 
