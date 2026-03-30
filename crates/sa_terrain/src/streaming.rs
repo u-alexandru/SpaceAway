@@ -217,8 +217,8 @@ impl ChunkStreaming {
 
         // ---------------------------------------------------------------
         // 1. Drain completed chunks from the result channel (capped).
-        //    Only freshly generated chunks are returned — the caller's
-        //    gpu_meshes HashMap already tracks what has been uploaded.
+        //    Only freshly generated chunks are returned — the caller
+        //    tracks what has been uploaded to the GPU slab.
         // ---------------------------------------------------------------
         let mut new_chunks: Vec<ChunkData> = Vec::new();
 
