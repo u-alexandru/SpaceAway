@@ -22,7 +22,7 @@ impl App {
             .is_some_and(|t| t.should_deactivate(self.galactic_position));
         if should_deactivate_terrain {
             if let Some(sys) = &mut self.active_system {
-                sys.hidden_body_index = None;
+                sys.terrain_body_index = None;
             }
             if let Some(mut t) = self.terrain.take() {
                 t.cleanup(&mut self.physics);
@@ -54,7 +54,7 @@ impl App {
                          terrain={}, hidden={:?}, galactic=({:.12},{:.12},{:.12}), \
                          planet=({:.12},{:.12},{:.12})",
                         i, dist_m / 1000.0, r_m / 1000.0, ratio,
-                        self.terrain.is_some(), sys.hidden_body_index,
+                        self.terrain.is_some(), sys.terrain_body_index,
                         self.galactic_position.x, self.galactic_position.y, self.galactic_position.z,
                         pos.x, pos.y, pos.z,
                     );
@@ -191,14 +191,7 @@ impl App {
                     Some(vp_f64),
                 );
                 if let Some(sys) = &mut self.active_system {
-                    if sys.hidden_body_index != result.hidden_body_index {
-                        log::info!(
-                            "Hidden body index: {:?}, system has {} bodies",
-                            result.hidden_body_index,
-                            sys.body_count(),
-                        );
-                    }
-                    sys.hidden_body_index = result.hidden_body_index;
+                    sys.terrain_body_index = Some(terrain_mgr.body_index());
                 }
                 self.terrain_gravity = result.gravity;
                 result.terrain_draws
@@ -472,7 +465,7 @@ impl App {
             // Without this, TIME_SCALE=30 moves the icosphere away from the
             // terrain within seconds, making chunks appear detached.
             if let Some(system) = &mut self.active_system {
-                let hidden = system.hidden_body_index;
+                let terrain_body = system.terrain_body_index;
                 let total_bodies = system.body_count();
                 let solar_dt = if self.terrain.is_some() { 0.0 } else { dt as f64 };
                 let system_commands = system.update(
@@ -481,8 +474,8 @@ impl App {
                 );
                 // Log every 60 frames when terrain is active
                 if self.terrain.is_some() && self.time.frame_count().is_multiple_of(60) {
-                    log::info!("RENDER: {} solar cmds (hidden={:?}, bodies={}), {} terrain draws",
-                        system_commands.len(), hidden, total_bodies, terrain_draws.len());
+                    log::info!("RENDER: {} solar cmds (terrain_body={:?}, bodies={}), {} terrain draws",
+                        system_commands.len(), terrain_body, total_bodies, terrain_draws.len());
                 }
                 commands.extend(system_commands);
             }

@@ -62,8 +62,8 @@ pub struct ActiveSystem {
     /// Catalog name for display.
     #[allow(dead_code)]
     pub catalog_name: String,
-    /// Index of body whose icosphere is hidden (terrain active for this planet).
-    pub hidden_body_index: Option<usize>,
+    /// Index of body that has terrain active (icosphere scaled to 0.999× radius).
+    pub terrain_body_index: Option<usize>,
 }
 
 impl ActiveSystem {
@@ -157,7 +157,7 @@ impl ActiveSystem {
             bodies,
             game_time_s: 0.0,
             catalog_name,
-            hidden_body_index: None,
+            terrain_body_index: None,
         }
     }
 
@@ -185,13 +185,6 @@ impl ActiveSystem {
 
         let mut commands = Vec::with_capacity(self.bodies.len());
         for (i, body) in self.bodies.iter().enumerate() {
-            // Skip body hidden by terrain (and its children: atmosphere, rings)
-            if let Some(hidden) = self.hidden_body_index
-                && (i == hidden || body.parent_index == hidden as i32)
-            {
-                continue;
-            }
-
             let pos = world_positions[i];
             let dx_m = ((pos.x - camera_galactic_pos.x) * LY_TO_METERS) as f32;
             let dy_m = ((pos.y - camera_galactic_pos.y) * LY_TO_METERS) as f32;
@@ -211,11 +204,19 @@ impl ActiveSystem {
             };
 
             // Scale up if too small to see (minimum 4 pixels on screen)
-            let scale = if angular_pixels < MIN_PIXELS && angular_pixels > 0.001 {
+            let mut scale = if angular_pixels < MIN_PIXELS && angular_pixels > 0.001 {
                 MIN_PIXELS / angular_pixels
             } else {
                 1.0
             };
+
+            // When terrain is active for this body, shrink the icosphere to
+            // 0.999× radius so terrain chunks (at or above true radius) always
+            // win the depth test. This lets the icosphere serve as a fallback
+            // backdrop while terrain streams in.
+            if self.terrain_body_index == Some(i) {
+                scale *= sa_terrain::config::ICOSPHERE_RADIUS_FACTOR as f32;
+            }
 
             let model = Mat4::from_scale_rotation_translation(
                 Vec3::splat(scale),

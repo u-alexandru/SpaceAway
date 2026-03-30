@@ -37,8 +37,6 @@ const DEACTIVATE_RADIUS_MULT: f64 = 2.5;
 pub struct TerrainFrameResult {
     /// Draw commands for all visible terrain chunks (slab-based).
     pub terrain_draws: Vec<TerrainDrawCommand>,
-    /// Body index to hide in the solar system renderer (the icosphere).
-    pub hidden_body_index: Option<usize>,
     /// Blended gravity state (ship <-> planet transition).
     pub gravity: Option<sa_terrain::gravity::GravityState>,
 }
@@ -54,7 +52,7 @@ pub struct TerrainManager {
     config: TerrainConfig,
     /// Planet center in light-years (updated each frame from orbital position).
     planet_center_ly: WorldPos,
-    /// Body index in the ActiveSystem (for icosphere hiding).
+    /// Body index in the ActiveSystem.
     body_index: usize,
     /// Maximum LOD level for this planet.
     max_lod: u8,
@@ -171,7 +169,7 @@ impl TerrainManager {
             frustum.as_ref(),
         );
 
-        let (new_chunks, removed_keys) =
+        let (new_chunks, _removed_keys) =
             self.streaming.update(&visible, &self.config, cam_rel_m);
 
         // Upload newly generated chunks to the slab.
@@ -192,11 +190,7 @@ impl TerrainManager {
                 }
                 upload_chunk_to_slab(terrain_slab, queue, chunk);
             }
-            self.col.cache_chunk(chunk.key, chunk);
         }
-
-        // LRU eviction: remove collision data for removed chunks.
-        self.col.remove_evicted(physics, &removed_keys);
 
         // --- Gravity computation ---
         let gravity = sa_terrain::gravity::compute_gravity(
@@ -207,62 +201,28 @@ impl TerrainManager {
             9.81,
         );
 
-        // --- Collider management ---
-        let visible_keys: std::collections::HashSet<sa_terrain::ChunkKey> =
-            visible.iter()
-                .map(|n| sa_terrain::ChunkKey {
-                    face: n.face as u8,
-                    lod: n.lod,
-                    x: n.x,
-                    y: n.y,
-                })
-                .collect();
-        self.col.update(
-            physics,
-            cam_rel_m,
-            self.config.radius_m,
-            self.max_displacement_m,
-            &visible_keys,
-            rebase_bodies,
-        );
+        // --- Collision grid: independent of visual LOD ---
+        let cam_dist = (cam_rel_m[0] * cam_rel_m[0]
+            + cam_rel_m[1] * cam_rel_m[1]
+            + cam_rel_m[2] * cam_rel_m[2])
+            .sqrt();
+        let altitude = cam_dist - self.config.radius_m;
+        if altitude
+            < self.config.radius_m * sa_terrain::config::COLLISION_ACTIVATE_FACTOR
+        {
+            self.col
+                .update_collision_grid(cam_rel_m, &self.config, physics, rebase_bodies);
+        }
 
         // --- Collision diagnostic (every 60 frames) ---
         self.diag_frame += 1;
         if self.diag_frame.is_multiple_of(60) {
-            let cam_dist = (cam_rel_m[0] * cam_rel_m[0]
-                + cam_rel_m[1] * cam_rel_m[1]
-                + cam_rel_m[2] * cam_rel_m[2]).sqrt();
-            let altitude_km = (cam_dist - self.config.radius_m) / 1000.0;
-
-            let ship_pos = rebase_bodies.ship
-                .and_then(|h| physics.rigid_body_set.get(h))
-                .map(|b| *b.translation())
-                .unwrap_or(nalgebra::Vector3::zeros());
-            let barrier_info = self.col.surface_barrier
-                .and_then(|sh| physics.collider_set.get(sh))
-                .map(|coll| {
-                    let pos = coll.position().translation;
-                    let dx = pos.x - ship_pos.x;
-                    let dy = pos.y - ship_pos.y;
-                    let dz = pos.z - ship_pos.z;
-                    (pos.x, pos.y, pos.z, (dx*dx + dy*dy + dz*dz).sqrt())
-                });
-            if let Some((bx, by, bz, bdist)) = barrier_info {
-                log::info!(
-                    "COLLISION_DIAG: alt={:.1}km, ship=({:.0},{:.0},{:.0}), \
-                     barrier=({:.0},{:.0},{:.0}), gap={:.0}m, hf_colliders={}",
-                    altitude_km,
-                    ship_pos.x, ship_pos.y, ship_pos.z,
-                    bx, by, bz, bdist,
-                    self.col.colliders.len(),
-                );
-            } else {
-                log::info!(
-                    "COLLISION_DIAG: alt={:.1}km, NO_BARRIER, hf_colliders={}",
-                    altitude_km,
-                    self.col.colliders.len(),
-                );
-            }
+            let altitude_km = altitude / 1000.0;
+            log::info!(
+                "COLLISION_DIAG: alt={:.1}km, hf_colliders={}",
+                altitude_km,
+                self.col.colliders.len(),
+            );
         }
 
         // Build draw commands using frozen planet position.
@@ -275,10 +235,7 @@ impl TerrainManager {
 
         // Diagnostic: log terrain state every 60 frames
         if self.diag_frame.is_multiple_of(60) {
-            let cam_dist = (cam_rel_m[0] * cam_rel_m[0]
-                + cam_rel_m[1] * cam_rel_m[1]
-                + cam_rel_m[2] * cam_rel_m[2]).sqrt();
-            let altitude_km = (cam_dist - self.config.radius_m) / 1000.0;
+            let altitude_km = altitude / 1000.0;
             log::info!(
                 "TERRAIN_DIAG: alt={:.1}km, visible={}, slab={}/{}, draws={}, \
                  lod_range={}-{}",
@@ -292,11 +249,11 @@ impl TerrainManager {
             );
         }
 
-        // Icosphere is always hidden when terrain is active.
-        // Task 8 will shrink the icosphere to 0.999x radius for depth coexistence.
+        // The icosphere renders at 0.999× radius so terrain chunks
+        // (at or above true radius) always win the depth test. No need
+        // to hide the icosphere — depth testing handles occlusion.
         TerrainFrameResult {
             terrain_draws,
-            hidden_body_index: Some(self.body_index),
             gravity: Some(gravity),
         }
     }
