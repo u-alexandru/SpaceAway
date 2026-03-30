@@ -30,24 +30,10 @@ pub struct ScreenDrawCommand<'a> {
 /// Holds the in-progress frame state between render_frame and submit_frame.
 /// This allows the caller to run additional render passes (e.g. egui HUD)
 /// before submitting.
-///
-/// Per-frame GPU resources (uniform buffers, bind groups, instance buffer)
-/// are stored here to keep them alive until after queue.submit(). Dropping
-/// them earlier would let the GPU read freed memory if pipelining frames.
 pub struct FrameContext {
     pub encoder: wgpu::CommandEncoder,
     pub frame: wgpu::SurfaceTexture,
     pub view: wgpu::TextureView,
-    /// Per-frame resources that must outlive the encoder submission.
-    /// Includes uniform buffers, bind groups, and the instance buffer.
-    _frame_resources: Vec<FrameResource>,
-}
-
-/// GPU resource kept alive for the duration of a frame's submission.
-#[allow(dead_code)]
-enum FrameResource {
-    Buffer(wgpu::Buffer),
-    BindGroup(wgpu::BindGroup),
 }
 
 /// Drive visual parameters for shader effects. Passed as plain floats
@@ -61,6 +47,9 @@ pub struct DriveRenderParams {
     pub flash_intensity: f32,
 }
 
+/// Initial capacity for the persistent instance buffer (number of instances).
+const INITIAL_INSTANCE_CAPACITY: u64 = 1024;
+
 pub struct Renderer {
     pub geometry_pipeline: GeometryPipeline,
     pub screen_pipeline: ScreenPipeline,
@@ -69,6 +58,10 @@ pub struct Renderer {
     pub nebula_renderer: NebulaRenderer,
     pub galaxy_renderer: NebulaRenderer,
     pub mesh_store: MeshStore,
+    /// Persistent instance buffer, reused each frame to avoid per-draw allocations.
+    instance_buffer: wgpu::Buffer,
+    /// Current capacity of the instance buffer in number of instances.
+    instance_buffer_capacity: u64,
     /// GPU profiler for render pass timing (optional — needs TIMESTAMP_QUERY).
     pub gpu_profiler: GpuProfiler,
     /// Latest GPU timing results (label, duration_ms) from the previous frame.
@@ -98,6 +91,12 @@ impl Renderer {
         );
         let nebula_renderer = NebulaRenderer::new(&gpu.device, gpu.config.format);
         let galaxy_renderer = NebulaRenderer::new(&gpu.device, gpu.config.format);
+        let instance_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Persistent Instance Buffer"),
+            size: INITIAL_INSTANCE_CAPACITY * std::mem::size_of::<InstanceRaw>() as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         // Only enable timer queries if the GPU supports them (Metal may not).
         let supports_timestamps = gpu.device.features().contains(wgpu::Features::TIMESTAMP_QUERY);
         let gpu_profiler = GpuProfiler::new(&gpu.device, GpuProfilerSettings {
@@ -114,6 +113,8 @@ impl Renderer {
             nebula_renderer,
             galaxy_renderer,
             mesh_store: MeshStore::new(),
+            instance_buffer,
+            instance_buffer_capacity: INITIAL_INSTANCE_CAPACITY,
             gpu_profiler,
             gpu_timings: Vec::new(),
         }
@@ -180,27 +181,10 @@ impl Renderer {
             ambient: [0.02, 0.02, 0.03],
             _pad3: 0.0,
         };
-        // Per-frame uniform buffer + bind group: created fresh each frame so
-        // the GPU can't read stale data from a previous frame that's still
-        // in flight. Stored in FrameContext to stay alive through submit.
-        let mut frame_resources: Vec<FrameResource> = Vec::new();
-
-        let frame_uniform_buffer = gpu.device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("Frame Uniforms"),
-                contents: bytemuck::bytes_of(&uniforms),
-                usage: wgpu::BufferUsages::UNIFORM,
-            },
-        );
-        let frame_uniform_bind_group = gpu.device.create_bind_group(
-            &wgpu::BindGroupDescriptor {
-                label: Some("Frame Uniform BG"),
-                layout: &self.geometry_pipeline.bind_group_layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: frame_uniform_buffer.as_entire_binding(),
-                }],
-            },
+        gpu.queue.write_buffer(
+            &self.geometry_pipeline.uniform_buffer,
+            0,
+            bytemuck::bytes_of(&uniforms),
         );
 
         // Sky uniforms: inverse view-projection for reconstructing view direction.
@@ -217,7 +201,6 @@ impl Renderer {
         } else {
             Vec3::new(1.0, 0.0, 0.0)
         };
-        // Per-frame sky uniform buffer + bind group (same pattern as geometry).
         let sky_uniforms = SkyUniforms {
             inv_view_proj: inv_view_proj.to_cols_array_2d(),
             galactic_center_dir: gc_dir.to_array(),
@@ -227,21 +210,12 @@ impl Renderer {
             warp_dir: drive_params.velocity_dir,
             flash_intensity: drive_params.flash_intensity,
         };
-        let frame_sky_buf = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Frame Sky Uniforms"),
-            contents: bytemuck::bytes_of(&sky_uniforms),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
-        let frame_sky_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Frame Sky BG"),
-            layout: &self.sky_renderer.sky_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: frame_sky_buf.as_entire_binding(),
-            }],
-        });
+        gpu.queue.write_buffer(
+            &self.sky_renderer.uniform_buffer,
+            0,
+            bytemuck::bytes_of(&sky_uniforms),
+        );
 
-        // Per-frame star uniform buffer + bind group.
         let star_view = camera.view_matrix();
         let star_vp = camera.projection_matrix(aspect) * star_view;
         let star_uniforms = StarUniforms {
@@ -253,21 +227,15 @@ impl Renderer {
             velocity_dir: drive_params.velocity_dir,
             flash_intensity: drive_params.flash_intensity,
         };
-        let frame_star_buf = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Frame Star Uniforms"),
-            contents: bytemuck::bytes_of(&star_uniforms),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
-        let frame_star_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Frame Star BG"),
-            layout: &self.star_field.bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: frame_star_buf.as_entire_binding(),
-            }],
-        });
+        gpu.queue.write_buffer(
+            &self.star_field.uniform_buffer,
+            0,
+            bytemuck::bytes_of(&star_uniforms),
+        );
 
-        // Per-frame nebula uniform buffers + bind groups.
+        // Nebula uniforms: use the star view_proj (rotation-only, no translation)
+        // because nebulae are at galaxy scale (light-years), effectively at infinity.
+        // The game binary places nebula instances as direction * large_distance.
         let view_mat = camera.view_matrix();
         let camera_right = Vec3::new(view_mat.col(0).x, view_mat.col(1).x, view_mat.col(2).x);
         let camera_up = Vec3::new(view_mat.col(0).y, view_mat.col(1).y, view_mat.col(2).y);
@@ -280,32 +248,16 @@ impl Renderer {
             velocity_dir: drive_params.velocity_dir,
             warp_intensity: drive_params.warp_intensity,
         };
-        let frame_nebula_buf = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Frame Nebula Uniforms"),
-            contents: bytemuck::bytes_of(&nebula_uniforms),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
-        let frame_nebula_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Frame Nebula BG"),
-            layout: &self.nebula_renderer.bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: frame_nebula_buf.as_entire_binding(),
-            }],
-        });
-        let frame_galaxy_buf = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Frame Galaxy Uniforms"),
-            contents: bytemuck::bytes_of(&nebula_uniforms),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
-        let frame_galaxy_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Frame Galaxy BG"),
-            layout: &self.galaxy_renderer.bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: frame_galaxy_buf.as_entire_binding(),
-            }],
-        });
+        gpu.queue.write_buffer(
+            &self.nebula_renderer.uniform_buffer,
+            0,
+            bytemuck::bytes_of(&nebula_uniforms),
+        );
+        gpu.queue.write_buffer(
+            &self.galaxy_renderer.uniform_buffer,
+            0,
+            bytemuck::bytes_of(&nebula_uniforms),
+        );
 
         let frame = match gpu.surface.get_current_texture() {
             Ok(frame) => frame,
@@ -331,10 +283,6 @@ impl Renderer {
             count: usize,
         }
         let mut batches: Vec<Batch> = Vec::new();
-        // Per-frame instance buffer: created fresh each frame via
-        // create_buffer_init so there's no contention with the previous
-        // frame's GPU reads. Stored in frame_resources to outlive submit.
-        let mut frame_instance_buffer: Option<wgpu::Buffer> = None;
         if !draw_commands.is_empty() {
             let mut entries: Vec<(u64, InstanceRaw)> = draw_commands
                 .iter()
@@ -362,16 +310,28 @@ impl Renderer {
                 .collect();
             entries.sort_by_key(|(mesh_id, _)| *mesh_id);
 
+            // Grow instance buffer if needed.
+            let needed = entries.len() as u64;
+            if needed > self.instance_buffer_capacity {
+                let new_cap = needed.next_power_of_two();
+                self.instance_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Persistent Instance Buffer"),
+                    size: new_cap * std::mem::size_of::<InstanceRaw>() as u64,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                self.instance_buffer_capacity = new_cap;
+            }
+
+            // Write all instances in one call BEFORE render passes.
             let instance_data: Vec<InstanceRaw> = entries.iter()
                 .map(|(_, inst)| *inst)
                 .collect();
-            frame_instance_buffer = Some(gpu.device.create_buffer_init(
-                &wgpu::util::BufferInitDescriptor {
-                    label: Some("Frame Instance Buffer"),
-                    contents: bytemuck::cast_slice(&instance_data),
-                    usage: wgpu::BufferUsages::VERTEX,
-                },
-            ));
+            gpu.queue.write_buffer(
+                &self.instance_buffer,
+                0,
+                bytemuck::cast_slice(&instance_data),
+            );
 
             // Build batch descriptors for the draw loop.
             let mut batch_start = 0usize;
@@ -399,12 +359,11 @@ impl Renderer {
         // Pass 1: Render sky to half-res offscreen texture
         {
             let sky_query = self.gpu_profiler.begin_query("sky_pass", &mut encoder);
-            self.sky_renderer.render_to_texture_with(&mut encoder, &frame_sky_bg);
+            self.sky_renderer.render_to_texture(&mut encoder);
             self.gpu_profiler.end_query(&mut encoder, sky_query);
         }
 
         // Pass 2: Main scene pass — blit sky + geometry + stars + nebulae + screens
-        let screen_buffers_to_keep: Vec<wgpu::Buffer>;
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Main Pass"),
@@ -445,7 +404,7 @@ impl Renderer {
             {
                 let q = self.gpu_profiler.begin_query("star_field", &mut pass);
                 pass.set_pipeline(&self.star_field.pipeline);
-                pass.set_bind_group(0, &frame_star_bg, &[]);
+                pass.set_bind_group(0, &self.star_field.bind_group, &[]);
                 pass.set_vertex_buffer(0, self.star_field.vertex_buffer.slice(..));
                 pass.draw(0..6, 0..self.star_field.star_count);
                 self.gpu_profiler.end_query(&mut pass, q);
@@ -454,8 +413,8 @@ impl Renderer {
             // Nebulae (alpha blended, no depth write)
             {
                 let q = self.gpu_profiler.begin_query("nebula", &mut pass);
-                self.nebula_renderer.render_with(&mut pass, &frame_nebula_bg);
-                self.galaxy_renderer.render_with(&mut pass, &frame_galaxy_bg);
+                self.nebula_renderer.render(&mut pass);
+                self.galaxy_renderer.render(&mut pass);
                 self.gpu_profiler.end_query(&mut pass, q);
             }
 
@@ -464,40 +423,37 @@ impl Renderer {
             let geom_query = self.gpu_profiler.begin_query("geometry_pass", &mut pass);
             if !batches.is_empty() {
                 pass.set_pipeline(&self.geometry_pipeline.pipeline);
-                pass.set_bind_group(0, &frame_uniform_bind_group, &[]);
+                pass.set_bind_group(0, &self.geometry_pipeline.uniform_bind_group, &[]);
 
-                if let Some(inst_buf) = &frame_instance_buffer {
-                    let instance_stride = std::mem::size_of::<InstanceRaw>() as u64;
-                    for batch in &batches {
-                        let mesh_handle = draw_commands.iter()
-                            .find(|c| c.mesh.id() == batch.mesh_id)
-                            .unwrap()
-                            .mesh;
-                        if let Some(mesh) = self.mesh_store.get(mesh_handle) {
-                            let offset = batch.start as u64 * instance_stride;
-                            let size = batch.count as u64 * instance_stride;
-                            pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-                            pass.set_vertex_buffer(
-                                1,
-                                inst_buf.slice(offset..offset + size),
-                            );
-                            pass.set_index_buffer(
-                                mesh.index_buffer.slice(..),
-                                wgpu::IndexFormat::Uint32,
-                            );
-                            pass.draw_indexed(
-                                0..mesh.index_count,
-                                0,
-                                0..batch.count as u32,
-                            );
-                        }
+                let instance_stride = std::mem::size_of::<InstanceRaw>() as u64;
+                for batch in &batches {
+                    let mesh_handle = draw_commands.iter()
+                        .find(|c| c.mesh.id() == batch.mesh_id)
+                        .unwrap()
+                        .mesh;
+                    if let Some(mesh) = self.mesh_store.get(mesh_handle) {
+                        let offset = batch.start as u64 * instance_stride;
+                        let size = batch.count as u64 * instance_stride;
+                        pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+                        pass.set_vertex_buffer(
+                            1,
+                            self.instance_buffer.slice(offset..offset + size),
+                        );
+                        pass.set_index_buffer(
+                            mesh.index_buffer.slice(..),
+                            wgpu::IndexFormat::Uint32,
+                        );
+                        pass.draw_indexed(
+                            0..mesh.index_count,
+                            0,
+                            0..batch.count as u32,
+                        );
                     }
                 }
             }
 
             // Draw screen quads (textured monitors, after geometry, same depth buffer)
-            // Screen instance buffers stored in frame_resources to guarantee they
-            // outlive the GPU submission (same pattern as geometry buffers).
+            // Pre-create instance buffers so they outlive the render pass.
             let screen_instance_buffers: Vec<wgpu::Buffer> = screen_draws
                 .iter()
                 .map(|screen_cmd| {
@@ -526,7 +482,7 @@ impl Renderer {
 
             if !screen_draws.is_empty() {
                 pass.set_pipeline(&self.screen_pipeline.pipeline);
-                pass.set_bind_group(0, &frame_uniform_bind_group, &[]);
+                pass.set_bind_group(0, &self.geometry_pipeline.uniform_bind_group, &[]);
 
                 for (i, screen_cmd) in screen_draws.iter().enumerate() {
                     pass.set_bind_group(1, screen_cmd.texture_bind_group, &[]);
@@ -542,35 +498,15 @@ impl Renderer {
 
             // Stars, nebulae, and galaxies were rendered before geometry (above).
             self.gpu_profiler.end_query(&mut pass, geom_query);
-            screen_buffers_to_keep = screen_instance_buffers;
         }
 
         // Resolve GPU profiler queries before submitting.
         self.gpu_profiler.resolve_queries(&mut encoder);
 
-        // Keep ALL per-frame GPU resources alive until after submit.
-        frame_resources.push(FrameResource::Buffer(frame_uniform_buffer));
-        frame_resources.push(FrameResource::BindGroup(frame_uniform_bind_group));
-        frame_resources.push(FrameResource::Buffer(frame_sky_buf));
-        frame_resources.push(FrameResource::BindGroup(frame_sky_bg));
-        frame_resources.push(FrameResource::Buffer(frame_star_buf));
-        frame_resources.push(FrameResource::BindGroup(frame_star_bg));
-        frame_resources.push(FrameResource::Buffer(frame_nebula_buf));
-        frame_resources.push(FrameResource::BindGroup(frame_nebula_bg));
-        frame_resources.push(FrameResource::Buffer(frame_galaxy_buf));
-        frame_resources.push(FrameResource::BindGroup(frame_galaxy_bg));
-        if let Some(buf) = frame_instance_buffer {
-            frame_resources.push(FrameResource::Buffer(buf));
-        }
-        for buf in screen_buffers_to_keep {
-            frame_resources.push(FrameResource::Buffer(buf));
-        }
-
         Some(FrameContext {
             encoder,
             frame,
             view,
-            _frame_resources: frame_resources,
         })
     }
 }

@@ -25,8 +25,6 @@ pub struct SkyRenderer {
     pub sky_pipeline: wgpu::RenderPipeline,
     pub uniform_buffer: wgpu::Buffer,
     pub sky_bind_group: wgpu::BindGroup,
-    /// Exposed for per-frame bind group creation.
-    pub sky_bind_group_layout: wgpu::BindGroupLayout,
 
     /// Pipeline that blits the half-res texture to the main framebuffer.
     pub blit_pipeline: wgpu::RenderPipeline,
@@ -234,7 +232,6 @@ impl SkyRenderer {
             sky_pipeline,
             uniform_buffer,
             sky_bind_group,
-            sky_bind_group_layout,
             blit_pipeline,
             blit_bind_group,
             sky_texture,
@@ -270,15 +267,6 @@ impl SkyRenderer {
 
     /// Render the sky to the half-res offscreen texture.
     pub fn render_to_texture(&self, encoder: &mut wgpu::CommandEncoder) {
-        self.render_to_texture_with(encoder, &self.sky_bind_group);
-    }
-
-    /// Render sky using an external (per-frame) bind group.
-    pub fn render_to_texture_with(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        bind_group: &wgpu::BindGroup,
-    ) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Sky Half-Res Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -293,7 +281,7 @@ impl SkyRenderer {
             ..Default::default()
         });
         pass.set_pipeline(&self.sky_pipeline);
-        pass.set_bind_group(0, bind_group, &[]);
+        pass.set_bind_group(0, &self.sky_bind_group, &[]);
         pass.draw(0..6, 0..1);
     }
 

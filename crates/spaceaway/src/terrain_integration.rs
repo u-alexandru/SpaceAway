@@ -140,16 +140,13 @@ impl TerrainManager {
             (camera_galactic_ly.z - self.planet_center_ly.z) * LY_TO_M,
         ];
 
-        // Frustum culling disabled — the VP-to-planet-relative transform was
-        // incorrect, culling the visible hemisphere. Infrastructure is in place
-        // (Frustum type + quadtree integration) but needs correct matrix math.
-        let _ = vp_planet_relative;
+        let frustum = vp_planet_relative.map(sa_terrain::frustum::Frustum::from_vp_matrix);
         let visible = select_visible_nodes(
             cam_rel_m,
             self.config.radius_m,
             self.max_lod,
             self.max_displacement_m,
-            None,
+            frustum.as_ref(),
         );
 
         let (new_chunks, removed_keys) =
@@ -257,12 +254,9 @@ impl TerrainManager {
         );
 
         // Don't hide the icosphere until terrain has enough chunks for visual
-        // coverage. The threshold is the LARGER of:
-        // - 6 absolute (minimum one per cube face for geometric coverage)
-        // - 50% of visible nodes (ensures most of the visible area is filled)
-        // Without the fraction check, the first 6 chunks to upload would hide
-        // the icosphere even when 100+ visible chunks are still missing,
-        // causing the planet to disappear during approach.
+        // coverage. With fewer than 6 chunks (one per cube face), the terrain
+        // sphere has visible gaps and the transition looks like the planet
+        // disappearing and being replaced by floating panels.
         let visible_in_gpu = visible.iter().filter(|n| {
             let key = ChunkKey {
                 face: n.face as u8,
@@ -272,10 +266,7 @@ impl TerrainManager {
             };
             self.gpu_meshes.contains_key(&key)
         }).count();
-        let min_absolute = 6;
-        let min_fraction = visible.len() / 2;
-        let threshold = min_absolute.max(min_fraction);
-        let hide_icosphere = visible_in_gpu >= threshold;
+        let hide_icosphere = visible_in_gpu >= 6;
 
         TerrainFrameResult {
             draw_commands,

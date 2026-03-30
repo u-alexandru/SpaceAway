@@ -31,7 +31,6 @@ pub struct StarField {
     pub vertex_buffer: wgpu::Buffer,
     pub uniform_buffer: wgpu::Buffer,
     pub bind_group: wgpu::BindGroup,
-    pub bind_group_layout: wgpu::BindGroupLayout,
     pub star_count: u32,
 }
 
@@ -140,7 +139,7 @@ impl StarField {
             cache: None,
         });
 
-        Self { pipeline, vertex_buffer, uniform_buffer, bind_group, bind_group_layout, star_count: stars.len() as u32 }
+        Self { pipeline, vertex_buffer, uniform_buffer, bind_group, star_count: stars.len() as u32 }
     }
 
     /// Replace the star vertex buffer with new data (e.g. when the player moves
