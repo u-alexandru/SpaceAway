@@ -48,6 +48,8 @@ pub struct TerrainManager {
     surface_gravity_ms2: f32,
     /// Collider management state.
     col: TerrainColliders,
+    /// Whether collision was active on the previous frame.
+    collision_was_active: bool,
     /// Frame counter for periodic diagnostics.
     diag_frame: u64,
 }
@@ -76,6 +78,7 @@ impl TerrainManager {
             max_displacement_m,
             surface_gravity_ms2,
             col: TerrainColliders::new(),
+            collision_was_active: false,
             diag_frame: 0,
         }
     }
@@ -137,6 +140,7 @@ impl TerrainManager {
         ship_down: [f32; 3],
         rebase_bodies: &spaceaway::terrain_colliders::RebaseBodies,
         vp_planet_relative: Option<[f64; 16]>,
+        collision_active: bool,
     ) -> TerrainFrameResult {
         let _ = planet_center_ly; // unused -- we keep the activation-time position
 
@@ -187,17 +191,16 @@ impl TerrainManager {
             9.81,
         );
 
-        // --- Collision grid: independent of visual LOD ---
+        // --- Collision grid: driven by ApproachManager phases ---
         let cam_dist = (cam_rel_m[0] * cam_rel_m[0]
             + cam_rel_m[1] * cam_rel_m[1]
             + cam_rel_m[2] * cam_rel_m[2])
             .sqrt();
         let altitude = cam_dist - self.config.radius_m;
-        if altitude
-            < self.config.radius_m * sa_terrain::config::COLLISION_ACTIVATE_FACTOR
-        {
+        if collision_active {
             self.col
                 .update_collision_grid(cam_rel_m, &self.config, physics, rebase_bodies);
+            self.collision_was_active = true;
         }
 
         // --- Collision diagnostic (every 60 frames) ---
@@ -292,6 +295,22 @@ impl TerrainManager {
             (camera_galactic_ly.y - self.planet_center_ly.y) * LY_TO_M,
             (camera_galactic_ly.z - self.planet_center_ly.z) * LY_TO_M,
         ]
+    }
+
+    /// Whether collision was active on any previous frame.
+    pub fn collision_was_active(&self) -> bool {
+        self.collision_was_active
+    }
+
+    /// Force an immediate anchor rebase to the current ship position.
+    /// Called on the first collision frame to ensure the rapier origin is
+    /// fresh before HeightField colliders are placed.
+    pub fn force_rebase(
+        &mut self,
+        physics: &mut PhysicsWorld,
+        rebase_bodies: &spaceaway::terrain_colliders::RebaseBodies,
+    ) {
+        self.col.force_rebase(physics, rebase_bodies);
     }
 
     /// Body index this terrain replaces.

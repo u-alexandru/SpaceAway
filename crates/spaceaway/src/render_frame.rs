@@ -163,6 +163,9 @@ impl App {
             log::info!("Terrain deactivated (no solar system)");
         }
 
+        // Cache collision_active before moving approach_state.
+        let collision_active = approach_state.collision_active;
+
         // Store approach state for other systems (helm_mode, etc.)
         self.approach_state = Some(approach_state);
 
@@ -175,6 +178,10 @@ impl App {
                 [down.x, down.y, down.z]
             })
             .unwrap_or([0.0, -1.0, 0.0]);
+
+        // Detect first collision frame for forced rebase.
+        let first_collision = collision_active
+            && self.terrain.as_ref().is_none_or(|t| !t.collision_was_active());
 
         let terrain_draws: Vec<TerrainDrawCommand> = if let Some(terrain_mgr) = &mut self.terrain {
             if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
@@ -211,6 +218,7 @@ impl App {
                     ship_down,
                     &rebase_bodies,
                     Some(vp_f64),
+                    collision_active,
                 );
                 if let Some(sys) = &mut self.active_system {
                     sys.terrain_body_index = Some(terrain_mgr.body_index());
@@ -224,6 +232,19 @@ impl App {
             self.terrain_gravity = None;
             vec![]
         };
+
+        // Force anchor rebase on first collision frame to ensure fresh
+        // rapier origin before HeightField colliders are placed.
+        if first_collision
+            && let Some(terrain_mgr) = &mut self.terrain
+        {
+            let rebase_bodies = terrain_colliders::RebaseBodies {
+                ship: self.ship.as_ref().map(|s| s.body_handle),
+                player: self.player.as_ref().map(|p| p.body_handle),
+            };
+            terrain_mgr.force_rebase(&mut self.physics, &rebase_bodies);
+            log::info!("First collision frame: forced anchor rebase");
+        }
 
         // After terrain update (which may rebase physics origin), re-sync
         // the camera position from the ship's current rapier position.

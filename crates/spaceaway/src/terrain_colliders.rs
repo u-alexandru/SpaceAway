@@ -66,6 +66,77 @@ impl TerrainColliders {
         self.collision_grid = None;
     }
 
+    /// Force an immediate anchor rebase to the current ship position,
+    /// regardless of drift threshold. Ensures the rapier origin is fresh
+    /// when collision first activates.
+    pub fn force_rebase(
+        &mut self,
+        physics: &mut PhysicsWorld,
+        rebase_bodies: &RebaseBodies,
+    ) {
+        let ship_rapier_pos = rebase_bodies
+            .ship
+            .and_then(|h| physics.rigid_body_set.get(h))
+            .map(|b| *b.translation())
+            .unwrap_or(nalgebra::Vector3::zeros());
+
+        let drift = (ship_rapier_pos.x * ship_rapier_pos.x
+            + ship_rapier_pos.y * ship_rapier_pos.y
+            + ship_rapier_pos.z * ship_rapier_pos.z)
+            .sqrt();
+
+        if drift < 0.001 {
+            return; // already at origin
+        }
+
+        let shift = -ship_rapier_pos;
+
+        self.anchor_f64[0] += ship_rapier_pos.x as f64;
+        self.anchor_f64[1] += ship_rapier_pos.y as f64;
+        self.anchor_f64[2] += ship_rapier_pos.z as f64;
+
+        for handle in [rebase_bodies.ship, rebase_bodies.player]
+            .iter()
+            .flatten()
+        {
+            if let Some(body) = physics.rigid_body_set.get_mut(*handle) {
+                let t = body.translation();
+                body.set_translation(
+                    nalgebra::Vector3::new(
+                        t.x + shift.x,
+                        t.y + shift.y,
+                        t.z + shift.z,
+                    ),
+                    true,
+                );
+            }
+        }
+
+        for handle in self.colliders.values() {
+            if let Some(coll) = physics.collider_set.get_mut(*handle)
+                && let Some(pos) = coll.position_wrt_parent()
+            {
+                let new_pos = nalgebra::Isometry3::from_parts(
+                    nalgebra::Translation3::new(
+                        pos.translation.x + shift.x,
+                        pos.translation.y + shift.y,
+                        pos.translation.z + shift.z,
+                    ),
+                    pos.rotation,
+                );
+                coll.set_position_wrt_parent(new_pos);
+            }
+        }
+
+        physics.sync_collider_positions();
+        physics.update_query_pipeline();
+
+        log::info!(
+            "Force rebase on collision entry: shift=({:.0},{:.0},{:.0})",
+            shift.x, shift.y, shift.z,
+        );
+    }
+
     /// Update collision grid and manage HeightField colliders.
     ///
     /// Lazily creates the `CollisionGrid` on first call. Each frame, asks
