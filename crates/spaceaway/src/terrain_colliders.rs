@@ -13,7 +13,10 @@ use sa_terrain::ChunkKey;
 use crate::ship_colliders;
 
 /// Only create HeightField colliders for chunks within this distance (meters).
-const COLLIDER_RANGE_M: f64 = 2000.0;
+/// Must be large enough that the chunk directly below the camera always gets
+/// a collider, even at high altitude. Dynamic range based on max_displacement
+/// ensures this works for planets of all sizes.
+const COLLIDER_RANGE_BASE_M: f64 = 2000.0;
 
 /// Shift all collider positions when the ship moves this far from the anchor.
 const ANCHOR_REBASE_THRESHOLD_M: f64 = 100.0;
@@ -95,7 +98,11 @@ impl TerrainColliders {
             if let Some(handle) = self.colliders.remove(key) {
                 physics.remove_collider(handle);
             }
-            self.chunk_cache.remove(key);
+            // Keep chunk_cache entries — height data (4KB each) is needed
+            // for heightfield collider creation. The streaming LRU evicts
+            // chunks for CPU memory (full ChunkData = 17KB+), but the
+            // collision cache only stores heights and is essential for the
+            // dynamic collider range to work at any altitude.
         }
     }
 
@@ -112,13 +119,15 @@ impl TerrainColliders {
     }
 
     /// Compute the isometry for the surface barrier cuboid.
-    /// Center at planet surface (radius_m). Top face 50m above surface,
-    /// bottom face 50m below. Ship stops at the top face and gravity
-    /// settles it to the actual terrain height via HeightField colliders.
+    /// Center at the DISPLACED terrain surface (radius + avg displacement),
+    /// not the bare sphere radius. Without this offset, the barrier sits
+    /// below the visual terrain and the ship falls through rendered chunks
+    /// before hitting the barrier.
     fn compute_barrier_isometry(
         &self,
         cam_rel_m: [f64; 3],
         radius_m: f64,
+        max_displacement_m: f64,
     ) -> nalgebra::Isometry3<f32> {
         let cam_len = (cam_rel_m[0] * cam_rel_m[0]
             + cam_rel_m[1] * cam_rel_m[1]
@@ -131,8 +140,10 @@ impl TerrainColliders {
             cam_rel_m[1] * inv_len,
             cam_rel_m[2] * inv_len,
         ];
-        // Center at planet surface (radius_m)
-        let depth = radius_m;
+        // Center at average displaced surface (radius + 50% of max displacement).
+        // Heights are noise in [0,1], average ≈ 0.5, so average surface is at
+        // radius + 0.5 * max_displacement.
+        let depth = radius_m + max_displacement_m * 0.5;
         let sx = (normal[0] * depth - self.anchor_f64[0]) as f32;
         let sy = (normal[1] * depth - self.anchor_f64[1]) as f32;
         let sz = (normal[2] * depth - self.anchor_f64[2]) as f32;
@@ -207,7 +218,7 @@ impl TerrainColliders {
         if altitude < 500_000.0 && cam_len > 0.01 {
             if self.surface_barrier.is_none() {
                 log::info!("BARRIER_CREATE: altitude={:.0}m, creating surface barrier", altitude);
-                let iso = self.compute_barrier_isometry(cam_rel_m, radius_m);
+                let iso = self.compute_barrier_isometry(cam_rel_m, radius_m, max_displacement_m);
                 // 10km x 100m x 10km cuboid — top face at surface level
                 let collider = ColliderBuilder::cuboid(5000.0, 50.0, 5000.0)
                     .collision_groups(InteractionGroups::new(
@@ -274,7 +285,7 @@ impl TerrainColliders {
             if let Some(sh) = self.surface_barrier
                 && let Some(coll) = physics.collider_set.get_mut(sh)
             {
-                let iso = self.compute_barrier_isometry(cam_rel_m, radius_m);
+                let iso = self.compute_barrier_isometry(cam_rel_m, radius_m, max_displacement_m);
                 coll.set_position_wrt_parent(iso);
             }
 
@@ -282,8 +293,12 @@ impl TerrainColliders {
             physics.update_query_pipeline();
         }
 
+        // Dynamic collider range: at least 2km, but scaled up for planets
+        // with large displacement so the chunk directly below always gets a
+        // collider even at high altitude.
+        let collider_range = COLLIDER_RANGE_BASE_M.max(max_displacement_m * 1.5);
+
         // Remove colliders that are out-of-range OR no longer in the visible set.
-        // The visible set check prevents overlapping LOD colliders.
         let keys_to_remove: Vec<ChunkKey> = self
             .colliders
             .keys()
@@ -291,7 +306,7 @@ impl TerrainColliders {
                 !visible_keys.contains(key)
                     || self.chunk_cache
                         .get(key)
-                        .map(|c| chunk_dist(c.center_f64, cam_rel_m, radius_m) > COLLIDER_RANGE_M * 1.2)
+                        .map(|c| chunk_dist(c.center_f64, cam_rel_m, radius_m) > collider_range * 1.2)
                         .unwrap_or(true)
             })
             .copied()
@@ -303,12 +318,12 @@ impl TerrainColliders {
             }
         }
 
-        // Add colliders only for chunks in the CURRENT visible set that are nearby.
-        // This prevents overlapping colliders from different LOD levels for the
-        // same area (coarse + fine LOD chunks both in cache near a LOD boundary).
-        // Minimum LOD for collision: chunks must be fine enough that the
-        // flat HeightField approximation is accurate. At LOD 10, chunk covers
-        // ~10km — above this, curvature error is too large for reliable collision.
+        // Add colliders for ANY cached chunk within range (not just the current
+        // visible set). The visible set contains the finest LODs for rendering,
+        // but collision needs coarser LODs (8+) that may no longer be "visible"
+        // at the current altitude. Removing the visible_keys filter ensures
+        // heightfield colliders exist at the terrain surface altitude even when
+        // the camera is above the finest-LOD rendering zone.
         let min_collider_lod: u8 = 8;
 
         let keys_to_add: Vec<ChunkKey> = self
@@ -316,9 +331,8 @@ impl TerrainColliders {
             .iter()
             .filter(|(key, cached)| {
                 !self.colliders.contains_key(key)
-                    && visible_keys.contains(key)
                     && key.lod >= min_collider_lod
-                    && chunk_dist(cached.center_f64, cam_rel_m, radius_m) < COLLIDER_RANGE_M
+                    && chunk_dist(cached.center_f64, cam_rel_m, radius_m) < collider_range
             })
             .map(|(key, _)| *key)
             .collect();
