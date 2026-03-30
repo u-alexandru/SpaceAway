@@ -517,11 +517,13 @@ impl App {
                 log::info!("TERRAIN: {} slab draws", terrain_draws.len());
             }
 
-            // Unload system if player has cruised far away (> 100 AU from star)
+            // Unload system if player has cruised far away from star.
+            // Must be larger than WARP_DISENGAGE_LY (0.01 ly ≈ 630 AU)
+            // otherwise the system loads on warp arrival and immediately unloads.
             if let Some(system) = &self.active_system {
                 let dist = self.galactic_position.distance_to(system.star_galactic_pos);
                 let au_in_ly = 1.581e-5_f64;
-                if dist > 100.0 * au_in_ly {
+                if dist > 1000.0 * au_in_ly {
                     log::info!("Left system boundary -- unloading");
                     if let Some(t) = &mut self.terrain { t.cleanup(&mut self.physics); }
                     self.terrain = None;
