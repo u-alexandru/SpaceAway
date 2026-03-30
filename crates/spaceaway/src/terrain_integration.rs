@@ -462,10 +462,6 @@ pub fn find_terrain_planet(
         if dist_m > radius_m * ACTIVATE_RADIUS_MULT {
             continue;
         }
-        // Don't activate if camera is inside the planet (teleport glitch).
-        if dist_m < radius_m * 0.5 {
-            continue;
-        }
 
         let dominated = match &best {
             Some((_, best_dist, _)) => dist_m < *best_dist,
