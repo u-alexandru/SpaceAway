@@ -140,10 +140,12 @@ impl TerrainColliders {
             cam_rel_m[1] * inv_len,
             cam_rel_m[2] * inv_len,
         ];
-        // Center at average displaced surface (radius + 50% of max displacement).
-        // Heights are noise in [0,1], average ≈ 0.5, so average surface is at
-        // radius + 0.5 * max_displacement.
-        let depth = radius_m + max_displacement_m * 0.5;
+        // Center at near-maximum displaced surface (radius + 90% of max
+        // displacement). This positions the barrier ABOVE most terrain,
+        // preventing the ship from falling through the visual surface.
+        // Heightfield colliders provide precise collision within 2km.
+        // The 10% gap ensures the barrier doesn't block landing in valleys.
+        let depth = radius_m + max_displacement_m * 0.9;
         let sx = (normal[0] * depth - self.anchor_f64[0]) as f32;
         let sy = (normal[1] * depth - self.anchor_f64[1]) as f32;
         let sz = (normal[2] * depth - self.anchor_f64[2]) as f32;

@@ -232,9 +232,36 @@ impl TerrainManager {
         // causes it to disappear — the coarsest chunks (uploaded first) get
         // evicted first, and the LOD fallback has no ancestor to render.
         //
-        // GPU mesh buffers (~70KB each) remain on the GPU regardless of
-        // whether we hold the handle. MeshStore never frees uploaded meshes.
         self.col.remove_evicted(physics, &removed_keys);
+
+        // Cap gpu_meshes to prevent unbounded GPU memory growth (~70KB per mesh).
+        // Evict farthest chunks first, NEVER evict LOD 0-1 (permanent fallback).
+        // Also free the GPU buffer via mesh_store.remove().
+        const GPU_MESH_CAP: usize = 600;
+        if self.gpu_meshes.len() > GPU_MESH_CAP {
+            // Sort by distance from camera (farthest first), then by LOD (finest first)
+            let mut keys_with_dist: Vec<(ChunkKey, f64)> = self.gpu_meshes.keys()
+                .filter(|k| k.lod > 1) // never evict LOD 0-1
+                .map(|k| {
+                    let dist = self.gpu_meshes.get(k)
+                        .map(|(_, c)| {
+                            let dx = c[0] - cam_rel_m[0];
+                            let dy = c[1] - cam_rel_m[1];
+                            let dz = c[2] - cam_rel_m[2];
+                            dx * dx + dy * dy + dz * dz
+                        })
+                        .unwrap_or(f64::MAX);
+                    (*k, dist)
+                })
+                .collect();
+            keys_with_dist.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            let excess = self.gpu_meshes.len() - GPU_MESH_CAP;
+            for (key, _) in keys_with_dist.iter().take(excess) {
+                if let Some((handle, _)) = self.gpu_meshes.remove(key) {
+                    mesh_store.remove(handle);
+                }
+            }
+        }
 
         // --- Gravity computation ---
         let gravity = sa_terrain::gravity::compute_gravity(

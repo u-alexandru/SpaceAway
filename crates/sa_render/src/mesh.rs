@@ -55,6 +55,12 @@ impl MeshStore {
     pub fn get(&self, handle: Handle<MeshMarker>) -> Option<&GpuMesh> {
         self.meshes.get(&handle)
     }
+
+    /// Remove a mesh from the store, freeing its GPU buffers.
+    /// Returns true if the mesh existed and was removed.
+    pub fn remove(&mut self, handle: Handle<MeshMarker>) -> bool {
+        self.meshes.remove(&handle).is_some()
+    }
 }
 
 impl Default for MeshStore {

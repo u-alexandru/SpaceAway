@@ -161,10 +161,25 @@ impl App {
                     ship: self.ship.as_ref().map(|s| s.body_handle),
                     player: self.player.as_ref().map(|p| p.body_handle),
                 };
-                // Build VP matrix in planet-relative coordinates for frustum culling.
-                // Frustum culling disabled — the VP-to-planet-relative transform
-                // was incorrect and caused the planet to render only one hemisphere.
-                // TODO: implement correct frustum math for planet-relative space.
+                // Build VP matrix in planet-relative coords for frustum culling.
+                // A point p in planet-relative space is at (p - cam_rel_m)
+                // in camera-relative space. So VP_planet = VP * T(-cam_rel_m).
+                // Previous bug: used +cam_rel_m (wrong sign), culling the
+                // visible hemisphere.
+                let aspect = gpu.config.width as f32 / gpu.config.height as f32;
+                let vp_f32 = self.camera.view_projection_matrix(aspect);
+                let planet_ly = terrain_mgr.frozen_planet_center_ly();
+                let cam_rel_x = (self.galactic_position.x - planet_ly.x) * 9.461e15;
+                let cam_rel_y = (self.galactic_position.y - planet_ly.y) * 9.461e15;
+                let cam_rel_z = (self.galactic_position.z - planet_ly.z) * 9.461e15;
+                // Negate: translate FROM planet-relative TO camera-relative
+                let translate = glam::Mat4::from_translation(Vec3::new(
+                    -cam_rel_x as f32, -cam_rel_y as f32, -cam_rel_z as f32,
+                ));
+                let vp_planet = vp_f32 * translate;
+                let cols = vp_planet.to_cols_array();
+                let vp_f64: [f64; 16] = std::array::from_fn(|i| cols[i] as f64);
+
                 let result = terrain_mgr.update(
                     self.galactic_position,
                     planet_pos,
@@ -173,7 +188,7 @@ impl App {
                     &mut self.physics,
                     ship_down,
                     &rebase_bodies,
-                    None,
+                    Some(vp_f64),
                 );
                 if let Some(sys) = &mut self.active_system {
                     if sys.hidden_body_index != result.hidden_body_index {
