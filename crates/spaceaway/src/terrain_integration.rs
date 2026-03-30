@@ -311,6 +311,25 @@ impl TerrainManager {
             camera_galactic_ly,
         );
 
+        // Diagnostic: log terrain state every 60 frames to debug disappearing planet
+        if self.diag_frame.is_multiple_of(60) {
+            let cam_dist = (cam_rel_m[0] * cam_rel_m[0]
+                + cam_rel_m[1] * cam_rel_m[1]
+                + cam_rel_m[2] * cam_rel_m[2]).sqrt();
+            let altitude_km = (cam_dist - self.config.radius_m) / 1000.0;
+            log::info!(
+                "TERRAIN_DIAG: alt={:.1}km, visible={}, gpu_meshes={}, draw_cmds={}, \
+                 committed={}, lod_range={}-{}",
+                altitude_km,
+                visible.len(),
+                self.gpu_meshes.len(),
+                draw_commands.len(),
+                self.icosphere_committed,
+                visible.iter().map(|n| n.lod).min().unwrap_or(0),
+                visible.iter().map(|n| n.lod).max().unwrap_or(0),
+            );
+        }
+
         // Icosphere hiding with commit-and-hold:
         // Once the icosphere is hidden, it STAYS hidden until terrain deactivates.
         // This prevents flickering when the camera moves closer and the quadtree
