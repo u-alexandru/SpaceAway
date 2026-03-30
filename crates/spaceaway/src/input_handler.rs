@@ -249,7 +249,7 @@ impl App {
             let planet = &planets[idx];
             let meters_in_ly = 1.0 / 9.461e15_f64;
             let planet_radius_m = planet.radius_earth as f64 * 6_371_000.0;
-            let view_dist_m = planet_radius_m * 1.8;
+            let view_dist_m = planet_radius_m * 3.0;
             let positions = system.compute_positions_ly_pub();
             let mut body_idx = 2;
             for pi in 0..idx {
