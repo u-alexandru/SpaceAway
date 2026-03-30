@@ -458,23 +458,23 @@ impl App {
                 }
             }
 
-            // Ray-sphere flythrough prevention — test ALL planets, not just nearest
+            // Ray-sphere flythrough prevention — test ALL bodies (planets + star)
             if self.drive.mode() == sa_ship::DriveMode::Cruise {
-                let mut planets = Vec::new();
+                let mut bodies = Vec::new();
                 if let Some(sys) = &self.active_system {
                     let positions = sys.compute_positions_ly_pub();
                     for (i, pos) in positions.iter().enumerate() {
                         if let Some(r) = sys.body_radius_m(i)
-                            && sys.planet_data(i).is_some()
+                            && (i == 0 || sys.planet_data(i).is_some())
                         {
-                            planets.push((*pos, r));
+                            bodies.push((*pos, r));
                         }
                     }
                 }
-                if !planets.is_empty() {
+                if !bodies.is_empty() {
                     let origin = [self.galactic_position.x, self.galactic_position.y, self.galactic_position.z];
                     let (clamped, should_disengage) = crate::approach::clamp_cruise_delta(
-                        origin, delta, &planets,
+                        origin, delta, &bodies,
                     );
                     delta = clamped;
                     if should_disengage {

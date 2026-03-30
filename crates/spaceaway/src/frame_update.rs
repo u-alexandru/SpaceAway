@@ -5,6 +5,9 @@ impl App {
     /// Update approach state BEFORE helm_mode runs, so cruise speed cap
     /// and flythrough prevention have current data.
     pub(super) fn update_approach_state(&mut self) {
+        // Find nearest significant body: planets AND the star.
+        // The star isn't landable but cruise must still decelerate and
+        // stop before hitting it. Body 0 is always the star.
         let find_planet = self.active_system.as_ref().and_then(|sys| {
             let positions = sys.compute_positions_ly_pub();
             let ly_to_m = LY_TO_M;
@@ -14,7 +17,11 @@ impl App {
                     Some(r) => r,
                     None => continue,
                 };
-                if sys.planet_data(i).is_none() { continue; }
+                // Include planets (have planet_data) AND the star (body 0).
+                // Skip coronas, atmospheres, and other non-physical bodies.
+                let is_star = i == 0;
+                let is_planet = sys.planet_data(i).is_some();
+                if !is_star && !is_planet { continue; }
                 let dx = (self.galactic_position.x - pos.x) * ly_to_m;
                 let dy = (self.galactic_position.y - pos.y) * ly_to_m;
                 let dz = (self.galactic_position.z - pos.z) * ly_to_m;
