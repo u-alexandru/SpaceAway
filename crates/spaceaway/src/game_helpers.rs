@@ -322,6 +322,8 @@ impl App {
             phase: GamePhase::Menu,
             menu: None,
             wants_star_lock: false,
+            approach: crate::approach::ApproachManager::new(),
+            approach_state: None,
             terrain: None,
             terrain_gravity: None,
             quit_requested: false,

@@ -16,11 +16,48 @@ impl App {
 
         // --- Terrain streaming (before immutable renderer borrow) ---
         profiling::scope!("terrain_update");
-        // Deactivation check
-        // Check deactivation separately to avoid borrow issues
-        let should_deactivate_terrain = self.terrain.as_ref()
-            .is_some_and(|t| t.should_deactivate(self.galactic_position));
-        if should_deactivate_terrain {
+
+        // --- Approach state machine ---
+        let find_planet = self.active_system.as_ref().and_then(|sys| {
+            let positions = sys.compute_positions_ly_pub();
+            let ly_to_m = 9.461e15_f64;
+            let mut best: Option<(usize, sa_math::WorldPos, f64, f64)> = None;
+            for (i, pos) in positions.iter().enumerate() {
+                let r = match sys.body_radius_m(i) {
+                    Some(r) => r,
+                    None => continue,
+                };
+                if sys.planet_data(i).is_none() { continue; }
+                let dx = (self.galactic_position.x - pos.x) * ly_to_m;
+                let dy = (self.galactic_position.y - pos.y) * ly_to_m;
+                let dz = (self.galactic_position.z - pos.z) * ly_to_m;
+                let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+                if best.as_ref().is_none_or(|b| dist < b.3) {
+                    best = Some((i, *pos, r, dist));
+                }
+            }
+            best.map(|(i, pos, r, _)| (i, pos, r))
+        });
+        let landed = self.landing.state() == crate::landing::LandingState::Landed;
+        let approach_state = self.approach.update(
+            self.galactic_position, find_planet, landed,
+        );
+
+        // Diagnostic: log planet distances every 60 frames
+        if self.active_system.is_some()
+            && self.time.frame_count().is_multiple_of(60)
+        {
+            log::info!(
+                "APPROACH: phase={:?}, alt={:.0}km, terrain_active={}, body={:?}",
+                approach_state.phase,
+                approach_state.altitude_m / 1000.0,
+                approach_state.terrain_active,
+                approach_state.body_index,
+            );
+        }
+
+        // Deactivation: approach manager says terrain should be off
+        if !approach_state.terrain_active && self.terrain.is_some() {
             if let Some(sys) = &mut self.active_system {
                 sys.terrain_body_index = None;
             }
@@ -31,103 +68,86 @@ impl App {
                 renderer.terrain_slab.clear();
             }
             self.terrain_gravity = None;
-            log::info!("Terrain deactivated");
+            log::info!("Terrain deactivated (approach phase: {:?})", approach_state.phase);
         }
 
-        // Diagnostic: log planet distances every 60 frames to debug terrain activation
-        if let Some(sys) = &self.active_system
-            && self.time.frame_count().is_multiple_of(60)
-        {
-            let positions = sys.compute_positions_ly_pub();
-            let ly_to_m = 9.461e15_f64;
-            for (i, pos) in positions.iter().enumerate() {
-                if let Some(r_m) = sys.body_radius_m(i)
-                    && sys.planet_data(i).is_some()
-                {
-                    let dx = (self.galactic_position.x - pos.x) * ly_to_m;
-                    let dy = (self.galactic_position.y - pos.y) * ly_to_m;
-                    let dz = (self.galactic_position.z - pos.z) * ly_to_m;
-                    let dist_m = (dx * dx + dy * dy + dz * dz).sqrt();
-                    let ratio = dist_m / r_m;
-                    log::info!(
-                        "DIAG body[{}]: dist={:.0}km, radius={:.0}km, ratio={:.2}x, \
-                         terrain={}, hidden={:?}, galactic=({:.12},{:.12},{:.12}), \
-                         planet=({:.12},{:.12},{:.12})",
-                        i, dist_m / 1000.0, r_m / 1000.0, ratio,
-                        self.terrain.is_some(), sys.terrain_body_index,
-                        self.galactic_position.x, self.galactic_position.y, self.galactic_position.z,
-                        pos.x, pos.y, pos.z,
-                    );
-                }
-            }
-        }
-
-        // Activation check (only if no terrain active and in a solar system)
-        if self.terrain.is_none()
+        // Activation: approach manager says terrain should be on
+        if approach_state.terrain_active && self.terrain.is_none()
+            && let (Some(planet_pos), Some(body_idx)) =
+                (approach_state.planet_pos_ly, approach_state.body_index)
             && let Some(sys) = &self.active_system
-            && let Some((body_idx, planet_pos, config, surface_grav)) =
-                terrain_integration::find_terrain_planet(sys, self.galactic_position)
+            && let Some((color_seed, sub_type, disp_frac, mass_e, radius_e)) =
+                sys.planet_data(body_idx)
         {
+            let config = sa_terrain::TerrainConfig {
+                radius_m: approach_state.planet_radius_m,
+                noise_seed: color_seed,
+                sub_type,
+                displacement_fraction: disp_frac,
+            };
+            let surface_grav =
+                sa_terrain::gravity::surface_gravity(mass_e, radius_e);
+
             log::info!(
-                "Terrain activated for body {} (radius {:.0} km, g={:.2} m/s2, type={:?}, seed={})",
+                "Terrain activated for body {} (radius {:.0} km, g={:.2} m/s2, \
+                 type={:?}, seed={}, phase={:?})",
                 body_idx,
                 config.radius_m / 1000.0,
                 surface_grav,
                 config.sub_type,
                 config.noise_seed,
+                approach_state.phase,
             );
+
             let mut terrain_mgr = terrain_integration::TerrainManager::new(
                 config, planet_pos, body_idx, surface_grav,
             );
 
-            // Seed LOD 0+1 chunks synchronously so the LOD fallback always
-            // has ancestors to render. Without this, the quadtree at activation
-            // distance subdivides LOD 0 (never emits it), so LOD 0 is never
-            // streamed, and the fallback has no ultimate ancestor.
+            // Seed LOD 0+1 chunks synchronously so the LOD fallback
+            // always has ancestors to render.
             if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
-                terrain_mgr.seed_base_chunks(&mut renderer.terrain_slab, &gpu.queue);
+                terrain_mgr.seed_base_chunks(
+                    &mut renderer.terrain_slab, &gpu.queue,
+                );
             }
 
             self.terrain = Some(terrain_mgr);
 
-            // Unified physics origin rebase: on terrain activation,
-            // shift all physics bodies so the ship is at the rapier origin.
-            // This ensures terrain colliders (within ~600m) and the sphere
-            // barrier are at reasonable f32 distances from the ship.
+            // Unified physics origin rebase: shift all physics bodies
+            // so the ship is at the rapier origin.
             if let Some(ship) = &self.ship
                 && let Some(body) = self.physics.rigid_body_set.get(ship.body_handle)
             {
                 let ship_pos = body.translation().clone_owned();
                 let shift = -ship_pos;
-                // Shift ship body
-                if let Some(b) = self.physics.rigid_body_set.get_mut(ship.body_handle) {
-                    let t = b.translation();
-                    b.set_translation(
-                        nalgebra::Vector3::new(t.x + shift.x, t.y + shift.y, t.z + shift.z),
-                        true,
-                    );
-                }
-                // Shift player body
-                if let Some(player) = &self.player
-                    && let Some(b) = self.physics.rigid_body_set.get_mut(player.body_handle)
+                if let Some(b) =
+                    self.physics.rigid_body_set.get_mut(ship.body_handle)
                 {
                     let t = b.translation();
                     b.set_translation(
-                        nalgebra::Vector3::new(t.x + shift.x, t.y + shift.y, t.z + shift.z),
+                        nalgebra::Vector3::new(
+                            t.x + shift.x, t.y + shift.y, t.z + shift.z,
+                        ),
                         true,
                     );
                 }
-                // Interior body stays at origin (player controller handles offset).
-                log::info!("Physics origin rebase on terrain activation: shifted by ({:.0},{:.0},{:.0})",
-                    shift.x, shift.y, shift.z);
-            }
-
-            // Only auto-disengage WARP on terrain activation.
-            // Cruise is allowed to continue — helm_mode auto-disengages
-            // cruise at planet_radius + 100km (atmosphere boundary).
-            if self.drive.mode() == sa_ship::DriveMode::Warp {
-                log::info!("Auto-disengage warp: terrain activation");
-                self.drive.request_disengage();
+                if let Some(player) = &self.player
+                    && let Some(b) =
+                        self.physics.rigid_body_set.get_mut(player.body_handle)
+                {
+                    let t = b.translation();
+                    b.set_translation(
+                        nalgebra::Vector3::new(
+                            t.x + shift.x, t.y + shift.y, t.z + shift.z,
+                        ),
+                        true,
+                    );
+                }
+                log::info!(
+                    "Physics origin rebase on terrain activation: \
+                     shifted by ({:.0},{:.0},{:.0})",
+                    shift.x, shift.y, shift.z,
+                );
             }
         }
 
@@ -142,6 +162,9 @@ impl App {
             self.terrain_gravity = None;
             log::info!("Terrain deactivated (no solar system)");
         }
+
+        // Store approach state for other systems (helm_mode, etc.)
+        self.approach_state = Some(approach_state);
 
         // Update terrain and collect draw commands (needs &mut renderer + &mut physics)
         // Ship "down" direction for gravity blending.

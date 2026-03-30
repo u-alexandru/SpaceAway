@@ -9,25 +9,11 @@ use sa_render::{GpuTerrainVertex, TerrainDrawCommand, TerrainSlab};
 use sa_terrain::quadtree::{max_lod_levels, select_visible_nodes};
 use sa_terrain::streaming::ChunkStreaming;
 use sa_terrain::{ChunkKey, TerrainConfig};
-use sa_universe::PlanetSubType;
 
-use crate::solar_system::ActiveSystem;
 use spaceaway::terrain_colliders::TerrainColliders;
 
 /// Light-years to meters conversion factor.
 const LY_TO_M: f64 = 9.461e15;
-
-/// Terrain activates when camera is within this multiple of the planet radius.
-/// At 2.0x radius the initial LOD is coarse (LOD 0-2 panels), but streaming
-/// fills finer chunks within seconds as the player approaches. This wide zone
-/// ensures terrain activates before the player reaches the icosphere surface,
-/// even at cruise speeds (1c ~ 4,800 km/frame).
-const ACTIVATE_RADIUS_MULT: f64 = 2.0;
-
-/// Terrain deactivates with hysteresis to prevent toggling. The 0.5x gap
-/// between activation (2.0x) and deactivation (2.5x) is wide enough that
-/// orbital drift and cruise overshoot don't cause rapid toggling.
-const DEACTIVATE_RADIUS_MULT: f64 = 2.5;
 
 // ---------------------------------------------------------------------------
 // TerrainFrameResult
@@ -308,23 +294,6 @@ impl TerrainManager {
         ]
     }
 
-    /// Returns true when the camera has moved far enough to deactivate terrain.
-    pub fn should_deactivate(&self, camera_ly: WorldPos) -> bool {
-        let dx = (camera_ly.x - self.planet_center_ly.x) * LY_TO_M;
-        let dy = (camera_ly.y - self.planet_center_ly.y) * LY_TO_M;
-        let dz = (camera_ly.z - self.planet_center_ly.z) * LY_TO_M;
-        let dist_m = (dx * dx + dy * dy + dz * dz).sqrt();
-        let threshold = self.config.radius_m * DEACTIVATE_RADIUS_MULT;
-        let should = dist_m > threshold;
-        if !should && dist_m > threshold * 0.5 {
-            log::debug!(
-                "Terrain deactivation check: dist={:.0}km, threshold={:.0}km",
-                dist_m / 1000.0, threshold / 1000.0,
-            );
-        }
-        should
-    }
-
     /// Body index this terrain replaces.
     pub fn body_index(&self) -> usize {
         self.body_index
@@ -413,80 +382,3 @@ fn upload_chunk_to_slab(
     }
 }
 
-/// Returns true if the sub-type represents a landable (rocky) surface.
-fn is_landable(sub_type: PlanetSubType) -> bool {
-    matches!(
-        sub_type,
-        PlanetSubType::Molten
-            | PlanetSubType::Barren
-            | PlanetSubType::Desert
-            | PlanetSubType::Temperate
-            | PlanetSubType::Ocean
-            | PlanetSubType::Frozen
-    )
-}
-
-/// Find the nearest landable planet within activation range.
-///
-/// Returns `(body_index, planet_center_ly, TerrainConfig, surface_gravity_ms2)`
-/// if a planet qualifies, or `None` if no planet is close enough.
-pub fn find_terrain_planet(
-    active_system: &ActiveSystem,
-    camera_ly: WorldPos,
-) -> Option<(usize, WorldPos, TerrainConfig, f32)> {
-    let positions = active_system.compute_positions_ly_pub();
-
-    let mut best: Option<(usize, f64, WorldPos)> = None;
-
-    for (i, pos) in positions.iter().enumerate() {
-        let radius_m = match active_system.body_radius_m(i) {
-            Some(r) => r,
-            None => continue,
-        };
-
-        let (_color_seed, sub_type, _disp_frac, _mass, _re) =
-            match active_system.planet_data(i) {
-                Some(data) => data,
-                None => continue,
-            };
-
-        if !is_landable(sub_type) {
-            continue;
-        }
-
-        let dx = (camera_ly.x - pos.x) * LY_TO_M;
-        let dy = (camera_ly.y - pos.y) * LY_TO_M;
-        let dz = (camera_ly.z - pos.z) * LY_TO_M;
-        let dist_m = (dx * dx + dy * dy + dz * dz).sqrt();
-
-        if dist_m > radius_m * ACTIVATE_RADIUS_MULT {
-            continue;
-        }
-
-        let dominated = match &best {
-            Some((_, best_dist, _)) => dist_m < *best_dist,
-            None => true,
-        };
-        if dominated {
-            best = Some((i, dist_m, *pos));
-        }
-    }
-
-    let (body_idx, _dist, center_ly) = best?;
-
-    let radius_m = active_system.body_radius_m(body_idx)?;
-    let (color_seed, sub_type, disp_frac, mass_earth, radius_earth) =
-        active_system.planet_data(body_idx)?;
-
-    let config = TerrainConfig {
-        radius_m,
-        noise_seed: color_seed,
-        sub_type,
-        displacement_fraction: disp_frac,
-    };
-
-    let surface_grav =
-        sa_terrain::gravity::surface_gravity(mass_earth, radius_earth);
-
-    Some((body_idx, center_ly, config, surface_grav))
-}

@@ -176,6 +176,10 @@ struct App {
     /// Deferred star lock-on flag — set by Tab key, consumed in RedrawRequested
     /// after camera orientation is fully updated for the current frame.
     wants_star_lock: bool,
+    /// Unified planet approach state machine.
+    approach: crate::approach::ApproachManager,
+    /// Last computed approach state (shared with helm_mode).
+    pub approach_state: Option<crate::approach::ApproachState>,
     /// Active terrain manager (when near a landable planet).
     terrain: Option<terrain_integration::TerrainManager>,
     /// Gravity state from terrain (planet gravity blending).
