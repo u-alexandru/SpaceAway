@@ -1,25 +1,18 @@
 //! HeightField collider management for terrain chunks.
 //!
-//! Creates rapier3d HeightField colliders for terrain chunks near the camera,
-//! oriented to the local tangent plane of the sphere surface.
+//! Uses `CollisionGrid` from `sa_terrain` for fixed-LOD collision chunks
+//! independent of visual LOD. The grid produces height data; this module
+//! converts it into rapier3d HeightField colliders.
 
 use std::collections::HashMap;
 
 use rapier3d::prelude::*;
 use sa_physics::PhysicsWorld;
-use sa_terrain::chunk::GRID_SIZE;
-use sa_terrain::ChunkKey;
+use sa_terrain::collision_grid::{CollisionGrid, GridUpdate};
+use sa_terrain::config::{COLLISION_REBASE_THRESHOLD_M, GRID_SIZE};
+use sa_terrain::{ChunkKey, TerrainConfig};
 
 use crate::ship_colliders;
-
-/// Only create HeightField colliders for chunks within this distance (meters).
-/// Must be large enough that the chunk directly below the camera always gets
-/// a collider, even at high altitude. Dynamic range based on max_displacement
-/// ensures this works for planets of all sizes.
-const COLLIDER_RANGE_BASE_M: f64 = 2000.0;
-
-/// Shift all collider positions when the ship moves this far from the anchor.
-const ANCHOR_REBASE_THRESHOLD_M: f64 = 100.0;
 
 /// Handles for all bodies that must be shifted during an anchor rebase.
 /// Collected from main.rs and passed into the rebase function.
@@ -32,18 +25,8 @@ pub struct RebaseBodies {
     pub player: Option<RigidBodyHandle>,
 }
 
-/// Minimal data retained per chunk for collider management.
-pub struct CachedChunk {
-    pub center_f64: [f64; 3],
-    pub heights: Vec<f32>,
-    pub lod: u8,
-    pub face: u8,
-    pub grid_x: u32,
-    pub grid_y: u32,
-}
-
 /// Terrain collider state — manages HeightField colliders attached to a static
-/// rigid body in the physics world.
+/// rigid body in the physics world, driven by the `CollisionGrid`.
 pub struct TerrainColliders {
     /// Static rigid body that parents all terrain colliders.
     pub terrain_body: Option<RigidBodyHandle>,
@@ -51,10 +34,8 @@ pub struct TerrainColliders {
     pub colliders: HashMap<ChunkKey, ColliderHandle>,
     /// Physics anchor position in planet-relative meters (f64).
     pub anchor_f64: [f64; 3],
-    /// Chunk data retained for collider creation (heights + center).
-    pub chunk_cache: HashMap<ChunkKey, CachedChunk>,
-    /// Flat surface barrier below ship (prevents flythrough at coarse LODs).
-    pub surface_barrier: Option<ColliderHandle>,
+    /// Lazily initialized collision grid.
+    collision_grid: Option<CollisionGrid>,
 }
 
 impl Default for TerrainColliders {
@@ -69,8 +50,7 @@ impl TerrainColliders {
             terrain_body: None,
             colliders: HashMap::new(),
             anchor_f64: [0.0; 3],
-            chunk_cache: HashMap::new(),
-            surface_barrier: None,
+            collision_grid: None,
         }
     }
 
@@ -80,193 +60,101 @@ impl TerrainColliders {
             physics.remove_collider(*handle);
         }
         self.colliders.clear();
-        if let Some(sh) = self.surface_barrier.take() {
-            physics.remove_collider(sh);
-        }
         if let Some(bh) = self.terrain_body.take() {
             physics.remove_rigid_body(bh);
         }
+        self.collision_grid = None;
     }
 
-    /// Remove colliders for the given evicted chunk keys.
-    pub fn remove_evicted(
-        &mut self,
-        physics: &mut PhysicsWorld,
-        removed_keys: &[ChunkKey],
-    ) {
-        for key in removed_keys {
-            if let Some(handle) = self.colliders.remove(key) {
-                physics.remove_collider(handle);
-            }
-            // Keep chunk_cache entries — height data (4KB each) is needed
-            // for heightfield collider creation. The streaming LRU evicts
-            // chunks for CPU memory (full ChunkData = 17KB+), but the
-            // collision cache only stores heights and is essential for the
-            // dynamic collider range to work at any altitude.
-        }
-    }
-
-    /// Cache chunk data for future collider creation.
-    pub fn cache_chunk(&mut self, key: ChunkKey, chunk: &sa_terrain::ChunkData) {
-        self.chunk_cache.insert(key, CachedChunk {
-            center_f64: chunk.center_f64,
-            heights: chunk.heights.clone(),
-            lod: key.lod,
-            face: key.face,
-            grid_x: key.x,
-            grid_y: key.y,
-        });
-    }
-
-    /// Compute the isometry for the surface barrier cuboid.
-    /// Center at the DISPLACED terrain surface (radius + avg displacement),
-    /// not the bare sphere radius. Without this offset, the barrier sits
-    /// below the visual terrain and the ship falls through rendered chunks
-    /// before hitting the barrier.
-    fn compute_barrier_isometry(
-        &self,
-        cam_rel_m: [f64; 3],
-        radius_m: f64,
-        max_displacement_m: f64,
-    ) -> nalgebra::Isometry3<f32> {
-        let cam_len = (cam_rel_m[0] * cam_rel_m[0]
-            + cam_rel_m[1] * cam_rel_m[1]
-            + cam_rel_m[2] * cam_rel_m[2])
-            .sqrt()
-            .max(0.01);
-        let inv_len = 1.0 / cam_len;
-        let normal = [
-            cam_rel_m[0] * inv_len,
-            cam_rel_m[1] * inv_len,
-            cam_rel_m[2] * inv_len,
-        ];
-        // Center at near-maximum displaced surface (radius + 90% of max
-        // displacement). This positions the barrier ABOVE most terrain,
-        // preventing the ship from falling through the visual surface.
-        // Heightfield colliders provide precise collision within 2km.
-        // The 10% gap ensures the barrier doesn't block landing in valleys.
-        let depth = radius_m + max_displacement_m * 0.9;
-        let sx = (normal[0] * depth - self.anchor_f64[0]) as f32;
-        let sy = (normal[1] * depth - self.anchor_f64[1]) as f32;
-        let sz = (normal[2] * depth - self.anchor_f64[2]) as f32;
-
-        let up = nalgebra::Vector3::new(0.0_f32, 1.0, 0.0);
-        let nf = nalgebra::Vector3::new(normal[0] as f32, normal[1] as f32, normal[2] as f32);
-        let rotation = nalgebra::UnitQuaternion::rotation_between(&up, &nf)
-            .unwrap_or(nalgebra::UnitQuaternion::identity());
-        nalgebra::Isometry3::from_parts(
-            nalgebra::Translation3::new(sx, sy, sz),
-            rotation,
-        )
-    }
-
-    /// Update HeightField colliders for chunks near the camera.
+    /// Update collision grid and manage HeightField colliders.
     ///
-    /// Unified anchor system: the terrain body stays at (0,0,0). All physics
-    /// bodies (ship, player, interior) are positioned relative to the anchor.
-    /// When the ship drifts >100m from origin, all bodies are shifted back.
+    /// Lazily creates the `CollisionGrid` on first call. Each frame, asks
+    /// the grid for chunks to add/remove and converts them to rapier
+    /// HeightField colliders.
     #[profiling::function]
-    pub fn update(
+    pub fn update_collision_grid(
         &mut self,
-        physics: &mut PhysicsWorld,
         cam_rel_m: [f64; 3],
-        radius_m: f64,
-        max_displacement_m: f64,
-        visible_keys: &std::collections::HashSet<ChunkKey>,
+        config: &TerrainConfig,
+        physics: &mut PhysicsWorld,
         rebase_bodies: &RebaseBodies,
     ) {
-        // On first call, initialize anchor to the camera position so the
-        // surface barrier and heightfield colliders are placed correctly.
-        // Without this, anchor stays at [0,0,0] from the constructor.
+        // On first call, initialize anchor to the camera position.
         if self.terrain_body.is_none() {
             self.anchor_f64 = cam_rel_m;
         }
 
         let terrain_body = *self.terrain_body.get_or_insert_with(|| {
-            // Terrain body stays at (0,0,0) forever — never repositioned.
             let rb = RigidBodyBuilder::fixed().build();
             physics.add_rigid_body(rb)
         });
 
-        // Get ship's rapier position for barrier placement and rebase check.
-        let ship_rapier_pos = rebase_bodies.ship
+        // Lazy init collision grid.
+        let grid = self
+            .collision_grid
+            .get_or_insert_with(|| CollisionGrid::new(config));
+
+        let GridUpdate { added, removed } = grid.update(cam_rel_m, config);
+
+        // Remove colliders for chunks that left the grid.
+        for key in &removed {
+            if let Some(handle) = self.colliders.remove(key) {
+                physics.remove_collider(handle);
+            }
+        }
+
+        // Add colliders for newly visible chunks.
+        for (key, heights) in &added {
+            if let Some(handle) = build_heightfield_from_grid(
+                physics,
+                terrain_body,
+                *key,
+                heights,
+                &self.anchor_f64,
+                config.radius_m,
+            ) {
+                self.colliders.insert(*key, handle);
+            }
+        }
+
+        // Anchor rebase: shift all bodies when ship drifts too far.
+        let ship_rapier_pos = rebase_bodies
+            .ship
             .and_then(|h| physics.rigid_body_set.get(h))
             .map(|b| *b.translation())
             .unwrap_or(nalgebra::Vector3::zeros());
 
-        // Flat surface barrier: a large, thick cuboid at the planet surface.
-        // Positioned relative to the anchor (not tracking the ship). Only
-        // repositioned during creation and rebases — NOT every frame, as
-        // per-frame repositioning breaks rapier's CCD.
-        //
-        // 100m thick so the ship can't tunnel through at any speed.
-        // The top face is at the surface level.
-        let cam_len = (cam_rel_m[0] * cam_rel_m[0]
-            + cam_rel_m[1] * cam_rel_m[1]
-            + cam_rel_m[2] * cam_rel_m[2])
-            .sqrt();
-        let altitude = cam_len - radius_m;
-
-        // Log barrier state every frame when close to surface
-        if altitude < 500_000.0 {
-            log::debug!(
-                "BARRIER_TICK: alt={:.0}m, barrier={}, ship=({:.1},{:.1},{:.1})",
-                altitude,
-                self.surface_barrier.is_some(),
-                ship_rapier_pos.x, ship_rapier_pos.y, ship_rapier_pos.z,
-            );
-        }
-
-        if altitude < 500_000.0 && cam_len > 0.01 {
-            if self.surface_barrier.is_none() {
-                log::info!("BARRIER_CREATE: altitude={:.0}m, creating surface barrier", altitude);
-                let iso = self.compute_barrier_isometry(cam_rel_m, radius_m, max_displacement_m);
-                // 10km x 100m x 10km cuboid — top face at surface level
-                let collider = ColliderBuilder::cuboid(5000.0, 50.0, 5000.0)
-                    .collision_groups(InteractionGroups::new(
-                        ship_colliders::TERRAIN,
-                        ship_colliders::PLAYER
-                            .union(ship_colliders::SHIP_HULL)
-                            .union(ship_colliders::SHIP_EXTERIOR),
-                    ))
-                    .friction(0.8)
-                    .position(iso)
-                    .build();
-                self.surface_barrier =
-                    Some(physics.add_collider(collider, terrain_body));
-            }
-        } else if let Some(sh) = self.surface_barrier.take() {
-            physics.remove_collider(sh);
-        }
-
-        // Unified anchor rebase: check if the ship has drifted >100m from
-        // the physics origin. If so, shift ALL bodies (ship, player, interior,
-        // terrain colliders) so the ship returns near origin.
         let ship_drift = (ship_rapier_pos.x * ship_rapier_pos.x
             + ship_rapier_pos.y * ship_rapier_pos.y
-            + ship_rapier_pos.z * ship_rapier_pos.z).sqrt();
+            + ship_rapier_pos.z * ship_rapier_pos.z)
+            .sqrt();
 
-        if ship_drift > ANCHOR_REBASE_THRESHOLD_M as f32 {
-            // The shift moves ship back toward origin.
+        if ship_drift > COLLISION_REBASE_THRESHOLD_M as f32 {
             let shift = -ship_rapier_pos;
 
-            // Update anchor: add the ship's rapier position (in f64) to the anchor.
             self.anchor_f64[0] += ship_rapier_pos.x as f64;
             self.anchor_f64[1] += ship_rapier_pos.y as f64;
             self.anchor_f64[2] += ship_rapier_pos.z as f64;
 
-            // Shift all rigid bodies (ship + player, not interior which stays at origin).
-            for handle in [rebase_bodies.ship, rebase_bodies.player].iter().flatten() {
+            // Shift rigid bodies (ship + player).
+            for handle in [rebase_bodies.ship, rebase_bodies.player]
+                .iter()
+                .flatten()
+            {
                 if let Some(body) = physics.rigid_body_set.get_mut(*handle) {
                     let t = body.translation();
                     body.set_translation(
-                        nalgebra::Vector3::new(t.x + shift.x, t.y + shift.y, t.z + shift.z),
+                        nalgebra::Vector3::new(
+                            t.x + shift.x,
+                            t.y + shift.y,
+                            t.z + shift.z,
+                        ),
                         true,
                     );
                 }
             }
 
-            // Shift HeightField colliders (position_wrt_parent on terrain body).
+            // Shift HeightField colliders.
             for handle in self.colliders.values() {
                 if let Some(coll) = physics.collider_set.get_mut(*handle)
                     && let Some(pos) = coll.position_wrt_parent()
@@ -283,78 +171,11 @@ impl TerrainColliders {
                 }
             }
 
-            // Reposition surface barrier for new anchor.
-            if let Some(sh) = self.surface_barrier
-                && let Some(coll) = physics.collider_set.get_mut(sh)
-            {
-                let iso = self.compute_barrier_isometry(cam_rel_m, radius_m, max_displacement_m);
-                coll.set_position_wrt_parent(iso);
-            }
-
             physics.sync_collider_positions();
             physics.update_query_pipeline();
         }
 
-        // Dynamic collider range: at least 2km, but scaled up for planets
-        // with large displacement so the chunk directly below always gets a
-        // collider even at high altitude.
-        let collider_range = COLLIDER_RANGE_BASE_M.max(max_displacement_m * 1.5);
-
-        // Remove colliders that are out-of-range OR no longer in the visible set.
-        let keys_to_remove: Vec<ChunkKey> = self
-            .colliders
-            .keys()
-            .filter(|key| {
-                !visible_keys.contains(key)
-                    || self.chunk_cache
-                        .get(key)
-                        .map(|c| chunk_dist(c.center_f64, cam_rel_m, radius_m) > collider_range * 1.2)
-                        .unwrap_or(true)
-            })
-            .copied()
-            .collect();
-
-        for key in &keys_to_remove {
-            if let Some(handle) = self.colliders.remove(key) {
-                physics.remove_collider(handle);
-            }
-        }
-
-        // Add colliders for ANY cached chunk within range (not just the current
-        // visible set). The visible set contains the finest LODs for rendering,
-        // but collision needs coarser LODs (8+) that may no longer be "visible"
-        // at the current altitude. Removing the visible_keys filter ensures
-        // heightfield colliders exist at the terrain surface altitude even when
-        // the camera is above the finest-LOD rendering zone.
-        let min_collider_lod: u8 = 8;
-
-        let keys_to_add: Vec<ChunkKey> = self
-            .chunk_cache
-            .iter()
-            .filter(|(key, cached)| {
-                !self.colliders.contains_key(key)
-                    && key.lod >= min_collider_lod
-                    && chunk_dist(cached.center_f64, cam_rel_m, radius_m) < collider_range
-            })
-            .map(|(key, _)| *key)
-            .collect();
-
-        for key in keys_to_add {
-            if let Some(cached) = self.chunk_cache.get(&key)
-                && let Some(handle) = build_heightfield(
-                    physics,
-                    terrain_body,
-                    cached,
-                    &self.anchor_f64,
-                    radius_m,
-                    max_displacement_m,
-                )
-            {
-                self.colliders.insert(key, handle);
-            }
-        }
-
-        if !self.colliders.is_empty() {
+        if !self.colliders.is_empty() && (!added.is_empty() || !removed.is_empty()) {
             physics.sync_collider_positions();
             physics.update_query_pipeline();
         }
@@ -365,115 +186,114 @@ impl TerrainColliders {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Distance from camera to the chunk's geometric surface position.
+/// Build a HeightField collider from collision grid heights (absolute radii).
 ///
-/// `center_f64` includes terrain displacement (can be 50-150km above the
-/// geometric sphere surface). Using it directly makes chunk_dist return
-/// ~75km even for chunks directly below the camera. Instead, project
-/// the center back to the sphere surface (normalize to radius) to get
-/// the distance the camera must travel to reach that patch of ground.
-fn chunk_dist(center: [f64; 3], cam: [f64; 3], radius_m: f64) -> f64 {
-    let center_len = (center[0] * center[0] + center[1] * center[1] + center[2] * center[2]).sqrt();
-    if center_len < 1.0 {
-        return f64::MAX;
-    }
-    // Project center to geometric sphere surface
-    let scale = radius_m / center_len;
-    let sx = center[0] * scale;
-    let sy = center[1] * scale;
-    let sz = center[2] * scale;
-    let dx = sx - cam[0];
-    let dy = sy - cam[1];
-    let dz = sz - cam[2];
-    (dx * dx + dy * dy + dz * dz).sqrt()
-}
-
-/// Build a HeightField collider for one chunk, oriented to the tangent plane.
-fn build_heightfield(
+/// The collision grid stores heights as absolute radius values (meters from
+/// planet center). We compute the chunk center direction, position, and
+/// tangent frame from the chunk key's face/UV coordinates.
+fn build_heightfield_from_grid(
     physics: &mut PhysicsWorld,
     terrain_body: RigidBodyHandle,
-    cached: &CachedChunk,
+    key: ChunkKey,
+    heights: &[f32],
     anchor: &[f64; 3],
     radius_m: f64,
-    max_displacement_m: f64,
 ) -> Option<ColliderHandle> {
     let gs = GRID_SIZE as usize;
-    if cached.heights.len() < gs * gs {
+    if heights.len() < gs * gs {
         return None;
     }
 
-    // Heights are raw noise [0,1]. Chunk center is already displaced by avg_h * amplitude.
-    // HeightField needs heights relative to center, so subtract average to avoid double-counting.
-    let avg_h: f32 = cached.heights.iter().sum::<f32>() / (gs * gs) as f32;
-    let heights =
-        nalgebra::DMatrix::from_fn(gs, gs, |r, c| cached.heights[r * gs + c] - avg_h);
+    // Heights are absolute radii. Compute average radius for centering.
+    let avg_r: f64 = heights.iter().map(|h| *h as f64).sum::<f64>() / (gs * gs) as f64;
 
+    // Chunk geometry from cube face coordinates.
+    let face = sa_terrain::cube_sphere::CubeFace::ALL[key.face as usize];
+    let tiles = 1u64 << key.lod;
+    let u_center = -1.0 + (2.0 * key.x as f64 + 1.0) / tiles as f64;
+    let v_center = -1.0 + (2.0 * key.y as f64 + 1.0) / tiles as f64;
+
+    // Compute chunk center on sphere at the average radius.
+    let center_dir = sa_terrain::cube_sphere::cube_to_sphere(face, u_center, v_center);
+    let cx_world = center_dir[0] * avg_r;
+    let cy_world = center_dir[1] * avg_r;
+    let cz_world = center_dir[2] * avg_r;
+
+    // Position relative to anchor.
+    let cx = (cx_world - anchor[0]) as f32;
+    let cy = (cy_world - anchor[1]) as f32;
+    let cz = (cz_world - anchor[2]) as f32;
+
+    // Chunk physical size: arc length at this LOD.
     let face_size_m = radius_m * std::f64::consts::FRAC_PI_2;
-    let chunk_size_m = (face_size_m / (1u64 << cached.lod) as f64) as f32;
-    // Clamp min displacement to 1m to prevent degenerate zero-thickness HeightField.
-    let max_disp = (max_displacement_m as f32).max(1.0);
-    let scale = nalgebra::Vector3::new(chunk_size_m, max_disp, chunk_size_m);
+    let chunk_size_m = (face_size_m / tiles as f64) as f32;
 
-    // Chunk center relative to anchor.
-    let cx = (cached.center_f64[0] - anchor[0]) as f32;
-    let cy = (cached.center_f64[1] - anchor[1]) as f32;
-    let cz = (cached.center_f64[2] - anchor[2]) as f32;
+    // Height scale: max deviation from average determines the HeightField
+    // Y scale. Use the actual range to get precise collision.
+    let min_h = heights.iter().cloned().fold(f32::INFINITY, f32::min);
+    let max_h = heights.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    let height_range = (max_h - min_h).max(1.0); // prevent degenerate zero thickness
 
-    // Compute tangent frame from the cube face UV axes.
-    // HeightField X-axis must align with the chunk's U direction,
-    // HeightField Z-axis must align with the chunk's V direction,
-    // HeightField Y-axis (height) must align with the surface normal.
-    //
-    // We sample two nearby sphere points to get tangent vectors,
-    // then build a rotation matrix from the resulting frame.
-    let subdivs = 1u64 << cached.lod;
-    let u_center = -1.0 + (2.0 * cached.grid_x as f64 + 1.0) / subdivs as f64;
-    let v_center = -1.0 + (2.0 * cached.grid_y as f64 + 1.0) / subdivs as f64;
-    let face = sa_terrain::cube_sphere::CubeFace::ALL[cached.face as usize];
+    // Rescale height matrix to [0,1] range for rapier (it multiplies by scale.y).
+    let height_matrix_scaled = nalgebra::DMatrix::from_fn(gs, gs, |r, c| {
+        (heights[r * gs + c] - min_h) / height_range
+    });
 
+    let scale = nalgebra::Vector3::new(chunk_size_m, height_range, chunk_size_m);
+
+    // Tangent frame from cube face UV axes.
     let eps = 0.001;
-    let center_dir_f64 = sa_terrain::cube_sphere::cube_to_sphere(face, u_center, v_center);
-    let u_dir_f64 = sa_terrain::cube_sphere::cube_to_sphere(face, u_center + eps, v_center);
-    let v_dir_f64 = sa_terrain::cube_sphere::cube_to_sphere(face, u_center, v_center + eps);
+    let u_dir_f64 =
+        sa_terrain::cube_sphere::cube_to_sphere(face, u_center + eps, v_center);
+    let v_dir_f64 =
+        sa_terrain::cube_sphere::cube_to_sphere(face, u_center, v_center + eps);
 
-    // Tangent U = normalize(u_dir - center_dir)
     let tu = nalgebra::Vector3::new(
-        (u_dir_f64[0] - center_dir_f64[0]) as f32,
-        (u_dir_f64[1] - center_dir_f64[1]) as f32,
-        (u_dir_f64[2] - center_dir_f64[2]) as f32,
-    ).normalize();
-    // Tangent V = normalize(v_dir - center_dir)
+        (u_dir_f64[0] - center_dir[0]) as f32,
+        (u_dir_f64[1] - center_dir[1]) as f32,
+        (u_dir_f64[2] - center_dir[2]) as f32,
+    )
+    .normalize();
     let tv = nalgebra::Vector3::new(
-        (v_dir_f64[0] - center_dir_f64[0]) as f32,
-        (v_dir_f64[1] - center_dir_f64[1]) as f32,
-        (v_dir_f64[2] - center_dir_f64[2]) as f32,
-    ).normalize();
-    // Gram-Schmidt orthogonalize: tu and tv from finite differences are
-    // not exactly orthogonal due to cube-to-sphere distortion.
+        (v_dir_f64[0] - center_dir[0]) as f32,
+        (v_dir_f64[1] - center_dir[1]) as f32,
+        (v_dir_f64[2] - center_dir[2]) as f32,
+    )
+    .normalize();
+
     let normal = tu.cross(&tv).normalize();
     let tv_ortho = normal.cross(&tu).normalize();
 
-    // Build rotation: columns are the axes of the rotated frame.
-    // HeightField local X → tu (chunk U axis)
-    // HeightField local Y → normal (outward from sphere)
-    // HeightField local Z → tv_ortho (chunk V axis, orthogonalized)
     let rotation = nalgebra::UnitQuaternion::from_rotation_matrix(
-        &nalgebra::Rotation3::from_matrix_unchecked(
-            nalgebra::Matrix3::from_columns(&[tu, normal, tv_ortho])
-        )
+        &nalgebra::Rotation3::from_matrix_unchecked(nalgebra::Matrix3::from_columns(&[
+            tu, normal, tv_ortho,
+        ])),
     );
 
+    // Offset the center vertically: rapier HeightField center is at
+    // scale.y * 0.5 above the base. We placed center at avg_r, but with
+    // the [0,1] rescaled matrix, the base is at min_h and top at max_h.
+    // The HeightField center in local Y is at (min_h + max_h) / 2.
+    // We need to offset from avg_r to (min_h + max_h) / 2 along the normal.
+    let mid_h = (min_h as f64 + max_h as f64) * 0.5;
+    let h_offset = (mid_h - avg_r) as f32;
+    let final_cx = cx + normal.x * h_offset;
+    let final_cy = cy + normal.y * h_offset;
+    let final_cz = cz + normal.z * h_offset;
+
     let position = nalgebra::Isometry3::from_parts(
-        nalgebra::Translation3::new(cx, cy, cz),
+        nalgebra::Translation3::new(final_cx, final_cy, final_cz),
         rotation,
     );
 
     let groups = InteractionGroups::new(
         ship_colliders::TERRAIN,
-        ship_colliders::PLAYER.union(ship_colliders::SHIP_HULL).union(ship_colliders::SHIP_EXTERIOR),
+        ship_colliders::PLAYER
+            .union(ship_colliders::SHIP_HULL)
+            .union(ship_colliders::SHIP_EXTERIOR),
     );
 
-    let collider = ColliderBuilder::heightfield(heights, scale)
+    let collider = ColliderBuilder::heightfield(height_matrix_scaled, scale)
         .collision_groups(groups)
         .friction(0.8)
         .position(position)

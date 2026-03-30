@@ -1,19 +1,17 @@
 //! Full descent integration test: real terrain code, real colliders, real rebase.
 //!
 //! Headless (no GPU, no window). Simulates a ship descending from 2km above
-//! a 7706km desert planet using the REAL TerrainColliders, ChunkStreaming,
-//! select_visible_nodes, and RebaseBodies. The ship starts with a 100 m/s
-//! downward velocity to simulate an approach from orbit. Verifies the ship
-//! stops at the surface without tunneling.
+//! a 7706km desert planet using the REAL TerrainColliders with CollisionGrid,
+//! ChunkStreaming, select_visible_nodes, and RebaseBodies. The ship starts
+//! with a 100 m/s downward velocity to simulate an approach from orbit.
+//! Verifies the ship stops at the surface without tunneling.
 //!
 //! Three phases:
-//!   Warmup:  hold the ship stationary for 120 frames while chunk streaming
-//!            populates the cache (background workers need time).
-//!   Descent: release the ship under gravity; it falls to the barrier.
-//!   Settle:  after the ship stops on the barrier, continue ticking for 300
-//!            frames so heightfield chunks stream in for the final position.
-
-use std::collections::HashSet;
+//!   Warmup:  hold the ship stationary for 120 frames while the collision
+//!            grid populates heightfield colliders.
+//!   Descent: release the ship under gravity; it falls to the heightfields.
+//!   Settle:  after the ship stops, continue ticking for 300 frames to
+//!            verify stability.
 
 use rapier3d::prelude::*;
 use sa_physics::PhysicsWorld;
@@ -44,17 +42,17 @@ const DISPLACEMENT_FRACTION: f32 = 0.02;
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Run one frame of terrain streaming + collider update (no physics forces).
+/// Run one frame of terrain streaming + collision grid update (no physics forces).
 fn tick_terrain(
     physics: &mut PhysicsWorld,
-    streaming: &mut ChunkStreaming,
+    _streaming: &mut ChunkStreaming,
     terrain_colliders: &mut TerrainColliders,
     config: &TerrainConfig,
     anchor: &mut [f64; 3],
     ship_handle: RigidBodyHandle,
     rebase_bodies: &RebaseBodies,
-    max_lod: u8,
-    max_displacement_m: f64,
+    _max_lod: u8,
+    _max_displacement_m: f64,
 ) {
     let ship_pos = physics
         .get_body(ship_handle)
@@ -66,33 +64,17 @@ fn tick_terrain(
         anchor[2] + ship_pos.z as f64,
     ];
 
-    let visible_nodes =
-        select_visible_nodes(cam_rel_m, PLANET_RADIUS_M, max_lod, max_displacement_m, None);
-    let (new_chunks, removed_keys) = streaming.update(&visible_nodes, config, cam_rel_m);
+    // Use the collision grid directly (independent of visual LOD).
+    let altitude = (cam_rel_m[0] * cam_rel_m[0]
+        + cam_rel_m[1] * cam_rel_m[1]
+        + cam_rel_m[2] * cam_rel_m[2])
+        .sqrt()
+        - config.radius_m;
 
-    for chunk in &new_chunks {
-        terrain_colliders.cache_chunk(chunk.key, chunk);
+    if altitude < config.radius_m * sa_terrain::config::COLLISION_ACTIVATE_FACTOR {
+        terrain_colliders.update_collision_grid(cam_rel_m, config, physics, rebase_bodies);
     }
-    terrain_colliders.remove_evicted(physics, &removed_keys);
 
-    let visible_keys: HashSet<ChunkKey> = visible_nodes
-        .iter()
-        .map(|n| ChunkKey {
-            face: n.face as u8,
-            lod: n.lod,
-            x: n.x,
-            y: n.y,
-        })
-        .collect();
-
-    terrain_colliders.update(
-        physics,
-        cam_rel_m,
-        PLANET_RADIUS_M,
-        max_displacement_m,
-        &visible_keys,
-        rebase_bodies,
-    );
     *anchor = terrain_colliders.anchor_f64;
 }
 
@@ -181,7 +163,7 @@ fn full_descent_with_real_terrain() {
     };
 
     // -----------------------------------------------------------------------
-    // Warmup: hold ship stationary while chunk streaming populates
+    // Warmup: hold ship stationary while collision grid populates
     // -----------------------------------------------------------------------
 
     println!("=== WARMUP: {} frames ===", WARMUP_FRAMES);
@@ -205,20 +187,16 @@ fn full_descent_with_real_terrain() {
 
         if frame % 30 == 0 {
             println!(
-                "  warmup frame={}, cached={}, heightfields={}, barrier={}",
+                "  warmup frame={}, heightfields={}",
                 frame,
-                streaming.cached_count(),
                 terrain_colliders.colliders.len(),
-                terrain_colliders.surface_barrier.is_some(),
             );
         }
     }
 
     println!(
-        "Warmup done: cached={}, heightfields={}, barrier={}",
-        streaming.cached_count(),
+        "Warmup done: heightfields={}",
         terrain_colliders.colliders.len(),
-        terrain_colliders.surface_barrier.is_some(),
     );
 
     // Give the ship an initial downward velocity.
@@ -234,8 +212,7 @@ fn full_descent_with_real_terrain() {
 
     let mut timeline: Vec<String> = Vec::new();
     let mut min_altitude = f64::MAX;
-    let mut barrier_existed_below_500km = false;
-    let mut heightfields_existed_below_2km = false;
+    let mut heightfields_existed = false;
     let mut final_altitude = START_ALTITUDE_M;
     let mut final_speed = INITIAL_DOWNWARD_SPEED;
     let mut settled_frame: Option<usize> = None;
@@ -273,7 +250,7 @@ fn full_descent_with_real_terrain() {
 
         physics.step(DT);
 
-        // Terrain tick (streaming + collider update).
+        // Terrain tick (collision grid update).
         tick_terrain(
             &mut physics,
             &mut streaming,
@@ -310,14 +287,10 @@ fn full_descent_with_real_terrain() {
             min_altitude = altitude;
         }
 
-        let barrier_exists = terrain_colliders.surface_barrier.is_some();
         let num_heightfields = terrain_colliders.colliders.len();
 
-        if altitude < 500_000.0 && barrier_exists {
-            barrier_existed_below_500km = true;
-        }
-        if altitude < 2000.0 && num_heightfields > 0 {
-            heightfields_existed_below_2km = true;
+        if num_heightfields > 0 {
+            heightfields_existed = true;
         }
 
         final_altitude = altitude;
@@ -325,16 +298,15 @@ fn full_descent_with_real_terrain() {
 
         if frame % LOG_INTERVAL == 0 {
             let msg = format!(
-                "frame={:5}, alt={:10.1}m, speed={:8.2}m/s, barrier={}, hf={:3}, cached={:3}, rapier=({:.1},{:.1},{:.1})",
-                frame, altitude, speed, barrier_exists, num_heightfields,
-                streaming.cached_count(),
+                "frame={:5}, alt={:10.1}m, speed={:8.2}m/s, hf={:3}, rapier=({:.1},{:.1},{:.1})",
+                frame, altitude, speed, num_heightfields,
                 ship_pos_after.x, ship_pos_after.y, ship_pos_after.z,
             );
             println!("{}", msg);
             timeline.push(msg);
         }
 
-        // Early exit: settled on barrier.
+        // Early exit: settled on heightfield.
         if altitude < 200.0 && speed < 1.0 && frame > 60 {
             let msg = format!(
                 "SETTLED at frame {}: alt={:.1}m, speed={:.2}m/s",
@@ -348,11 +320,11 @@ fn full_descent_with_real_terrain() {
     }
 
     // -----------------------------------------------------------------------
-    // Phase 3: Post-settle streaming (let heightfields arrive)
+    // Phase 3: Post-settle (verify stability)
     // -----------------------------------------------------------------------
 
     println!(
-        "\n=== POST-SETTLE: {} frames for heightfield streaming ===",
+        "\n=== POST-SETTLE: {} frames for stability check ===",
         SETTLE_FRAMES
     );
 
@@ -406,7 +378,7 @@ fn full_descent_with_real_terrain() {
 
         let num_hf = terrain_colliders.colliders.len();
         if num_hf > 0 {
-            heightfields_existed_below_2km = true;
+            heightfields_existed = true;
         }
 
         let ship_pos_after = physics
@@ -434,44 +406,9 @@ fn full_descent_with_real_terrain() {
         }
 
         if frame % 60 == 0 {
-            // Diagnostic: check chunk LODs and distances.
-            let vis_nodes = select_visible_nodes(
-                cam_rel_after,
-                PLANET_RADIUS_M,
-                max_lod,
-                max_displacement_m,
-                None,
-            );
-            let vis_keys: HashSet<ChunkKey> = vis_nodes
-                .iter()
-                .map(|n| ChunkKey {
-                    face: n.face as u8,
-                    lod: n.lod,
-                    x: n.x,
-                    y: n.y,
-                })
-                .collect();
-            let lod8_in_both = terrain_colliders
-                .chunk_cache
-                .iter()
-                .filter(|(k, _)| k.lod >= 8 && vis_keys.contains(k))
-                .count();
-            let nearest_dist: f64 = terrain_colliders
-                .chunk_cache
-                .iter()
-                .filter(|(k, _)| k.lod >= 8 && vis_keys.contains(k))
-                .map(|(_, c)| {
-                    let dx = c.center_f64[0] - cam_rel_after[0];
-                    let dy = c.center_f64[1] - cam_rel_after[1];
-                    let dz = c.center_f64[2] - cam_rel_after[2];
-                    (dx * dx + dy * dy + dz * dz).sqrt()
-                })
-                .fold(f64::MAX, f64::min);
             println!(
-                "  settle frame={}, alt={:.1}m, speed={:.2}m/s, hf={}, cached={}, \
-                 lod8_in_both={}, nearest_dist={:.0}m",
-                frame, alt, spd, num_hf, streaming.cached_count(),
-                lod8_in_both, nearest_dist,
+                "  settle frame={}, alt={:.1}m, speed={:.2}m/s, hf={}",
+                frame, alt, spd, num_hf,
             );
         }
     }
@@ -490,40 +427,11 @@ fn full_descent_with_real_terrain() {
     println!("  final_speed    = {:.2}m/s", final_speed);
     println!("  min_altitude   = {:.1}m", min_altitude);
     println!(
-        "  barrier_existed_below_500km    = {}",
-        barrier_existed_below_500km
-    );
-    println!(
-        "  heightfields_existed_below_2km = {}",
-        heightfields_existed_below_2km
+        "  heightfields_existed = {}",
+        heightfields_existed
     );
     if let Some(f) = settled_frame {
         println!("  settled_frame = {}", f);
-    }
-
-    // Diagnostic: explain why heightfields may be absent.
-    println!("\n=== HEIGHTFIELD DIAGNOSTIC ===");
-    println!(
-        "  max_displacement_m = {:.0}m (radius * {:.2})",
-        max_displacement_m, DISPLACEMENT_FRACTION
-    );
-    println!("  COLLIDER_RANGE_M = 2000m (from terrain_colliders.rs)");
-    println!(
-        "  ChunkData::center_f64 includes terrain displacement, so chunk centers");
-    println!(
-        "  are ~{:.0}m from the camera even when the chunk is directly below.",
-        max_displacement_m * 0.5
-    );
-    println!(
-        "  This exceeds COLLIDER_RANGE_M, preventing HeightField collider creation."
-    );
-    if !heightfields_existed_below_2km {
-        println!(
-            "  BUG CONFIRMED: chunk_dist uses displaced centers vs undisplaced camera pos."
-        );
-        println!(
-            "  The surface barrier is the ONLY collision keeping the ship above ground."
-        );
     }
 
     // A1: Ship must not penetrate more than 10m below the surface.
@@ -544,36 +452,12 @@ fn full_descent_with_real_terrain() {
         final_altitude
     );
 
-    // A3: Surface barrier must exist when altitude < 500km.
+    // A3: HeightField colliders must exist (collision grid should create them).
     assert!(
-        barrier_existed_below_500km,
-        "NO BARRIER: the surface barrier was never created below 500km altitude. \
-         TerrainColliders::update() did not create the barrier collider."
+        heightfields_existed,
+        "NO HEIGHTFIELDS: collision grid did not create any HeightField colliders \
+         during descent. The ship had no collision surface."
     );
-
-    // A4: HeightField colliders should exist near the surface.
-    // KNOWN BUG: chunk_dist() in terrain_colliders.rs compares the camera
-    // position (at radius + altitude) against ChunkData::center_f64 (which
-    // includes terrain displacement of up to radius * displacement_fraction).
-    // For planets with displacement_fraction = 0.02 and radius ~7.7M m, the
-    // displaced center is ~77km above the geometric surface. The 2000m
-    // COLLIDER_RANGE_M filter rejects all chunks. The surface barrier is
-    // the sole collision safety net during descent.
-    //
-    // This assertion is intentionally SOFT -- it warns but does not fail.
-    // Uncomment the assert! below once the chunk_dist bug is fixed.
-    if !heightfields_existed_below_2km {
-        println!(
-            "\nWARNING: No HeightField colliders were created near the surface."
-        );
-        println!(
-            "  This is a known bug in chunk_dist() -- see diagnostic above."
-        );
-    }
-    // assert!(
-    //     heightfields_existed_below_2km,
-    //     "NO HEIGHTFIELDS: fix chunk_dist to use undisplaced chunk centers."
-    // );
 
     println!("\nAll assertions passed.");
 }
