@@ -462,12 +462,18 @@ impl App {
                 cmds
             };
 
-            // Append solar system bodies (planets, moons, star) if in a system
+            // Append solar system bodies (planets, moons, star) if in a system.
+            // Freeze orbital time when terrain is active — the terrain system
+            // freezes the planet at its activation position, so the icosphere
+            // must also stop orbiting to stay aligned with the terrain chunks.
+            // Without this, TIME_SCALE=30 moves the icosphere away from the
+            // terrain within seconds, making chunks appear detached.
             if let Some(system) = &mut self.active_system {
                 let hidden = system.hidden_body_index;
                 let total_bodies = system.body_count();
+                let solar_dt = if self.terrain.is_some() { 0.0 } else { dt as f64 };
                 let system_commands = system.update(
-                    dt as f64,
+                    solar_dt,
                     self.galactic_position,
                 );
                 // Log every 60 frames when terrain is active

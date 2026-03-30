@@ -254,9 +254,10 @@ impl TerrainManager {
         );
 
         // Don't hide the icosphere until terrain has enough chunks for visual
-        // coverage. With fewer than 6 chunks (one per cube face), the terrain
-        // sphere has visible gaps and the transition looks like the planet
-        // disappearing and being replaced by floating panels.
+        // coverage. Require BOTH:
+        // - At least 6 absolute (one per cube face for geometric coverage)
+        // - At least 50% of visible nodes uploaded (prevents "floating panels"
+        //   when only a few coarse chunks are ready out of 100+ needed)
         let visible_in_gpu = visible.iter().filter(|n| {
             let key = ChunkKey {
                 face: n.face as u8,
@@ -266,7 +267,9 @@ impl TerrainManager {
             };
             self.gpu_meshes.contains_key(&key)
         }).count();
-        let hide_icosphere = visible_in_gpu >= 6;
+        let min_absolute = 6;
+        let min_fraction = visible.len() / 2;
+        let hide_icosphere = visible_in_gpu >= min_absolute.max(min_fraction);
 
         TerrainFrameResult {
             draw_commands,
