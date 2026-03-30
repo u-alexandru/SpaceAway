@@ -280,6 +280,7 @@ impl ChunkStreaming {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ChunkType;
     use crate::cube_sphere::CubeFace;
     use sa_universe::PlanetSubType;
 
@@ -305,6 +306,7 @@ mod tests {
             heights: Vec::new(),
             min_height: 0.0,
             max_height: 1.0,
+            chunk_type: ChunkType::Heightmap,
         }
     }
 
@@ -397,6 +399,7 @@ mod tests {
             heights: vec![],
             min_height: 0.0,
             max_height: 0.0,
+            chunk_type: ChunkType::Heightmap,
         };
         let chunk2 = ChunkData {
             key: key2,
@@ -406,6 +409,7 @@ mod tests {
             heights: vec![],
             min_height: 0.0,
             max_height: 0.0,
+            chunk_type: ChunkType::Heightmap,
         };
         cache.insert(chunk1);
         cache.insert(chunk2);

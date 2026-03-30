@@ -41,12 +41,23 @@ pub struct ChunkKey {
     pub y: u32,
 }
 
-/// Vertex data for a terrain chunk (matches sa_render::Vertex layout).
+/// Vertex data for a terrain chunk. Includes morph target for CDLOD
+/// vertex morphing (odd vertices blend toward parent-LOD positions).
 #[derive(Debug, Clone, Copy)]
 pub struct TerrainVertex {
     pub position: [f32; 3],
     pub color: [f32; 3],
     pub normal: [f32; 3],
+    /// Position at parent LOD level. For even-indexed grid vertices (shared with
+    /// parent), this equals `position`. For odd vertices (midpoints), this is
+    /// the average of the two neighboring even vertices.
+    pub morph_target: [f32; 3],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChunkType {
+    Heightmap,
+    // Volumetric, // future — caves, overhangs
 }
 
 /// Generated chunk data ready for GPU upload.
@@ -64,4 +75,6 @@ pub struct ChunkData {
     /// Min/max height for bounding sphere inflation during frustum culling.
     pub min_height: f32,
     pub max_height: f32,
+    /// Type of terrain chunk (heightmap or future volumetric).
+    pub chunk_type: ChunkType,
 }

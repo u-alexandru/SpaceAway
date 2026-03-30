@@ -2,7 +2,7 @@
 
 use std::sync::OnceLock;
 
-use crate::{ChunkData, ChunkKey, TerrainConfig, TerrainVertex};
+use crate::{ChunkData, ChunkKey, ChunkType, TerrainConfig, TerrainVertex};
 use crate::cube_sphere::{CubeFace, cube_to_sphere};
 use crate::heightmap::{make_terrain_noise, make_warp_noise, sample_height};
 use crate::biome::biome_color;
@@ -226,6 +226,39 @@ pub fn generate_chunk(key: ChunkKey, config: &TerrainConfig) -> ChunkData {
     }
 
     // -----------------------------------------------------------------------
+    // Morph targets: parent-LOD positions for CDLOD vertex morphing.
+    // -----------------------------------------------------------------------
+    let mut morph_targets = vec![[0.0f32; 3]; n * n];
+    for gy in 0..n {
+        for gx in 0..n {
+            let idx = gy * n + gx;
+            let even_x = gx % 2 == 0;
+            let even_y = gy % 2 == 0;
+            if even_x && even_y {
+                morph_targets[idx] = local_pos[idx];
+            } else if !even_x && even_y {
+                let left = gy * n + (gx - 1);
+                let right = gy * n + (gx + 1).min(n - 1);
+                morph_targets[idx] = avg_pos(local_pos[left], local_pos[right]);
+            } else if even_x && !even_y {
+                let top = (gy - 1) * n + gx;
+                let bottom = ((gy + 1).min(n - 1)) * n + gx;
+                morph_targets[idx] = avg_pos(local_pos[top], local_pos[bottom]);
+            } else {
+                let tl = (gy - 1) * n + (gx - 1);
+                let tr = (gy - 1) * n + (gx + 1).min(n - 1);
+                let bl = ((gy + 1).min(n - 1)) * n + (gx - 1);
+                let br = ((gy + 1).min(n - 1)) * n + (gx + 1).min(n - 1);
+                morph_targets[idx] = [
+                    (local_pos[tl][0] + local_pos[tr][0] + local_pos[bl][0] + local_pos[br][0]) * 0.25,
+                    (local_pos[tl][1] + local_pos[tr][1] + local_pos[bl][1] + local_pos[br][1]) * 0.25,
+                    (local_pos[tl][2] + local_pos[tr][2] + local_pos[bl][2] + local_pos[br][2]) * 0.25,
+                ];
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // Build grid vertex array.
     // -----------------------------------------------------------------------
     let mut vertices: Vec<TerrainVertex> = Vec::with_capacity(n * n + 4 * n);
@@ -234,6 +267,7 @@ pub fn generate_chunk(key: ChunkKey, config: &TerrainConfig) -> ChunkData {
             position: local_pos[i],
             color: colors[i],
             normal: normals[i],
+            morph_target: morph_targets[i],
         });
     }
 
@@ -296,10 +330,12 @@ pub fn generate_chunk(key: ChunkKey, config: &TerrainConfig) -> ChunkData {
                 lp[2] + nz * drop,
             ];
             // Skirt inherits the color and normal of the edge vertex.
+            // Skirts don't morph — morph_target equals position.
             vertices.push(TerrainVertex {
                 position: skirt_pos,
                 color: colors[gi],
                 normal: normals[gi],
+                morph_target: skirt_pos,
             });
         }
     }
@@ -312,7 +348,14 @@ pub fn generate_chunk(key: ChunkKey, config: &TerrainConfig) -> ChunkData {
         heights,
         min_height,
         max_height,
+        chunk_type: ChunkType::Heightmap,
     }
+}
+
+/// Average two positions (midpoint).
+#[inline]
+fn avg_pos(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5, (a[2] + b[2]) * 0.5]
 }
 
 /// Compute the face normal for a triangle (a, b, c) using cross product.
@@ -438,6 +481,39 @@ mod tests {
                 max_drop >= 2.0,
                 "LOD {lod}: skirt drop {max_drop:.1}m below 2m minimum",
             );
+        }
+    }
+
+    #[test]
+    fn even_vertices_morph_to_self() {
+        let key = ChunkKey { face: 4, lod: 5, x: 0, y: 0 };
+        let chunk = generate_chunk(key, &test_config());
+        let n = GRID_SIZE as usize;
+        for gy in (0..n).step_by(2) {
+            for gx in (0..n).step_by(2) {
+                let idx = gy * n + gx;
+                let v = &chunk.vertices[idx];
+                assert_eq!(v.position, v.morph_target,
+                    "even vertex ({gx},{gy}) morph_target should equal position");
+            }
+        }
+    }
+
+    #[test]
+    fn odd_vertices_morph_to_neighbor_average() {
+        let key = ChunkKey { face: 4, lod: 5, x: 0, y: 0 };
+        let chunk = generate_chunk(key, &test_config());
+        let left = &chunk.vertices[0];
+        let right = &chunk.vertices[2];
+        let mid = &chunk.vertices[1];
+        let expected = [
+            (left.position[0] + right.position[0]) * 0.5,
+            (left.position[1] + right.position[1]) * 0.5,
+            (left.position[2] + right.position[2]) * 0.5,
+        ];
+        for i in 0..3 {
+            assert!((mid.morph_target[i] - expected[i]).abs() < 1e-4,
+                "odd vertex morph_target[{i}] = {}, expected {}", mid.morph_target[i], expected[i]);
         }
     }
 }

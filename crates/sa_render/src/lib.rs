@@ -11,6 +11,7 @@ pub mod sky;
 pub mod star_field;
 pub mod gltf_loader;
 pub mod planet_mesh;
+pub mod terrain_pipeline;
 pub mod terrain_vertex;
 pub mod vertex;
 
@@ -25,4 +26,5 @@ pub use sky::{SkyRenderer, SkyUniforms};
 pub use star_field::{generate_stars, StarField, StarVertex};
 pub use terrain_vertex::TerrainVertex as GpuTerrainVertex;
 pub use slab_allocator::TerrainSlab;
+pub use terrain_pipeline::{TerrainInstanceRaw, TerrainPipeline};
 pub use vertex::Vertex;
