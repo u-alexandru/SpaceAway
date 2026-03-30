@@ -47,6 +47,9 @@ pub struct DriveRenderParams {
     pub flash_intensity: f32,
 }
 
+/// Initial capacity for the persistent instance buffer (number of instances).
+const INITIAL_INSTANCE_CAPACITY: u64 = 1024;
+
 pub struct Renderer {
     pub geometry_pipeline: GeometryPipeline,
     pub screen_pipeline: ScreenPipeline,
@@ -55,6 +58,10 @@ pub struct Renderer {
     pub nebula_renderer: NebulaRenderer,
     pub galaxy_renderer: NebulaRenderer,
     pub mesh_store: MeshStore,
+    /// Persistent instance buffer, reused each frame to avoid per-draw allocations.
+    instance_buffer: wgpu::Buffer,
+    /// Current capacity of the instance buffer in number of instances.
+    instance_buffer_capacity: u64,
     /// GPU profiler for render pass timing (optional — needs TIMESTAMP_QUERY).
     pub gpu_profiler: GpuProfiler,
     /// Latest GPU timing results (label, duration_ms) from the previous frame.
@@ -84,6 +91,12 @@ impl Renderer {
         );
         let nebula_renderer = NebulaRenderer::new(&gpu.device, gpu.config.format);
         let galaxy_renderer = NebulaRenderer::new(&gpu.device, gpu.config.format);
+        let instance_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Persistent Instance Buffer"),
+            size: INITIAL_INSTANCE_CAPACITY * std::mem::size_of::<InstanceRaw>() as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         // Only enable timer queries if the GPU supports them (Metal may not).
         let supports_timestamps = gpu.device.features().contains(wgpu::Features::TIMESTAMP_QUERY);
         let gpu_profiler = GpuProfiler::new(&gpu.device, GpuProfilerSettings {
@@ -100,6 +113,8 @@ impl Renderer {
             nebula_renderer,
             galaxy_renderer,
             mesh_store: MeshStore::new(),
+            instance_buffer,
+            instance_buffer_capacity: INITIAL_INSTANCE_CAPACITY,
             gpu_profiler,
             gpu_timings: Vec::new(),
         }
@@ -259,6 +274,82 @@ impl Renderer {
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+        // Pre-compute batched instances and write to GPU BEFORE any render pass.
+        // Writing to a buffer during an active render pass can cause flickering
+        // on some backends (Metal) because the GPU may read stale data.
+        struct Batch {
+            mesh_id: u64,
+            start: usize,
+            count: usize,
+        }
+        let mut batches: Vec<Batch> = Vec::new();
+        if !draw_commands.is_empty() {
+            let mut entries: Vec<(u64, InstanceRaw)> = draw_commands
+                .iter()
+                .filter(|cmd| self.mesh_store.get(cmd.mesh).is_some())
+                .map(|cmd| {
+                    let rebased_model = if cmd.pre_rebased {
+                        cmd.model_matrix
+                    } else {
+                        let col3 = cmd.model_matrix.col(3);
+                        let rebased_translation = Vec3::new(
+                            (col3.x as f64 - cam_pos.x) as f32,
+                            (col3.y as f64 - cam_pos.y) as f32,
+                            (col3.z as f64 - cam_pos.z) as f32,
+                        );
+                        let mut m = cmd.model_matrix;
+                        m.col_mut(3).x = rebased_translation.x;
+                        m.col_mut(3).y = rebased_translation.y;
+                        m.col_mut(3).z = rebased_translation.z;
+                        m
+                    };
+                    (cmd.mesh.id(), InstanceRaw {
+                        model: rebased_model.to_cols_array_2d(),
+                    })
+                })
+                .collect();
+            entries.sort_by_key(|(mesh_id, _)| *mesh_id);
+
+            // Grow instance buffer if needed.
+            let needed = entries.len() as u64;
+            if needed > self.instance_buffer_capacity {
+                let new_cap = needed.next_power_of_two();
+                self.instance_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Persistent Instance Buffer"),
+                    size: new_cap * std::mem::size_of::<InstanceRaw>() as u64,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                self.instance_buffer_capacity = new_cap;
+            }
+
+            // Write all instances in one call BEFORE render passes.
+            let instance_data: Vec<InstanceRaw> = entries.iter()
+                .map(|(_, inst)| *inst)
+                .collect();
+            gpu.queue.write_buffer(
+                &self.instance_buffer,
+                0,
+                bytemuck::cast_slice(&instance_data),
+            );
+
+            // Build batch descriptors for the draw loop.
+            let mut batch_start = 0usize;
+            while batch_start < entries.len() {
+                let mesh_id = entries[batch_start].0;
+                let mut batch_end = batch_start + 1;
+                while batch_end < entries.len() && entries[batch_end].0 == mesh_id {
+                    batch_end += 1;
+                }
+                batches.push(Batch {
+                    mesh_id,
+                    start: batch_start,
+                    count: batch_end - batch_start,
+                });
+                batch_start = batch_end;
+            }
+        }
+
         let mut encoder =
             gpu.device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -327,58 +418,36 @@ impl Renderer {
                 self.gpu_profiler.end_query(&mut pass, q);
             }
 
-            // Draw geometry — per-draw instance buffers (VERTEX only, no COPY_DST).
-            // Each draw command gets a fresh buffer via create_buffer_init.
-            // This is the original pattern that had zero flickering before the
-            // batching system was introduced.
-            let instance_buffers: Vec<wgpu::Buffer> = draw_commands
-                .iter()
-                .filter_map(|cmd| {
-                    self.mesh_store.get(cmd.mesh)?;
-                    let rebased_model = if cmd.pre_rebased {
-                        cmd.model_matrix
-                    } else {
-                        let col3 = cmd.model_matrix.col(3);
-                        let rebased_translation = Vec3::new(
-                            (col3.x as f64 - cam_pos.x) as f32,
-                            (col3.y as f64 - cam_pos.y) as f32,
-                            (col3.z as f64 - cam_pos.z) as f32,
-                        );
-                        let mut m = cmd.model_matrix;
-                        m.col_mut(3).x = rebased_translation.x;
-                        m.col_mut(3).y = rebased_translation.y;
-                        m.col_mut(3).z = rebased_translation.z;
-                        m
-                    };
-                    let instance = InstanceRaw {
-                        model: rebased_model.to_cols_array_2d(),
-                    };
-                    Some(gpu.device.create_buffer_init(
-                        &wgpu::util::BufferInitDescriptor {
-                            label: Some("Instance Buffer"),
-                            contents: bytemuck::bytes_of(&instance),
-                            usage: wgpu::BufferUsages::VERTEX,
-                        },
-                    ))
-                })
-                .collect();
-
+            // Draw geometry — instances were pre-computed and written to the
+            // instance buffer BEFORE the render pass to avoid flickering.
             let geom_query = self.gpu_profiler.begin_query("geometry_pass", &mut pass);
-            if !instance_buffers.is_empty() {
+            if !batches.is_empty() {
                 pass.set_pipeline(&self.geometry_pipeline.pipeline);
                 pass.set_bind_group(0, &self.geometry_pipeline.uniform_bind_group, &[]);
 
-                let mut buf_idx = 0;
-                for cmd in draw_commands {
-                    if let Some(mesh) = self.mesh_store.get(cmd.mesh) {
+                let instance_stride = std::mem::size_of::<InstanceRaw>() as u64;
+                for batch in &batches {
+                    let mesh_handle = draw_commands.iter()
+                        .find(|c| c.mesh.id() == batch.mesh_id)
+                        .unwrap()
+                        .mesh;
+                    if let Some(mesh) = self.mesh_store.get(mesh_handle) {
+                        let offset = batch.start as u64 * instance_stride;
+                        let size = batch.count as u64 * instance_stride;
                         pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-                        pass.set_vertex_buffer(1, instance_buffers[buf_idx].slice(..));
+                        pass.set_vertex_buffer(
+                            1,
+                            self.instance_buffer.slice(offset..offset + size),
+                        );
                         pass.set_index_buffer(
                             mesh.index_buffer.slice(..),
                             wgpu::IndexFormat::Uint32,
                         );
-                        pass.draw_indexed(0..mesh.index_count, 0, 0..1);
-                        buf_idx += 1;
+                        pass.draw_indexed(
+                            0..mesh.index_count,
+                            0,
+                            0..batch.count as u32,
+                        );
                     }
                 }
             }
