@@ -122,12 +122,11 @@ impl App {
                     shift.x, shift.y, shift.z);
             }
 
-            // Auto-disengage cruise/warp on terrain activation.
-            // Without this, cruise speed (~55,000 km/s) overshoots the
-            // planet surface in a fraction of a second, landing the camera
-            // deep inside where only LOD 0 chunks are visible.
-            if self.drive.mode() != sa_ship::DriveMode::Impulse {
-                log::info!("Auto-disengage drive: terrain activation");
+            // Only auto-disengage WARP on terrain activation.
+            // Cruise is allowed to continue — helm_mode auto-disengages
+            // cruise at planet_radius + 100km (atmosphere boundary).
+            if self.drive.mode() == sa_ship::DriveMode::Warp {
+                log::info!("Auto-disengage warp: terrain activation");
                 self.drive.request_disengage();
             }
         }
