@@ -254,10 +254,15 @@ impl TerrainManager {
         );
 
         // Don't hide the icosphere until terrain has enough chunks for visual
-        // coverage. Require BOTH:
-        // - At least 6 absolute (one per cube face for geometric coverage)
-        // - At least 50% of visible nodes uploaded (prevents "floating panels"
-        //   when only a few coarse chunks are ready out of 100+ needed)
+        // coverage. Require BOTH conditions:
+        // 1. At least 6 chunks (one per cube face for basic geometric coverage)
+        // 2. At least 33% of visible nodes are GPU-ready (ensures the terrain
+        //    covers enough of the visible area to not look like floating panels)
+        //
+        // 33% (not 50%) because streaming fills nearest-first: the hemisphere
+        // facing the camera fills first while the back hemisphere takes longer.
+        // 33% coverage of visible nodes means the front hemisphere is mostly
+        // filled, which is good enough to hide the icosphere.
         let visible_in_gpu = visible.iter().filter(|n| {
             let key = ChunkKey {
                 face: n.face as u8,
@@ -267,9 +272,8 @@ impl TerrainManager {
             };
             self.gpu_meshes.contains_key(&key)
         }).count();
-        let min_absolute = 6;
-        let min_fraction = visible.len() / 2;
-        let hide_icosphere = visible_in_gpu >= min_absolute.max(min_fraction);
+        let hide_icosphere = visible_in_gpu >= 6
+            && visible_in_gpu * 3 >= visible.len();
 
         TerrainFrameResult {
             draw_commands,

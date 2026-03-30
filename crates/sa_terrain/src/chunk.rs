@@ -246,8 +246,15 @@ pub fn generate_chunk(key: ChunkKey, config: &TerrainConfig) -> ChunkData {
     // We drop the skirt vertex by at least 1.0 m along that direction.
     // -----------------------------------------------------------------------
     // Skirt drop: enough to hide LOD seams but not visible from below.
-    // 2× the terrain displacement amplitude, capped at 500m.
-    let skirt_drop_fraction = config.displacement_fraction as f64 * 2.0;
+    // Scales with LOD: at coarse levels, displacement is large (mountains),
+    // at fine levels it's small (local terrain variation). Always capped at
+    // 500m to prevent the previous bug where Earth-sized planets had 254km
+    // skirt drops (radius_m * displacement_fraction * 2 = 254,840m).
+    let subdivs_at_lod = (1u64 << key.lod) as f64;
+    let face_size = 2.0 * config.radius_m / subdivs_at_lod;
+    let displacement_at_lod = (config.radius_m * config.displacement_fraction as f64)
+        .min(face_size * 0.5);
+    let skirt_drop_max = (displacement_at_lod * 2.0).min(500.0);
     let skirt_drop_min = 2.0_f32;
 
     let skirt_base = vertices.len() as u32; // = n*n
@@ -283,7 +290,7 @@ pub fn generate_chunk(key: ChunkKey, config: &TerrainConfig) -> ChunkData {
             let ny = -dirs[gi][1] as f32;
             let nz = -dirs[gi][2] as f32;
 
-            let drop = ((config.radius_m * skirt_drop_fraction) as f32).max(skirt_drop_min);
+            let drop = (skirt_drop_max as f32).max(skirt_drop_min);
 
             let skirt_pos = [
                 lp[0] + nx * drop,
@@ -393,5 +400,46 @@ mod tests {
         assert!(chunk.min_height <= chunk.max_height);
         assert!(chunk.min_height >= 0.0);
         assert!(chunk.max_height <= 1.0);
+    }
+
+    #[test]
+    fn skirt_drop_capped_at_500m() {
+        // Earth-sized planet: radius=6,371km, displacement=0.02
+        // OLD bug: drop = 6,371,000 * 0.02 * 2 = 254,840m (254km!)
+        // FIX: drop should be capped at 500m max
+        let config = test_config(); // radius=6,371,000, displacement=0.02
+        let n = GRID_SIZE as usize;
+        let skirt_start = n * n; // = 1089
+
+        // For each LOD, compare skirt vertices to their corresponding edge
+        // vertex. The distance between them is the actual skirt drop.
+        for lod in [0u8, 5, 10, 15] {
+            let key = ChunkKey { face: 0, lod, x: 0, y: 0 };
+            let chunk = generate_chunk(key, &config);
+
+            // Bottom-row skirt: vertices [skirt_start..skirt_start+33]
+            // correspond to grid row 0: vertices [0..33]
+            let mut max_drop = 0.0_f32;
+            for col in 0..n {
+                let grid_v = &chunk.vertices[col];
+                let skirt_v = &chunk.vertices[skirt_start + col];
+                let dx = skirt_v.position[0] - grid_v.position[0];
+                let dy = skirt_v.position[1] - grid_v.position[1];
+                let dz = skirt_v.position[2] - grid_v.position[2];
+                let drop_dist = (dx * dx + dy * dy + dz * dz).sqrt();
+                if drop_dist > max_drop {
+                    max_drop = drop_dist;
+                }
+            }
+
+            assert!(
+                max_drop <= 600.0,
+                "LOD {lod}: max skirt drop = {max_drop:.0}m exceeds 600m (500m cap + margin)",
+            );
+            assert!(
+                max_drop >= 2.0,
+                "LOD {lod}: skirt drop {max_drop:.1}m below 2m minimum",
+            );
+        }
     }
 }
