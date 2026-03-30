@@ -1,3 +1,4 @@
+pub mod slab_allocator;
 pub mod camera;
 pub mod icosphere;
 pub mod gpu;
@@ -10,6 +11,7 @@ pub mod sky;
 pub mod star_field;
 pub mod gltf_loader;
 pub mod planet_mesh;
+pub mod terrain_vertex;
 pub mod vertex;
 
 pub use camera::Camera;
@@ -21,4 +23,6 @@ pub use renderer::{DrawCommand, DriveRenderParams, FrameContext, Renderer, Scree
 pub use screen_pipeline::{ScreenInstanceRaw, ScreenPipeline, ScreenQuad, ScreenVertex};
 pub use sky::{SkyRenderer, SkyUniforms};
 pub use star_field::{generate_stars, StarField, StarVertex};
+pub use terrain_vertex::TerrainVertex as GpuTerrainVertex;
+pub use slab_allocator::TerrainSlab;
 pub use vertex::Vertex;
