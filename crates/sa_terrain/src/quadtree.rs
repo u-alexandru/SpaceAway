@@ -141,7 +141,16 @@ fn select_recursive(
     let dz = camera_pos[2] - center[2];
     let dist = (dx * dx + dy * dy + dz * dz).sqrt();
 
-    let range = lod_range(lod);
+    // LOD range proportional to face size at this level (k=2).
+    // The original formula (MIN_RANGE * 2^lod) gave LOD 0 the smallest
+    // range and LOD 18 the largest — inverted from what CDLOD needs.
+    // At LOD 9 the range curve had a minimum, causing a cascade through
+    // ALL finer levels when that boundary was crossed.
+    //
+    // Correct formula: range = k * face_size. This ensures range
+    // shrinks with face_size, so each LOD boundary is crossed smoothly.
+    // MIN_RANGE floor prevents over-subdivision at finest LODs.
+    let range = (face_size * 2.0).max(MIN_RANGE);
 
     // If far enough, or at finest level, emit this node
     if dist > range + node_radius || lod == max_lod {
