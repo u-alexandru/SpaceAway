@@ -7,10 +7,8 @@ use crate::cube_sphere::{CubeFace, cube_to_sphere};
 use crate::heightmap::{make_terrain_noise, make_warp_noise, sample_height};
 use crate::biome::biome_color;
 
-/// Number of vertices along one edge of the chunk grid (32 cells + 1).
-pub const GRID_SIZE: u32 = 33;
-/// Number of cells along one edge.
-pub const CELLS: u32 = 32;
+// Re-export so downstream code that imports from chunk still works.
+pub use crate::config::{GRID_SIZE, CELLS};
 
 /// Cached shared index buffer — all terrain chunks use the same topology.
 /// Generated once on first access, then reused for every chunk.

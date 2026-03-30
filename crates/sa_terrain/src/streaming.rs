@@ -10,15 +10,9 @@ use std::thread;
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
 use crate::chunk::generate_chunk;
+use crate::config::{LRU_CAPACITY, MAX_UPLOADS_BURST, MAX_UPLOADS_STEADY, BURST_THRESHOLD};
 use crate::{ChunkData, ChunkKey, TerrainConfig};
 use crate::quadtree::VisibleNode;
-
-/// Number of background worker threads for chunk generation.
-const WORKER_COUNT: usize = 4;
-
-/// Maximum number of chunks held in the LRU cache.
-/// Must be >= MAX_VISIBLE_NODES (800) so all visible chunks can be cached.
-const LRU_CAPACITY: usize = 1000;
 
 // ---------------------------------------------------------------------------
 // LRU cache
@@ -141,12 +135,12 @@ pub struct ChunkStreaming {
 }
 
 impl ChunkStreaming {
-    /// Create a new streaming manager and spawn `WORKER_COUNT` worker threads.
-    pub fn new(config: TerrainConfig) -> Self {
+    /// Create a new streaming manager and spawn `worker_count` worker threads.
+    pub fn new(config: TerrainConfig, worker_count: usize) -> Self {
         let (request_tx, request_rx) = unbounded::<ChunkKey>();
         let (result_tx, result_rx) = unbounded::<ChunkData>();
 
-        for _ in 0..WORKER_COUNT {
+        for _ in 0..worker_count {
             let rx = request_rx.clone();
             let tx = result_tx.clone();
             let cfg = config.clone();
@@ -200,13 +194,6 @@ impl ChunkStreaming {
         visible_nodes: &[VisibleNode],
         _config: &TerrainConfig,
     ) -> (Vec<ChunkData>, Vec<ChunkKey>) {
-        /// Max chunks returned per frame (steady state).
-        const MAX_UPLOADS_STEADY: usize = 8;
-        /// Max chunks on the first few frames after activation (burst fill).
-        const MAX_UPLOADS_BURST: usize = 64;
-        /// How many cached chunks before we switch from burst to steady.
-        const BURST_THRESHOLD: usize = 24;
-
         let max_uploads = if self.burst_frames_remaining > 0 || self.cache.len() < BURST_THRESHOLD {
             if self.burst_frames_remaining > 0 {
                 self.burst_frames_remaining -= 1;
@@ -365,7 +352,7 @@ mod tests {
     #[test]
     fn streaming_receives_chunks() {
         let config = test_config();
-        let mut streaming = ChunkStreaming::new(config.clone());
+        let mut streaming = ChunkStreaming::new(config.clone(), 4);
 
         // Build a single VisibleNode at a coarse LOD so generation is fast.
         let node = VisibleNode {

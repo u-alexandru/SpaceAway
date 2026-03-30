@@ -557,7 +557,7 @@ fn descent_streaming_produces_chunks() {
     let max_lod = max_lod_levels(face_size_m);
     let max_disp = config.radius_m * config.displacement_fraction as f64;
 
-    let mut streaming = ChunkStreaming::new(config.clone());
+    let mut streaming = ChunkStreaming::new(config.clone(), 4);
 
     let start_altitude = 1000.0_f64;
     let mut total_chunks_received = 0_usize;

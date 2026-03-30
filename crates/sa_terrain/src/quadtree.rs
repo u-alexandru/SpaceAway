@@ -3,16 +3,9 @@
 //! Per the Strugar (2010) CDLOD paper: LOD ranges double per level,
 //! nodes subdivide when camera is closer than range, morph at 50%.
 
+use crate::config::{MIN_RANGE, MAX_VISIBLE_NODES, K_FACTOR};
 use crate::cube_sphere::{CubeFace, cube_to_sphere};
 use crate::frustum::Frustum;
-
-/// Minimum range for finest LOD level (meters).
-const MIN_RANGE: f64 = 50.0;
-
-/// Hard cap on total visible nodes to prevent runaway subdivision.
-/// 800 ensures the face under the camera gets enough fine-LOD nodes
-/// even after other faces consume nodes for the far hemisphere.
-const MAX_VISIBLE_NODES: usize = 800;
 
 /// A visible terrain node selected by the quadtree traversal.
 #[derive(Debug, Clone)]
@@ -150,7 +143,7 @@ fn select_recursive(
     // Correct formula: range = k * face_size. This ensures range
     // shrinks with face_size, so each LOD boundary is crossed smoothly.
     // MIN_RANGE floor prevents over-subdivision at finest LODs.
-    let range = (face_size * 2.0).max(MIN_RANGE);
+    let range = (face_size * K_FACTOR).max(MIN_RANGE);
 
     // If far enough, or at finest level, emit this node
     if dist > range + node_radius || lod == max_lod {

@@ -3,6 +3,7 @@
 //! Pure terrain math — no rendering or physics dependencies.
 //! Integration with GPU and collision happens in the spaceaway binary crate.
 
+pub mod config;
 pub mod cube_sphere;
 pub mod frustum;
 pub mod quadtree;

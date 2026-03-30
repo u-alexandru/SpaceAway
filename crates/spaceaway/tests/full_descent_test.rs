@@ -166,7 +166,7 @@ fn full_descent_with_real_terrain() {
         displacement_fraction: DISPLACEMENT_FRACTION,
     };
 
-    let mut streaming = ChunkStreaming::new(config.clone());
+    let mut streaming = ChunkStreaming::new(config.clone(), 4);
 
     let face_size_m = PLANET_RADIUS_M * std::f64::consts::FRAC_PI_2;
     let max_lod = max_lod_levels(face_size_m);

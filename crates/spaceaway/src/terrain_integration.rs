@@ -90,7 +90,7 @@ impl TerrainManager {
         let max_displacement_m =
             config.radius_m * config.displacement_fraction as f64;
 
-        let streaming = ChunkStreaming::new(config.clone());
+        let streaming = ChunkStreaming::new(config.clone(), 4);
 
         Self {
             streaming,
