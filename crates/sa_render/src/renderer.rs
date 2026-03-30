@@ -378,6 +378,7 @@ impl Renderer {
         }
 
         // Pass 2: Main scene pass — blit sky + geometry + stars + nebulae + screens
+        let screen_buffers_to_keep: Vec<wgpu::Buffer>;
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Main Pass"),
@@ -469,7 +470,8 @@ impl Renderer {
             }
 
             // Draw screen quads (textured monitors, after geometry, same depth buffer)
-            // Pre-create instance buffers so they outlive the render pass.
+            // Screen instance buffers stored in frame_resources to guarantee they
+            // outlive the GPU submission (same pattern as geometry buffers).
             let screen_instance_buffers: Vec<wgpu::Buffer> = screen_draws
                 .iter()
                 .map(|screen_cmd| {
@@ -514,6 +516,7 @@ impl Renderer {
 
             // Stars, nebulae, and galaxies were rendered before geometry (above).
             self.gpu_profiler.end_query(&mut pass, geom_query);
+            screen_buffers_to_keep = screen_instance_buffers;
         }
 
         // Resolve GPU profiler queries before submitting.
@@ -523,6 +526,9 @@ impl Renderer {
         frame_resources.push(FrameResource::Buffer(frame_uniform_buffer));
         frame_resources.push(FrameResource::BindGroup(frame_uniform_bind_group));
         if let Some(buf) = frame_instance_buffer {
+            frame_resources.push(FrameResource::Buffer(buf));
+        }
+        for buf in screen_buffers_to_keep {
             frame_resources.push(FrameResource::Buffer(buf));
         }
 
