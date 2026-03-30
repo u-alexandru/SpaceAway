@@ -184,6 +184,19 @@ impl TerrainSlab {
     pub fn budget_bytes(&self) -> u64 {
         self.budget_bytes
     }
+
+    /// Get the stored center position for a chunk key.
+    pub fn get_center(&self, key: &ChunkKey) -> Option<[f64; 3]> {
+        self.chunk_centers.get(key).copied()
+    }
+
+    /// Free all occupied slots (used on teleport / terrain deactivation).
+    pub fn clear(&mut self) {
+        let keys: Vec<ChunkKey> = self.chunk_to_slot.keys().copied().collect();
+        for key in keys {
+            self.free(&key);
+        }
+    }
 }
 
 #[cfg(test)]

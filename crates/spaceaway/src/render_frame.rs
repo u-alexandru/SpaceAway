@@ -4,7 +4,7 @@ use crate::terrain_integration;
 use crate::ui;
 use glam::{Mat4, Vec3};
 use sa_math::WorldPos;
-use sa_render::{DrawCommand, ScreenDrawCommand};
+use sa_render::{DrawCommand, ScreenDrawCommand, TerrainDrawCommand};
 use std::time::Instant;
 
 impl App {
@@ -26,6 +26,9 @@ impl App {
             }
             if let Some(mut t) = self.terrain.take() {
                 t.cleanup(&mut self.physics);
+            }
+            if let Some(renderer) = &mut self.renderer {
+                renderer.terrain_slab.clear();
             }
             self.terrain_gravity = None;
             log::info!("Terrain deactivated");
@@ -82,7 +85,7 @@ impl App {
             // distance subdivides LOD 0 (never emits it), so LOD 0 is never
             // streamed, and the fallback has no ultimate ancestor.
             if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
-                terrain_mgr.seed_base_chunks(&mut renderer.mesh_store, &gpu.device);
+                terrain_mgr.seed_base_chunks(&mut renderer.terrain_slab, &gpu.queue);
             }
 
             self.terrain = Some(terrain_mgr);
@@ -130,11 +133,13 @@ impl App {
         }
 
         // Deactivate terrain if no solar system is active
-        if self.active_system.is_none()
-            && let Some(terrain_mgr) = &mut self.terrain
-        {
-            terrain_mgr.cleanup(&mut self.physics);
-            self.terrain = None;
+        if self.active_system.is_none() && self.terrain.is_some() {
+            if let Some(mut t) = self.terrain.take() {
+                t.cleanup(&mut self.physics);
+            }
+            if let Some(renderer) = &mut self.renderer {
+                renderer.terrain_slab.clear();
+            }
             self.terrain_gravity = None;
             log::info!("Terrain deactivated (no solar system)");
         }
@@ -149,7 +154,7 @@ impl App {
             })
             .unwrap_or([0.0, -1.0, 0.0]);
 
-        let terrain_commands: Vec<DrawCommand> = if let Some(terrain_mgr) = &mut self.terrain {
+        let terrain_draws: Vec<TerrainDrawCommand> = if let Some(terrain_mgr) = &mut self.terrain {
             if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
                 let planet_pos = self.active_system.as_ref()
                     .and_then(|sys| {
@@ -162,17 +167,12 @@ impl App {
                     player: self.player.as_ref().map(|p| p.body_handle),
                 };
                 // Build VP matrix in planet-relative coords for frustum culling.
-                // A point p in planet-relative space is at (p - cam_rel_m)
-                // in camera-relative space. So VP_planet = VP * T(-cam_rel_m).
-                // Previous bug: used +cam_rel_m (wrong sign), culling the
-                // visible hemisphere.
                 let aspect = gpu.config.width as f32 / gpu.config.height as f32;
                 let vp_f32 = self.camera.view_projection_matrix(aspect);
                 let planet_ly = terrain_mgr.frozen_planet_center_ly();
                 let cam_rel_x = (self.galactic_position.x - planet_ly.x) * 9.461e15;
                 let cam_rel_y = (self.galactic_position.y - planet_ly.y) * 9.461e15;
                 let cam_rel_z = (self.galactic_position.z - planet_ly.z) * 9.461e15;
-                // Negate: translate FROM planet-relative TO camera-relative
                 let translate = glam::Mat4::from_translation(Vec3::new(
                     -cam_rel_x as f32, -cam_rel_y as f32, -cam_rel_z as f32,
                 ));
@@ -183,8 +183,8 @@ impl App {
                 let result = terrain_mgr.update(
                     self.galactic_position,
                     planet_pos,
-                    &mut renderer.mesh_store,
-                    &gpu.device,
+                    &mut renderer.terrain_slab,
+                    &gpu.queue,
                     &mut self.physics,
                     ship_down,
                     &rebase_bodies,
@@ -201,7 +201,7 @@ impl App {
                     sys.hidden_body_index = result.hidden_body_index;
                 }
                 self.terrain_gravity = result.gravity;
-                result.draw_commands
+                result.terrain_draws
             } else {
                 vec![]
             }
@@ -481,16 +481,13 @@ impl App {
                 );
                 // Log every 60 frames when terrain is active
                 if self.terrain.is_some() && self.time.frame_count().is_multiple_of(60) {
-                    log::info!("RENDER: {} solar cmds (hidden={:?}, bodies={}), {} terrain cmds",
-                        system_commands.len(), hidden, total_bodies, terrain_commands.len());
+                    log::info!("RENDER: {} solar cmds (hidden={:?}, bodies={}), {} terrain draws",
+                        system_commands.len(), hidden, total_bodies, terrain_draws.len());
                 }
                 commands.extend(system_commands);
             }
 
-            // Append terrain draw commands
-            commands.extend(terrain_commands);
-
-            // DIAGNOSTIC: dump every draw command's position once per second
+            // DIAGNOSTIC: dump draw command positions once per second
             if self.terrain.is_some() && self.time.frame_count().is_multiple_of(60) {
                 for (i, cmd) in commands.iter().enumerate() {
                     let t = cmd.model_matrix.col(3);
@@ -501,6 +498,7 @@ impl App {
                     log::info!("CMD[{}]: pos=({:.0},{:.0},{:.0}) dist={:.0}m tris={} pre_rebased={}",
                         i, t.x, t.y, t.z, dist, mesh_info / 3, cmd.pre_rebased);
                 }
+                log::info!("TERRAIN: {} slab draws", terrain_draws.len());
             }
 
             // Unload system if player has cruised far away (> 100 AU from star)
@@ -508,11 +506,12 @@ impl App {
                 let dist = self.galactic_position.distance_to(system.star_galactic_pos);
                 let au_in_ly = 1.581e-5_f64;
                 if dist > 100.0 * au_in_ly {
-                    log::info!("Left system boundary — unloading");
+                    log::info!("Left system boundary -- unloading");
                     if let Some(t) = &mut self.terrain { t.cleanup(&mut self.physics); }
                     self.terrain = None;
                     self.terrain_gravity = None;
                     self.active_system = None;
+                    renderer.terrain_slab.clear();
                 }
             }
 
@@ -557,7 +556,9 @@ impl App {
                     vec![]
                 };
 
-            self.perf.draw_calls = commands.len() as u32 + screen_draws.len() as u32;
+            self.perf.draw_calls = commands.len() as u32
+                + terrain_draws.len() as u32
+                + screen_draws.len() as u32;
             self.perf.star_count = renderer.star_field.star_count;
 
             // 4. Render 3D scene + screen quads
@@ -572,6 +573,7 @@ impl App {
                 gpu,
                 &self.camera,
                 &commands,
+                &terrain_draws,
                 &screen_draws,
                 Vec3::new(0.5, -0.8, -0.3),
                 self.galactic_position,

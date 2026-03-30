@@ -152,7 +152,9 @@ impl App {
 
         if let Some(terrain_mgr) = &mut self.terrain {
             terrain_mgr.set_anchor(new_cam_rel);
-            terrain_mgr.flush_for_teleport();
+            if let Some(renderer) = &mut self.renderer {
+                terrain_mgr.flush_for_teleport(&mut renderer.terrain_slab);
+            }
         }
         if let Some(ship) = &self.ship
             && let Some(body) = self.physics.rigid_body_set.get_mut(ship.body_handle)

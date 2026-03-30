@@ -44,6 +44,7 @@ impl App {
                 gpu,
                 menu_camera,
                 &commands,
+                &[],  // no terrain draws in menu
                 &screen_draws,
                 Vec3::new(0.5, -0.8, -0.3),
                 menu_pos,

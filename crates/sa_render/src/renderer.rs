@@ -4,8 +4,10 @@ use crate::mesh::{MeshMarker, MeshStore};
 use crate::nebula::{NebulaRenderer, NebulaUniforms};
 use crate::pipeline::{GeometryPipeline, InstanceRaw, Uniforms};
 use crate::screen_pipeline::{ScreenInstanceRaw, ScreenPipeline, ScreenQuad};
+use crate::slab_allocator::TerrainSlab;
 use crate::sky::{SkyRenderer, SkyUniforms};
 use crate::star_field::{StarField, StarUniforms};
+use crate::terrain_pipeline::{TerrainInstanceRaw, TerrainPipeline};
 use glam::{Mat4, Vec3};
 use sa_core::Handle;
 use wgpu::util::DeviceExt;
@@ -18,6 +20,13 @@ pub struct DrawCommand {
     /// The renderer skips origin rebasing for this command.
     /// Used by the solar system manager (planet positions pre-computed in f64).
     pub pre_rebased: bool,
+}
+
+/// A draw command for a terrain chunk rendered via the slab allocator.
+pub struct TerrainDrawCommand {
+    pub slab_slot: u32,
+    pub model_matrix: Mat4,
+    pub morph_factor: f32,
 }
 
 /// A draw command for a textured screen quad.
@@ -66,6 +75,18 @@ pub struct Renderer {
     pub gpu_profiler: GpuProfiler,
     /// Latest GPU timing results (label, duration_ms) from the previous frame.
     pub gpu_timings: Vec<(String, f64)>,
+    /// Terrain-specific render pipeline with morph support.
+    pub terrain_pipeline: TerrainPipeline,
+    /// Budget-driven vertex buffer pool for terrain chunks.
+    pub terrain_slab: TerrainSlab,
+    /// Shared index buffer for all terrain chunks (identical topology).
+    terrain_index_buffer: wgpu::Buffer,
+    /// Number of indices in the shared terrain index buffer.
+    terrain_index_count: u32,
+    /// Per-instance data buffer for terrain draw calls.
+    terrain_instance_buffer: wgpu::Buffer,
+    /// Current capacity of the terrain instance buffer (in instances).
+    terrain_instance_capacity: u64,
 }
 
 impl Renderer {
@@ -108,6 +129,40 @@ impl Renderer {
             max_num_pending_frames: 4,
         })
         .expect("Failed to create GPU profiler");
+
+        // Terrain pipeline and slab allocator
+        let terrain_pipeline = TerrainPipeline::new(
+            &gpu.device,
+            gpu.config.format,
+            &geometry_pipeline.bind_group_layout,
+        );
+
+        let terrain_indices = sa_terrain::chunk::shared_indices();
+        let terrain_index_buffer = gpu.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Terrain Shared Index Buffer"),
+                contents: bytemuck::cast_slice(terrain_indices),
+                usage: wgpu::BufferUsages::INDEX,
+            },
+        );
+        let terrain_index_count = terrain_indices.len() as u32;
+
+        let slot_size = sa_terrain::config::VERTS_PER_HEIGHTMAP_CHUNK * 48;
+        let terrain_slab = TerrainSlab::new(
+            &gpu.device,
+            sa_terrain::config::HEIGHTMAP_BUDGET_BYTES,
+            slot_size,
+        );
+
+        const INITIAL_TERRAIN_INSTANCE_CAP: u64 = 512;
+        let terrain_instance_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Terrain Instance Buffer"),
+            size: INITIAL_TERRAIN_INSTANCE_CAP
+                * std::mem::size_of::<TerrainInstanceRaw>() as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         Self {
             geometry_pipeline,
             screen_pipeline,
@@ -120,6 +175,12 @@ impl Renderer {
             instance_buffer_capacity: INITIAL_INSTANCE_CAPACITY,
             gpu_profiler,
             gpu_timings: Vec::new(),
+            terrain_pipeline,
+            terrain_slab,
+            terrain_index_buffer,
+            terrain_index_count,
+            terrain_instance_buffer,
+            terrain_instance_capacity: INITIAL_TERRAIN_INSTANCE_CAP,
         }
     }
 
@@ -164,6 +225,7 @@ impl Renderer {
         gpu: &GpuContext,
         camera: &Camera,
         draw_commands: &[DrawCommand],
+        terrain_draws: &[TerrainDrawCommand],
         screen_draws: &[ScreenDrawCommand<'_>],
         light_dir: Vec3,
         galactic_pos: sa_math::WorldPos,
@@ -353,6 +415,38 @@ impl Renderer {
             }
         }
 
+        // Write terrain instances BEFORE render passes (same reason as geometry).
+        if !terrain_draws.is_empty() {
+            let terrain_instances: Vec<TerrainInstanceRaw> = terrain_draws
+                .iter()
+                .map(|cmd| TerrainInstanceRaw {
+                    model: cmd.model_matrix.to_cols_array_2d(),
+                    morph_factor: cmd.morph_factor,
+                    _pad: [0.0; 3],
+                })
+                .collect();
+
+            let needed = terrain_instances.len() as u64;
+            if needed > self.terrain_instance_capacity {
+                let new_cap = needed.next_power_of_two();
+                self.terrain_instance_buffer =
+                    gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("Terrain Instance Buffer"),
+                        size: new_cap
+                            * std::mem::size_of::<TerrainInstanceRaw>() as u64,
+                        usage: wgpu::BufferUsages::VERTEX
+                            | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    });
+                self.terrain_instance_capacity = new_cap;
+            }
+            gpu.queue.write_buffer(
+                &self.terrain_instance_buffer,
+                0,
+                bytemuck::cast_slice(&terrain_instances),
+            );
+        }
+
         let mut encoder =
             gpu.device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -453,6 +547,42 @@ impl Renderer {
                         );
                     }
                 }
+            }
+
+            // Draw terrain chunks via the slab allocator (after geometry).
+            if !terrain_draws.is_empty() {
+                let tq = self.gpu_profiler.begin_query("terrain_pass", &mut pass);
+                pass.set_pipeline(&self.terrain_pipeline.pipeline);
+                pass.set_bind_group(
+                    0,
+                    &self.geometry_pipeline.uniform_bind_group,
+                    &[],
+                );
+
+                if let Some(slab_buf) = self.terrain_slab.vertex_buffer() {
+                    pass.set_vertex_buffer(0, slab_buf.slice(..));
+                    pass.set_index_buffer(
+                        self.terrain_index_buffer.slice(..),
+                        wgpu::IndexFormat::Uint32,
+                    );
+
+                    let inst_stride =
+                        std::mem::size_of::<TerrainInstanceRaw>() as u64;
+                    for (i, cmd) in terrain_draws.iter().enumerate() {
+                        let offset = i as u64 * inst_stride;
+                        pass.set_vertex_buffer(
+                            1,
+                            self.terrain_instance_buffer
+                                .slice(offset..offset + inst_stride),
+                        );
+                        pass.draw_indexed(
+                            0..self.terrain_index_count,
+                            self.terrain_slab.base_vertex(cmd.slab_slot) as i32,
+                            0..1,
+                        );
+                    }
+                }
+                self.gpu_profiler.end_query(&mut pass, tq);
             }
 
             // Draw screen quads (textured monitors, after geometry, same depth buffer)

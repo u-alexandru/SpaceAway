@@ -442,11 +442,9 @@ impl App {
                     self.galactic_position.y = planet_ly.y + cam_rel[1] * safe_dist / ly_to_m;
                     self.galactic_position.z = planet_ly.z + cam_rel[2] * safe_dist / ly_to_m;
                     self.drive.request_disengage();
-                    // Flush stale terrain chunks — cruise moved too fast
-                    // for streaming to keep up. Old coarse chunks at
-                    // intermediate positions cause the icosphere to hide
-                    // while nothing visible replaces it.
-                    terrain_mgr.flush_for_teleport();
+                    if let Some(renderer) = &mut self.renderer {
+                        terrain_mgr.flush_for_teleport(&mut renderer.terrain_slab);
+                    }
                     log::info!("Cruise auto-disengage: entered atmosphere at {:.0}km altitude",
                         (dist_m - terrain_mgr.planet_radius_m()) / 1000.0);
                 }
