@@ -393,9 +393,26 @@ impl App {
             // Save position before warp movement
             let pos_before = self.galactic_position;
 
-            // Compute target distance for deceleration
-            let target_dist = self.navigation.locked_target.as_ref()
-                .map(|t| self.galactic_position.distance_to(t.galactic_pos));
+            // Compute target distance for deceleration.
+            // When terrain is active in cruise, use distance to planet surface
+            // instead of locked star — this gives smooth deceleration on approach.
+            let target_dist = if self.drive.mode() == sa_ship::DriveMode::Cruise {
+                if let Some(terrain_mgr) = &self.terrain {
+                    let cam_rel = terrain_mgr.cam_rel_m(self.galactic_position);
+                    let dist_m = (cam_rel[0] * cam_rel[0]
+                        + cam_rel[1] * cam_rel[1]
+                        + cam_rel[2] * cam_rel[2]).sqrt();
+                    let altitude_m = dist_m - terrain_mgr.planet_radius_m();
+                    let ly_to_m = 9.461e15_f64;
+                    Some(altitude_m / ly_to_m)
+                } else {
+                    self.navigation.locked_target.as_ref()
+                        .map(|t| self.galactic_position.distance_to(t.galactic_pos))
+                }
+            } else {
+                self.navigation.locked_target.as_ref()
+                    .map(|t| self.galactic_position.distance_to(t.galactic_pos))
+            };
 
             // Apply warp movement with deceleration
             let (delta, effective_speed) = drive_integration::galactic_position_delta_decel(
@@ -485,9 +502,12 @@ impl App {
                         dist, dist / 1.581e-5);
                 }
 
-                // Cruise → Impulse: auto-disengage at ~50 AU
+                // Cruise → Impulse: auto-disengage near locked star target.
+                // Skip when terrain is active — the planet approach handler
+                // (above) manages cruise disengage at 100km from surface.
                 if self.drive.mode() == sa_ship::DriveMode::Cruise
                     && dist < drive_integration::CRUISE_DISENGAGE_LY
+                    && self.terrain.is_none()
                 {
                     self.drive.request_disengage();
                     log::info!("Cruise disengaged at {:.6} ly ({:.0} AU) from target",

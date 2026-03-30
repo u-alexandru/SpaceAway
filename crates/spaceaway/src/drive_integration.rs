@@ -183,9 +183,11 @@ pub const WARP_DISENGAGE_LY: f64 = 0.01;
 /// 100,000 km / 9.461e12 km/ly ≈ 1.057e-8 ly.
 pub const CRUISE_DISENGAGE_LY: f64 = 1.057e-8; // ~100,000 km in ly
 
-/// Cruise deceleration multiplier. Ramps down as we approach the target.
+/// Cruise deceleration multiplier. Ramps down smoothly as we approach a planet.
+/// Designed for planet approach: full speed far out, gradual slowdown, gentle
+/// arrival at ~100km altitude where cruise auto-disengages to impulse.
 pub fn cruise_deceleration(distance_to_target_ly: f64) -> f64 {
-    let km_in_ly: f64 = 9.461e12; // km per light-year
+    let km_in_ly: f64 = 9.461e12;
     let dist_km = distance_to_target_ly * km_in_ly;
     if dist_km > 10_000_000.0 {
         1.0 // > 10M km: full speed
@@ -195,8 +197,14 @@ pub fn cruise_deceleration(distance_to_target_ly: f64) -> f64 {
     } else if dist_km > 100_000.0 {
         // 1M → 100K km: ramp from 20% to 5%
         0.05 + 0.15 * ((dist_km - 100_000.0) / 900_000.0)
+    } else if dist_km > 1_000.0 {
+        // 100K → 1K km: ramp from 5% to 0.1%
+        0.001 + 0.049 * ((dist_km - 1_000.0) / 99_000.0)
+    } else if dist_km > 100.0 {
+        // 1K → 100 km: final approach, crawl to disengage point
+        0.0005 + 0.0005 * ((dist_km - 100.0) / 900.0)
     } else {
-        0.05 // < 100K km: minimum cruise speed, about to disengage
+        0.0001 // < 100 km: near-stop, about to disengage
     }
 }
 
