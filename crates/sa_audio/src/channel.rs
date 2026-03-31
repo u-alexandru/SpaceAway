@@ -67,7 +67,7 @@ impl Channels {
             music_playing: false,
             music_volume: 0.0,
             music_target_volume: 1.0,
-            music_base_volume: 0.4,
+            music_base_volume: 0.2,
             voice_sink: None,
             voice_queue: Vec::new(),
             alarm_sinks: HashMap::new(),
