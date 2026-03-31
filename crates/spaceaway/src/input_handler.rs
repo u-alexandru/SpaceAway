@@ -1,6 +1,7 @@
 use super::{App, GamePhase};
 use crate::mesh_utils::{all_ship_parts, assemble_ship, meshgen_to_render};
 use crate::solar_system;
+use crate::terrain_colliders;
 use sa_math::WorldPos;
 use sa_universe::MasterSeed;
 use winit::keyboard::KeyCode;
@@ -155,6 +156,11 @@ impl App {
             if let Some(renderer) = &mut self.renderer {
                 terrain_mgr.flush_for_teleport(&mut renderer.terrain_slab);
             }
+            let rebase_bodies = terrain_colliders::RebaseBodies {
+                ship: self.ship.as_ref().map(|s| s.body_handle),
+                player: self.player.as_ref().map(|p| p.body_handle),
+            };
+            terrain_mgr.force_rebase(&mut self.physics, &rebase_bodies);
         }
         if let Some(ship) = &self.ship
             && let Some(body) = self.physics.rigid_body_set.get_mut(ship.body_handle)
