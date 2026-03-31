@@ -122,8 +122,10 @@ fn select_recursive(
     let node_radius = face_size * std::f64::consts::FRAC_1_SQRT_2 + displacement_at_lod;
 
     // Frustum culling: reject entire subtree if bounding sphere is outside frustum.
+    // Apply 10% margin to prevent edge-of-screen popping from f32 VP matrix
+    // precision loss (the planet-relative translation can be millions of meters).
     if let Some(f) = frustum
-        && !f.contains_sphere(center, node_radius)
+        && !f.contains_sphere(center, node_radius * 1.1)
     {
         return;
     }

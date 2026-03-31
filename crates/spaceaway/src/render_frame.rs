@@ -8,6 +8,21 @@ use sa_math::WorldPos;
 use sa_render::{DrawCommand, ScreenDrawCommand, TerrainDrawCommand};
 use std::time::Instant;
 
+/// Multiply a column-major 4x4 matrix (f64) by a translation matrix (f64).
+///
+/// Equivalent to `M * T` where T = translate(tx, ty, tz).
+/// Only column 3 of the result changes: `col3 += tx*col0 + ty*col1 + tz*col2`.
+/// This avoids promoting the full M*T product through f32 intermediates,
+/// preserving sub-meter precision for planet-relative frustum culling.
+fn mat4_f64_mul_translate(m: &[f64; 16], tx: f64, ty: f64, tz: f64) -> [f64; 16] {
+    let mut out = *m;
+    // Column 3 = m*col0*tx + m*col1*ty + m*col2*tz + m*col3
+    for i in 0..4 {
+        out[12 + i] = m[i] * tx + m[4 + i] * ty + m[8 + i] * tz + m[12 + i];
+    }
+    out
+}
+
 impl App {
     /// Render the current frame: terrain streaming, draw commands, HUD, present.
     pub(super) fn render_playing_frame(&mut self, dt: f32, frame_start: Instant) {
@@ -177,18 +192,24 @@ impl App {
                     player: self.player.as_ref().map(|p| p.body_handle),
                 };
                 // Build VP matrix in planet-relative coords for frustum culling.
+                //
+                // The VP * translation must be computed in f64 because
+                // planet-relative coordinates are millions of meters. If the
+                // translation is done in f32 first, sub-meter precision is
+                // lost and the extracted frustum planes are inaccurate —
+                // causing visible pop-in at screen edges when rotating.
                 let aspect = gpu.config.width as f32 / gpu.config.height as f32;
                 let vp_f32 = self.camera.view_projection_matrix(aspect);
                 let planet_ly = terrain_mgr.frozen_planet_center_ly();
                 let cam_rel_x = (self.galactic_position.x - planet_ly.x) * LY_TO_M;
                 let cam_rel_y = (self.galactic_position.y - planet_ly.y) * LY_TO_M;
                 let cam_rel_z = (self.galactic_position.z - planet_ly.z) * LY_TO_M;
-                let translate = glam::Mat4::from_translation(Vec3::new(
-                    -cam_rel_x as f32, -cam_rel_y as f32, -cam_rel_z as f32,
-                ));
-                let vp_planet = vp_f32 * translate;
-                let cols = vp_planet.to_cols_array();
-                let vp_f64: [f64; 16] = std::array::from_fn(|i| cols[i] as f64);
+                // Promote VP to f64, then multiply by f64 translation.
+                let vp_cols = vp_f32.to_cols_array();
+                let vp_f64 = mat4_f64_mul_translate(
+                    &vp_cols.map(|v| v as f64),
+                    -cam_rel_x, -cam_rel_y, -cam_rel_z,
+                );
 
                 let result = terrain_mgr.update(
                     self.galactic_position,
