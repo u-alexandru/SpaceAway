@@ -210,12 +210,20 @@ impl ActiveSystem {
                 1.0
             };
 
-            // When terrain is active for this body, shrink the icosphere to
-            // 0.999× radius so terrain chunks (at or above true radius) always
-            // win the depth test. This lets the icosphere serve as a fallback
-            // backdrop while terrain streams in.
+            // When terrain is active for this body, shrink the icosphere
+            // below all terrain valleys so depth testing occludes it.
             if self.terrain_body_index == Some(i) {
                 scale *= sa_terrain::config::ICOSPHERE_RADIUS_FACTOR as f32;
+            }
+
+            // Skip rendering atmosphere/ring children of the terrain body.
+            // The atmosphere is an opaque sphere at 1.08× radius that would
+            // completely cover the terrain chunks. At close range, terrain
+            // IS the visual surface — the atmosphere marker is not needed.
+            if let Some(tb) = self.terrain_body_index
+                && body.parent_index == tb as i32
+            {
+                continue;
             }
 
             let model = Mat4::from_scale_rotation_translation(
