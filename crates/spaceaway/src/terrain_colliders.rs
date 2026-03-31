@@ -163,14 +163,18 @@ impl TerrainColliders {
         // This ensures colliders placed at (chunk - anchor) end up at the
         // correct rapier position relative to the ship body.
         if self.terrain_body.is_none() {
-            // Only initialize anchor if it wasn't already set by terrain
-            // activation (set_anchor in render_frame.rs). A pre-set anchor
-            // is non-zero; recalculating would overwrite it with a value
-            // derived from the current (possibly stale) ship rapier position.
-            let is_preset = self.anchor_f64[0] != 0.0
-                || self.anchor_f64[1] != 0.0
-                || self.anchor_f64[2] != 0.0;
-            if !is_preset {
+            // ALWAYS recalculate anchor from current ship position.
+            // The pre-set anchor from terrain activation (5× radius) is stale
+            // by the time collision activates (0.2× radius) — the ship has
+            // moved thousands of km. Using stale anchor places colliders
+            // 1800+ km from the ship.
+            //
+            // anchor = cam_rel_m - ship_rapier ensures:
+            //   collider_rapier = chunk_world - anchor
+            //   = chunk_world - cam_rel + ship_rapier
+            //   ≈ ship_rapier + (chunk - ship_in_planet_space)
+            //   → colliders near the ship in rapier space
+            {
                 let ship_rapier = rebase_bodies
                     .ship
                     .and_then(|h| physics.rigid_body_set.get(h))
@@ -182,18 +186,11 @@ impl TerrainColliders {
                     cam_rel_m[2] - ship_rapier.z as f64,
                 ];
                 log::info!(
-                    "Collision anchor init (calculated): ship_rapier=({:.1},{:.1},{:.1}), \
+                    "Collision anchor init: ship_rapier=({:.1},{:.1},{:.1}), \
                      cam_rel_m=({:.0},{:.0},{:.0}), anchor=({:.0},{:.0},{:.0})",
                     ship_rapier.x, ship_rapier.y, ship_rapier.z,
                     cam_rel_m[0], cam_rel_m[1], cam_rel_m[2],
                     self.anchor_f64[0], self.anchor_f64[1], self.anchor_f64[2],
-                );
-            } else {
-                log::info!(
-                    "Collision anchor init (pre-set): anchor=({:.0},{:.0},{:.0}), \
-                     cam_rel_m=({:.0},{:.0},{:.0})",
-                    self.anchor_f64[0], self.anchor_f64[1], self.anchor_f64[2],
-                    cam_rel_m[0], cam_rel_m[1], cam_rel_m[2],
                 );
             }
         }
