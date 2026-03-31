@@ -250,11 +250,20 @@ impl LandingSystem {
             let local_pt = Point3::new(local[0], local[1], local[2]);
             let world_pt = ship_iso.transform_point(&local_pt);
 
-            if let Some((_handle, toi)) =
-                physics.cast_ray(world_pt, ray_dir, LANDING_RAY_DIST_M, true, filter)
-            {
+            let hit = physics.cast_ray(world_pt, ray_dir, LANDING_RAY_DIST_M, true, filter);
+            if let Some((_handle, toi)) = hit {
                 clearances[i] = toi;
             }
+
+            log::debug!(
+                "SKID_RAY: skid={}, origin=({:.1},{:.1},{:.1}), \
+                 dir=({:.3},{:.3},{:.3}), hit={}, dist={:.1}",
+                i,
+                world_pt.x, world_pt.y, world_pt.z,
+                ray_dir.x, ray_dir.y, ray_dir.z,
+                hit.is_some(),
+                hit.map(|h| h.1).unwrap_or(100.0),
+            );
         }
 
         clearances

@@ -394,13 +394,16 @@ fn build_heightfield_from_grid(
             .union(ship_colliders::SHIP_EXTERIOR),
     );
 
-    log::debug!(
-        "HF collider: face={} lod={} x={} y={}, \
-         avg_r={:.0}, min_h={:.0}, max_h={:.0}, range={:.1}, \
-         rapier_pos=({:.1},{:.1},{:.1}), chunk_size={:.0}",
+    log::info!(
+        "HF_DIAG: chunk=({},{},{},{}), rapier_pos=({:.1},{:.1},{:.1}), \
+         h_range=[{:.1},{:.1}], scale=({:.1},{:.1},{:.1}), \
+         avg_r={:.0}, h_offset={:.1}, normal=({:.3},{:.3},{:.3})",
         key.face, key.lod, key.x, key.y,
-        avg_r, min_h, max_h, height_range,
-        final_cx, final_cy, final_cz, chunk_size_m,
+        final_cx, final_cy, final_cz,
+        min_h, max_h,
+        scale.x, scale.y, scale.z,
+        avg_r, h_offset,
+        normal.x, normal.y, normal.z,
     );
 
     let collider = ColliderBuilder::heightfield(height_matrix_scaled, scale)
