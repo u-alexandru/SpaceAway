@@ -289,18 +289,32 @@ impl App {
         log::trace!("phys_step: {}us, query_pipeline: {}us", phys_step_us, qp_us);
 
         // Step 6: Move player in ship-local space.
-        // All collision detection happens in the ship's local coordinate
-        // system where colliders are stationary. Performance is O(1)
-        // regardless of ship speed.
+        // Interior collision uses origin-centered sweep (GROUP_2).
+        // When terrain is active, a second sweep at world position
+        // checks GROUP_5 (TERRAIN) so the player doesn't fall through.
         let t_player = Instant::now();
         if let Some(player) = &mut self.player {
-            player.update(
-                &mut self.physics,
-                &self.input,
-                physics_dt,
-                ship_pos_after,
-                ship_rot_after,
-            );
+            let terrain_up = self.terrain_gravity.as_ref().map(|g| {
+                nalgebra::Vector3::new(-g.direction[0], -g.direction[1], -g.direction[2])
+            });
+            if let Some(up) = terrain_up {
+                player.update_with_terrain(
+                    &mut self.physics,
+                    &self.input,
+                    physics_dt,
+                    ship_pos_after,
+                    ship_rot_after,
+                    up,
+                );
+            } else {
+                player.update(
+                    &mut self.physics,
+                    &self.input,
+                    physics_dt,
+                    ship_pos_after,
+                    ship_rot_after,
+                );
+            }
         }
         let player_move_us = t_player.elapsed().as_micros();
         // Encode breakdown: physics_us = phys_step*1000000 + qp*1000 + move_shape

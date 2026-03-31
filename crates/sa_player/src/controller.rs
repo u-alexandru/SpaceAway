@@ -81,22 +81,7 @@ impl PlayerController {
         }
     }
 
-    /// Updates the player based on input: mouse look, WASD movement, and jumping.
-    ///
-    /// `ship_position`: the ship body's world position (translation vector).
-    /// `ship_rotation`: the ship body's world rotation (unit quaternion).
-    ///
-    /// Collision runs in ORIGIN-CENTERED, SHIP-ROTATED space. Interior colliders
-    /// sit at `(origin, ship_rot)`, so their world positions = `ship_rot * local`.
-    /// The player (after carry) is at `ship_pos + ship_rot * local`, so
-    /// `player - ship_pos = ship_rot * local` — the same rotated space.
-    ///
-    /// We subtract ship_position (NO rotation undo), sweep against rotated
-    /// colliders, then add ship_position back. Walk direction and gravity are
-    /// in this same rotated frame (world-space vectors).
-    ///
-    /// The `char_controller.up` is set to `ship_rot * Y` each frame so
-    /// snap-to-ground and slope detection align with the ship's floor.
+    /// Ship-interior-only movement (no terrain collision).
     pub fn update(
         &mut self,
         physics: &mut PhysicsWorld,
@@ -105,26 +90,50 @@ impl PlayerController {
         ship_position: nalgebra::Vector3<f32>,
         ship_rotation: nalgebra::UnitQuaternion<f32>,
     ) {
-        // Mouse look
+        self.update_inner(physics, input, dt, ship_position, ship_rotation, None);
+    }
+
+    /// Like `update`, but adds a terrain collision sweep (GROUP_5) at the
+    /// player's actual world position. Pass the anti-gravity direction as up.
+    pub fn update_with_terrain(
+        &mut self,
+        physics: &mut PhysicsWorld,
+        input: &InputState,
+        dt: f32,
+        ship_position: nalgebra::Vector3<f32>,
+        ship_rotation: nalgebra::UnitQuaternion<f32>,
+        gravity_up: nalgebra::Vector3<f32>,
+    ) {
+        self.update_inner(
+            physics, input, dt, ship_position, ship_rotation, Some(gravity_up),
+        );
+    }
+
+    /// Core update: origin-centered interior sweep + optional terrain sweep.
+    ///
+    /// Interior colliders sit at (origin, ship_rot). We subtract ship_position,
+    /// sweep in rotated space, then add it back. When `terrain_up` is Some, a
+    /// second sweep at world position checks GROUP_5 terrain colliders.
+    fn update_inner(
+        &mut self,
+        physics: &mut PhysicsWorld,
+        input: &InputState,
+        dt: f32,
+        ship_position: nalgebra::Vector3<f32>,
+        ship_rotation: nalgebra::UnitQuaternion<f32>,
+        terrain_up: Option<nalgebra::Vector3<f32>>,
+    ) {
         let (dx, dy) = input.mouse.delta();
         self.yaw += dx * MOUSE_SENSITIVITY;
         self.pitch -= dy * MOUSE_SENSITIVITY;
         let max_pitch = std::f32::consts::FRAC_PI_2 - 0.01;
         self.pitch = self.pitch.clamp(-max_pitch, max_pitch);
 
-        // Ship's "up" direction in world space (rotated Y axis).
-        // Used for gravity, jump, and character controller slope detection.
         let ship_up = ship_rotation * nalgebra::Vector3::new(0.0, 1.0, 0.0);
-
-        // Compute yaw-offset from ship heading for walk direction.
-        // Player.yaw is world-space. Ship heading = atan2 of ship's forward.
         let ship_fwd = ship_rotation * nalgebra::Vector3::new(0.0, 0.0, -1.0);
         let ship_yaw = ship_fwd.x.atan2(-ship_fwd.z);
         let yaw_offset = self.yaw - ship_yaw;
 
-        // Walk direction: rotate by yaw_offset in the ship's floor plane,
-        // then apply ship rotation. This keeps WASD relative to where the
-        // player is looking, projected onto the ship's floor.
         let local_fwd = nalgebra::Vector3::new(yaw_offset.sin(), 0.0, -yaw_offset.cos());
         let local_right = nalgebra::Vector3::new(yaw_offset.cos(), 0.0, yaw_offset.sin());
         let mut move_local = nalgebra::Vector3::zeros();
@@ -143,15 +152,12 @@ impl PlayerController {
         if move_local.norm_squared() > 0.0 {
             move_local = move_local.normalize();
         }
-        // Rotate walk direction into world/collision space
         let walk_dir = ship_rotation * move_local;
 
-        // Rising-edge jump detection: only jump on the frame Space is first pressed
         let space_pressed = input.keyboard.is_pressed(KeyCode::Space);
         let jump_requested = space_pressed && !self.prev_space_pressed;
         self.prev_space_pressed = space_pressed;
 
-        // Vertical velocity: gravity when airborne, jump impulse, reset when grounded
         if self.grounded {
             self.vertical_velocity = 0.0;
             if jump_requested {
@@ -161,39 +167,19 @@ impl PlayerController {
             self.vertical_velocity -= GRAVITY * dt;
         }
 
-        // ORIGIN-CENTERED COLLISION
-        //
-        // Interior colliders are on a fixed body at (origin, ship_rot).
-        // Collider world positions = ship_rot * collider_local.
-        // Player at origin = player_world - ship_position = ship_rot * player_local.
-        // Both share the same rotated coordinate system → move_shape works.
-        //
-        // Walk vector and gravity are world-space vectors (already rotated).
-        // char_controller.up is set to ship_up so slopes/snap work correctly.
-
-        // Set character controller "up" to match ship orientation
         self.char_controller.up =
-            nalgebra::UnitVector3::new_normalize(nalgebra::Vector3::new(
-                ship_up.x, ship_up.y, ship_up.z,
-            ));
+            nalgebra::UnitVector3::new_normalize(ship_up);
 
-        // Player's current WORLD position
         let player_world = physics
             .get_body(self.body_handle)
             .map(|b| b.translation().clone_owned())
             .unwrap_or(nalgebra::Vector3::zeros());
 
-        // Translate to origin (NO rotation undo — keep in rotated space)
         let player_at_origin = player_world - ship_position;
-
-        // Walk translation: horizontal walk + vertical (gravity/jump) along ship_up
         let walk_translation =
             walk_dir * (MOVE_SPEED * dt) + ship_up * (self.vertical_velocity * dt);
 
-        // Sweep in origin-centered rotated space.
-        // Capsule MUST be rotated by ship_rotation to match the rotated colliders.
-        // Without this, the capsule stays world-Y-aligned while the door opening
-        // is rotated — a vertical capsule can't fit through a rotated door.
+        // Capsule rotated by ship_rotation so it fits through rotated doors.
         let sweep_isometry = nalgebra::Isometry3::from_parts(
             nalgebra::Translation3::from(player_at_origin),
             ship_rotation,
@@ -219,17 +205,56 @@ impl PlayerController {
         );
 
         // Transform result back to world space (just add ship position)
-        let new_world = ship_position + player_at_origin + output.translation;
+        let mut new_world = ship_position + player_at_origin + output.translation;
+        let mut grounded_result = output.grounded;
 
         if let Some(body) = physics.get_body_mut(self.body_handle) {
             body.set_translation(new_world, true);
         }
 
-        // Update grounded state. Use snap_to_ground result but also keep
-        // grounded=true when the vertical velocity is near zero (prevents
-        // oscillation from sub-millimeter ground separation).
+        // Terrain sweep: correct penetration against terrain colliders
+        // which live at actual rapier positions (not origin-centered).
+        if let Some(up) = terrain_up {
+            self.char_controller.up =
+                nalgebra::UnitVector3::new_normalize(up);
+
+            let terrain_iso = nalgebra::Isometry3::from_parts(
+                nalgebra::Translation3::from(new_world),
+                nalgebra::UnitQuaternion::identity(),
+            );
+
+            let terrain_filter = QueryFilter::default()
+                .exclude_rigid_body(self.body_handle)
+                .groups(InteractionGroups::new(
+                    Group::GROUP_3,
+                    Group::GROUP_5,
+                ));
+
+            let terrain_output = self.char_controller.move_shape(
+                dt,
+                &physics.rigid_body_set,
+                &physics.collider_set,
+                &physics.query_pipeline,
+                self.character_shape.as_ref(),
+                &terrain_iso,
+                nalgebra::Vector3::zeros(),
+                terrain_filter,
+                |_collision| {},
+            );
+
+            new_world += terrain_output.translation;
+            if terrain_output.grounded {
+                grounded_result = true;
+            }
+
+            if let Some(body) = physics.get_body_mut(self.body_handle) {
+                body.set_translation(new_world, true);
+            }
+        }
+
         let was_grounded = self.grounded;
-        self.grounded = output.grounded || (was_grounded && self.vertical_velocity.abs() < 0.5);
+        self.grounded =
+            grounded_result || (was_grounded && self.vertical_velocity.abs() < 0.5);
 
         if self.grounded {
             self.vertical_velocity = 0.0;
