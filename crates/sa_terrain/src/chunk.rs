@@ -124,6 +124,8 @@ pub fn generate_chunk(key: ChunkKey, config: &TerrainConfig) -> ChunkData {
 
             // Center displacement around radius: h ∈ [0,1] → (h-0.5) maps
             // to [-0.5, 0.5], so terrain is symmetric about the base radius.
+            // The icosphere is scaled down to accommodate valleys — see
+            // ICOSPHERE_RADIUS_FACTOR in sa_terrain::config.
             let r = config.radius_m + (h as f64 - 0.5) * amplitude;
             let pos = [dir[0] * r, dir[1] * r, dir[2] * r];
 

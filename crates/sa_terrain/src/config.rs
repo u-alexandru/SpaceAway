@@ -40,7 +40,11 @@ pub const TERRAIN_ACTIVATE_FACTOR: f64 = 2.0;
 pub const TERRAIN_DEACTIVATE_FACTOR: f64 = 2.5;
 pub const COLLISION_ACTIVATE_FACTOR: f64 = 0.2;
 pub const COLLISION_DEACTIVATE_ALT_M: f64 = 500.0;
-pub const ICOSPHERE_RADIUS_FACTOR: f64 = 0.999;
+/// Icosphere renders below all terrain valleys. With displacement centered
+/// at R (valleys at R-0.5*amplitude), the deepest valley at max
+/// displacement_fraction=0.025 is R-0.0125R = 0.9875R. We use 0.985 to
+/// add margin. Terrain chunks always occlude the icosphere via depth test.
+pub const ICOSPHERE_RADIUS_FACTOR: f64 = 0.985;
 
 // -- Base chunks (never evicted) --
 pub const BASE_LOD_LEVELS: u8 = 2;
