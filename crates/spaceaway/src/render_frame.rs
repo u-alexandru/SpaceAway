@@ -99,6 +99,20 @@ impl App {
                 config, planet_pos, body_idx, surface_grav,
             );
 
+            // Initialize the collision anchor to the current cam_rel position.
+            // This is CRITICAL: the rapier body sync in helm_mode uses
+            // terrain_mgr.anchor_f64() every frame. Without this, the anchor
+            // stays at (0,0,0) and the ship rapier position becomes cam_rel
+            // (millions of meters), placing colliders 8000+ km from the ship.
+            {
+                let cam_rel = [
+                    (self.galactic_position.x - planet_pos.x) * crate::constants::LY_TO_M,
+                    (self.galactic_position.y - planet_pos.y) * crate::constants::LY_TO_M,
+                    (self.galactic_position.z - planet_pos.z) * crate::constants::LY_TO_M,
+                ];
+                terrain_mgr.set_anchor(cam_rel);
+            }
+
             // Seed LOD 0+1 chunks synchronously so the LOD fallback
             // always has ancestors to render.
             if let (Some(gpu), Some(renderer)) = (&self.gpu, &mut self.renderer) {
