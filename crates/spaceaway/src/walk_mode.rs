@@ -19,6 +19,24 @@ impl App {
         // This ensures the player moves relative to where the ship
         // ACTUALLY IS after the step, not where it WAS before.
 
+        // Sync interior collider rotation on first walk-mode frame.
+        // When transitioning from fly mode or helm mode, the interior
+        // body may be stale. Syncing at the top ensures the very first
+        // move_shape sweep uses correct collider positions.
+        if let (Some(ship), Some(ih)) = (&self.ship, ship_colliders::interior_body_handle()) {
+            let ship_rot = self.physics.get_body(ship.body_handle)
+                .map(|b| *b.rotation());
+            if let (Some(rot), Some(ib)) = (ship_rot, self.physics.get_body_mut(ih)) {
+                ib.set_position(
+                    nalgebra::Isometry3::from_parts(
+                        nalgebra::Translation3::identity(),
+                        rot,
+                    ),
+                    true,
+                );
+            }
+        }
+
         // MANUAL ship integration — no physics.step() needed.
         // physics.step() is extremely expensive with many colliders
         // (47ms at 345 m/s). Since the player is kinematic (uses

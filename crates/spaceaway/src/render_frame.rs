@@ -207,6 +207,14 @@ impl App {
                 };
                 // Build VP matrix in planet-relative coords for frustum culling.
                 //
+                // NOTE: This VP uses the camera position from BEFORE the
+                // terrain update. On frames where a terrain rebase shifts
+                // physics bodies, the frustum planes are stale by the rebase
+                // offset. The 10% bounding-sphere margin on frustum tests
+                // (added in the f64 frustum fix) mitigates visible popping.
+                // A future refactor should recompute VP after the rebase or
+                // resync the camera before this point.
+                //
                 // The VP * translation must be computed in f64 because
                 // planet-relative coordinates are millions of meters. If the
                 // translation is done in f32 first, sub-meter precision is

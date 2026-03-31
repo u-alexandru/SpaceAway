@@ -56,6 +56,9 @@ impl App {
             }
         }
 
+        // Note: landing state is from the PREVIOUS frame (updated in phase 2,
+        // read here in phase 1). This causes a 1-frame delay in approach phase
+        // transitions for Surface/Departing, which is acceptable.
         let landed = self.landing.state() == crate::landing::LandingState::Landed;
         let state = self.approach.update(self.galactic_position, find_planet, landed);
         self.approach_state = Some(state);
