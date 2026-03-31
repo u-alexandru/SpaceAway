@@ -233,15 +233,6 @@ impl App {
                     -cam_rel_x, -cam_rel_y, -cam_rel_z,
                 );
 
-                // Force anchor rebase on first collision frame to centre
-                // the rapier origin on the ship. Must run BEFORE
-                // update_collision_grid so colliders are placed with the
-                // post-rebase anchor (not the stale pre-rebase one).
-                if first_collision {
-                    terrain_mgr.force_rebase(&mut self.physics, &rebase_bodies);
-                    log::info!("First collision frame: forced anchor rebase");
-                }
-
                 let result = terrain_mgr.update(
                     self.galactic_position,
                     planet_pos,
@@ -253,6 +244,16 @@ impl App {
                     Some(vp_f64),
                     collision_active,
                 );
+
+                // Force anchor rebase AFTER collision grid places colliders.
+                // The collision init computes anchor = cam_rel - ship_rapier
+                // using the ship's current (non-zero) rapier position.
+                // force_rebase then shifts ship + colliders to rapier origin,
+                // preserving their relative positions.
+                if first_collision {
+                    terrain_mgr.force_rebase(&mut self.physics, &rebase_bodies);
+                    log::info!("First collision frame: forced anchor rebase");
+                }
                 if let Some(sys) = &mut self.active_system {
                     sys.terrain_body_index = Some(terrain_mgr.body_index());
                 }
